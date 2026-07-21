@@ -81,6 +81,144 @@ from src.theme import (
 )
 
 
+_SELECTION_TYPE_LABELS: dict[str, str] = {
+    "rect": "Rectangle",
+    "ellipse": "Ellipse",
+    "line": "Line",
+    "arrow": "Arrow",
+    "text": "Text",
+    "image": "Image",
+    "step": "Step",
+}
+
+_STROKE_STYLE_LABELS: dict[str, str] = {
+    STROKE_STYLE_SOLID: "Solid",
+    STROKE_STYLE_DASH: "Dashed",
+    STROKE_STYLE_DOT: "Dotted",
+    STROKE_STYLE_DASH_DOT: "Dash-dot",
+}
+
+
+def _format_rgba_color(rgba: list[Any]) -> str:
+    """
+    Formats an RGBA list for compact status bar display.
+
+    Args:
+        rgba: Color components [r, g, b, a].
+
+    Returns:
+        str: Hex or rgba() color string.
+    """
+
+    if len(rgba) != 4:
+        return ""
+    red, green, blue, alpha = (int(value) for value in rgba)
+    if alpha >= 255:
+        return f"#{red:02X}{green:02X}{blue:02X}"
+    return f"rgba({red},{green},{blue},{alpha})"
+
+
+def format_selection_info(payload: dict[str, Any]) -> str:
+    """
+    Formats selected annotation details for the editor status bar.
+
+    Args:
+        payload: Selection detail payload from the canvas.
+
+    Returns:
+        str: Human-readable selection summary.
+    """
+
+    annotation_type = str(payload.get("type") or "").strip()
+    if not annotation_type:
+        return ""
+
+    parts: list[str] = []
+    type_label = _SELECTION_TYPE_LABELS.get(annotation_type, annotation_type.title())
+    selected_count = payload.get("count")
+    if isinstance(selected_count, int) and selected_count > 1:
+        parts.append(f"{type_label} (+{selected_count - 1} more)")
+    else:
+        parts.append(type_label)
+
+    width = payload.get("width")
+    height = payload.get("height")
+    if isinstance(width, (int, float)) and isinstance(height, (int, float)):
+        parts.append(f"{width:g}×{height:g}")
+
+    x_pos = payload.get("x")
+    y_pos = payload.get("y")
+    if isinstance(x_pos, (int, float)) and isinstance(y_pos, (int, float)):
+        parts.append(f"@ {x_pos:g}, {y_pos:g}")
+
+    step_number = payload.get("step_number")
+    if isinstance(step_number, int):
+        parts.append(f"Step {step_number}")
+
+    text_preview = payload.get("text_preview")
+    if isinstance(text_preview, str) and text_preview.strip():
+        preview = text_preview.strip()
+        if len(preview) > 28:
+            preview = f"{preview[:25]}..."
+        parts.append(f'"{preview}"')
+
+    text_style = payload.get("text_style")
+    if isinstance(text_style, str) and text_style.strip():
+        parts.append(text_style.replace("_", " ").title())
+
+    stroke_rgba = payload.get("stroke_rgba")
+    if isinstance(stroke_rgba, list):
+        stroke_color = _format_rgba_color(stroke_rgba)
+        if stroke_color:
+            parts.append(f"Stroke {stroke_color}")
+
+    fill_rgba = payload.get("fill_rgba")
+    if isinstance(fill_rgba, list):
+        fill_color = _format_rgba_color(fill_rgba)
+        if fill_color:
+            parts.append(f"Fill {fill_color}")
+
+    text_rgba = payload.get("text_rgba")
+    if isinstance(text_rgba, list):
+        text_color = _format_rgba_color(text_rgba)
+        if text_color:
+            parts.append(f"Text {text_color}")
+
+    stroke_width = payload.get("stroke_width")
+    if isinstance(stroke_width, (int, float)) and stroke_width > 0:
+        width_value = int(stroke_width) if float(stroke_width).is_integer() else round(float(stroke_width), 1)
+        parts.append(f"{width_value}px")
+
+    stroke_style = payload.get("stroke_style")
+    if isinstance(stroke_style, str) and stroke_style.strip():
+        style_label = _STROKE_STYLE_LABELS.get(stroke_style, stroke_style.replace("_", " ").title())
+        parts.append(style_label)
+
+    font_size = payload.get("font_size")
+    font_family = payload.get("font_family")
+    if isinstance(font_size, int):
+        if isinstance(font_family, str) and font_family.strip():
+            parts.append(f"{font_family.strip()} {font_size}pt")
+        else:
+            parts.append(f"{font_size}pt")
+
+    font_traits: list[str] = []
+    if payload.get("font_bold") is True:
+        font_traits.append("Bold")
+    if payload.get("font_italic") is True:
+        font_traits.append("Italic")
+    if payload.get("font_underline") is True:
+        font_traits.append("Underline")
+    if font_traits:
+        parts.append(", ".join(font_traits))
+
+    z_index = payload.get("z_index")
+    if isinstance(z_index, (int, float)):
+        parts.append(f"Layer {z_index:g}")
+
+    return "  ·  ".join(parts)
+
+
 class EditorWindow(QMainWindow):
     """
     Hosts the SnapAgent screenshot editor UI.
@@ -149,6 +287,10 @@ class EditorWindow(QMainWindow):
         root.addWidget(self._toolbar_widget)
         root.addWidget(self.canvas)
 
+        self._selection_info_label = QLabel("")
+        self._selection_info_label.setObjectName("editorSelectionInfo")
+        self._selection_info_label.setMinimumWidth(360)
+        self.statusBar().addPermanentWidget(self._selection_info_label)
         self.statusBar().showMessage("Ready")
         self._build_menu()
         self._push_history_state()
@@ -1791,7 +1933,7 @@ class EditorWindow(QMainWindow):
                 int(stroke_rgba[2]),
                 int(stroke_rgba[3]),
             )
-            self._set_target_color("stroke", color)
+            self._set_target_color("stroke", color, apply_to_canvas=False)
 
         fill_rgba = payload.get("fill_rgba")
         if isinstance(fill_rgba, list) and len(fill_rgba) == 4:
@@ -1801,7 +1943,7 @@ class EditorWindow(QMainWindow):
                 int(fill_rgba[2]),
                 int(fill_rgba[3]),
             )
-            self._set_target_color("fill", color)
+            self._set_target_color("fill", color, apply_to_canvas=False)
 
         text_rgba = payload.get("text_rgba")
         if isinstance(text_rgba, list) and len(text_rgba) == 4:
@@ -1811,7 +1953,7 @@ class EditorWindow(QMainWindow):
                 int(text_rgba[2]),
                 int(text_rgba[3]),
             )
-            self._set_target_color("text", color)
+            self._set_target_color("text", color, apply_to_canvas=False)
 
         font_size = payload.get("font_size")
         if isinstance(font_size, int):
@@ -1839,6 +1981,8 @@ class EditorWindow(QMainWindow):
             self.text_underline_button.blockSignals(True)
             self.text_underline_button.setChecked(font_underline)
             self.text_underline_button.blockSignals(False)
+
+        self._selection_info_label.setText(format_selection_info(payload))
 
     def _on_crop_state_changed(self, is_active: bool) -> None:
         """

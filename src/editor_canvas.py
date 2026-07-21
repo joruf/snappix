@@ -72,6 +72,7 @@ from src.annotation_items import (
     normalize_stroke_style,
     stroke_style_to_qt,
 )
+from src.annotation_items import _stroke_style_from_pen as stroke_style_from_pen
 from src.annotation_shapes import (
     StepBadgeItem,
     StyledTextItem,
@@ -512,6 +513,102 @@ class EditorCanvas(QGraphicsView):
 
         self._last_action_label = action_label.strip() or "Edit"
         self.content_changed.emit()
+        if self._selected_annotation_items():
+            self._refresh_selection_info()
+
+    def _selected_annotation_items(self) -> list[QGraphicsItem]:
+        """
+        Returns currently selected drawable annotation items.
+
+        Returns:
+            list[QGraphicsItem]: Selected annotation items.
+        """
+
+        return [
+            item
+            for item in self._scene.selectedItems()
+            if item not in self._non_annotation_scene_items()
+            and str(item.data(ITEM_ROLE_TYPE) or "")
+        ]
+
+    def _build_selection_payload(self, item: QGraphicsItem) -> dict[str, Any]:
+        """
+        Builds a detail payload for one selected annotation item.
+
+        Args:
+            item: Selected annotation graphics item.
+
+        Returns:
+            dict[str, Any]: Selection details for toolbar and status display.
+        """
+
+        annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
+        rect = self._item_scene_rect(item)
+        payload: dict[str, Any] = {
+            "type": annotation_type,
+            "x": round(rect.x(), 1),
+            "y": round(rect.y(), 1),
+            "width": round(rect.width(), 1),
+            "height": round(rect.height(), 1),
+            "z_index": round(item.zValue(), 1),
+        }
+
+        if annotation_type in {"rect", "ellipse"}:
+            payload["stroke_rgba"] = color_to_list(item.pen().color())
+            payload["fill_rgba"] = color_to_list(item.brush().color())
+            payload["stroke_width"] = item.pen().widthF()
+        elif annotation_type in {"line", "arrow"}:
+            payload["stroke_rgba"] = color_to_list(item.pen().color())
+            payload["stroke_width"] = item.pen().widthF()
+            payload["stroke_style"] = stroke_style_from_pen(item.pen())
+        elif annotation_type == "text":
+            if isinstance(item, StyledTextItem):
+                payload["text_rgba"] = color_to_list(item._text_color)
+                payload["fill_rgba"] = color_to_list(item._fill_color)
+                payload["stroke_rgba"] = color_to_list(item._stroke_color)
+                payload["stroke_width"] = item._stroke_width
+                payload["text_style"] = item.text_style()
+                payload["text_preview"] = item.text().replace("\n", " ").strip()
+                payload["font_size"] = item._font.pointSize()
+                payload["font_family"] = item._font.family()
+                payload["font_bold"] = item._font.bold()
+                payload["font_italic"] = item._font.italic()
+                payload["font_underline"] = item._font.underline()
+            else:
+                payload["stroke_rgba"] = color_to_list(item.defaultTextColor())
+                payload["text_rgba"] = color_to_list(item.defaultTextColor())
+                payload["text_preview"] = item.toPlainText().replace("\n", " ").strip()
+                payload["font_size"] = item.font().pointSize()
+                payload["font_family"] = item.font().family()
+                payload["font_bold"] = item.font().bold()
+                payload["font_italic"] = item.font().italic()
+                payload["font_underline"] = item.font().underline()
+        elif annotation_type == "image":
+            payload["stroke_width"] = 0.0
+        elif annotation_type == "step" and isinstance(item, StepBadgeItem):
+            payload["step_number"] = item.step_number()
+            payload["stroke_rgba"] = color_to_list(item.pen().color())
+            payload["fill_rgba"] = color_to_list(item.brush().color())
+            payload["stroke_width"] = item.pen().widthF()
+
+        return payload
+
+    def _refresh_selection_info(self) -> None:
+        """
+        Re-emits selection details for the active annotation selection.
+
+        Returns:
+            None
+        """
+
+        selected = self._selected_annotation_items()
+        if not selected:
+            self.selection_style_changed.emit({"type": ""})
+            return
+        payload = self._build_selection_payload(selected[0])
+        if len(selected) > 1:
+            payload["count"] = len(selected)
+        self.selection_style_changed.emit(payload)
 
     def _apply_tool_cursor(self, tool: str) -> None:
         """
@@ -999,6 +1096,7 @@ class EditorCanvas(QGraphicsView):
         if event.button() == Qt.MouseButton.LeftButton:
             self._snap_selected_items_with_alignment()
         self._sync_resize_overlay_with_target()
+        self._refresh_selection_info()
 
     def wheelEvent(self, event) -> None:
         """
@@ -2155,35 +2253,18 @@ class EditorCanvas(QGraphicsView):
         selected = self._scene.selectedItems()
         if not selected:
             self._clear_resize_overlay()
+            self.selection_style_changed.emit({"type": ""})
             return
         item = selected[0]
         if item in {self._crop_item, self._crop_shade_item, self._resize_overlay_item}:
             self._clear_resize_overlay()
+            self.selection_style_changed.emit({"type": ""})
             return
         if len(selected) == 1 and self._can_resize_item(item):
             self._sync_resize_overlay_with_target(item)
         else:
             self._clear_resize_overlay()
-        annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-        payload: dict[str, Any] = {"type": annotation_type}
-        if annotation_type in {"rect", "ellipse"}:
-            payload["stroke_rgba"] = color_to_list(item.pen().color())
-            payload["fill_rgba"] = color_to_list(item.brush().color())
-            payload["stroke_width"] = item.pen().widthF()
-        elif annotation_type in {"line", "arrow"}:
-            payload["stroke_rgba"] = color_to_list(item.pen().color())
-            payload["stroke_width"] = item.pen().widthF()
-        elif annotation_type == "text":
-            payload["stroke_rgba"] = color_to_list(item.defaultTextColor())
-            payload["text_rgba"] = color_to_list(item.defaultTextColor())
-            payload["font_size"] = item.font().pointSize()
-            payload["font_family"] = item.font().family()
-            payload["font_bold"] = item.font().bold()
-            payload["font_italic"] = item.font().italic()
-            payload["font_underline"] = item.font().underline()
-        elif annotation_type == "image":
-            payload["stroke_width"] = 0.0
-        self.selection_style_changed.emit(payload)
+        self._refresh_selection_info()
 
     def _can_resize_item(self, item: QGraphicsItem) -> bool:
         """
