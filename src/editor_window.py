@@ -7,7 +7,7 @@ from __future__ import annotations
 import tempfile
 from typing import Any
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QAction,
     QBrush,
@@ -90,6 +90,12 @@ class EditorWindow(QMainWindow):
         self._pending_history_label: str | None = None
         self._syncing_history_list = False
         self._toolbar_groups: list[QWidget] = []
+        self._active_tool = Tool.SELECT
+        self._locked_tool: str | None = None
+        self._one_shot_tool: str | None = None
+        self._tool_button_order: list[str] = []
+        self._tool_button_labels: dict[str, str] = {}
+        self._tool_button_to_key: dict[QToolButton, str] = {}
         self._current_stroke_color = QColor(231, 76, 60, 255)
         self._current_fill_color = QColor(231, 76, 60, 80)
         self._current_text_color = QColor(44, 62, 80, 255)
@@ -122,8 +128,10 @@ class EditorWindow(QMainWindow):
             "QToolButton, QPushButton { background: #2f3543; color: #e7ecf2; border: 1px solid #434d63; border-radius: 4px; padding: 4px 8px; }"
             "QToolButton:checked { background: #2f7dd1; border: 1px solid #2f7dd1; color: white; }"
             "QPushButton:hover, QToolButton:hover { background: #3a4357; }"
-            "QSpinBox, QComboBox { background: #2f3543; border: 1px solid #434d63; border-radius: 4px; padding: 3px; }"
+            "QSpinBox, QComboBox { background: #2f3543; color: #e7ecf2; border: 1px solid #434d63; border-radius: 4px; padding: 3px; }"
+            "QComboBox QAbstractItemView { background: #2a3040; color: #ffffff; selection-background-color: #2f7dd1; selection-color: #ffffff; border: 1px solid #434d63; }"
             "QFrame[toolbarGroup=\"true\"] { border: 1px solid #3b4559; border-radius: 6px; background: #222938; }"
+            "QFrame[toolbarGroup=\"true\"] QLabel { color: #ffffff; }"
         )
 
     def _build_toolbar(self) -> QWidget:
@@ -176,9 +184,15 @@ class EditorWindow(QMainWindow):
             button.setCheckable(True)
             button.setIcon(self._build_tool_icon(tool_key))
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            button.clicked.connect(lambda checked, t=tool_key: self._set_tool(t))
+            button.clicked.connect(
+                lambda _checked=False, t=tool_key: self._on_tool_button_clicked(t)
+            )
+            button.installEventFilter(self)
             tools_layout.addWidget(button)
             self._tool_buttons[tool_key] = button
+            self._tool_button_order.append(tool_key)
+            self._tool_button_labels[tool_key] = label
+            self._tool_button_to_key[button] = tool_key
         self._tool_buttons[Tool.SELECT].setChecked(True)
 
         self.apply_crop_button = QPushButton("Apply Crop")
@@ -217,6 +231,15 @@ class EditorWindow(QMainWindow):
         stroke_row.addWidget(self.stroke_button)
         for color in palette_colors:
             stroke_row.addWidget(self._create_palette_button(color, "stroke"))
+        stroke_row.addWidget(QLabel("Opacity"))
+        self.stroke_alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self.stroke_alpha_slider.setRange(0, 100)
+        self.stroke_alpha_slider.setValue(100)
+        self.stroke_alpha_slider.setFixedWidth(90)
+        self.stroke_alpha_slider.valueChanged.connect(self._stroke_alpha_changed)
+        stroke_row.addWidget(self.stroke_alpha_slider)
+        self.stroke_alpha_label = QLabel("100%")
+        stroke_row.addWidget(self.stroke_alpha_label)
         stroke_row.addStretch(1)
         colors_layout.addLayout(stroke_row)
 
@@ -228,6 +251,15 @@ class EditorWindow(QMainWindow):
         fill_row.addWidget(self.fill_button)
         for color in palette_colors:
             fill_row.addWidget(self._create_palette_button(color, "fill"))
+        fill_row.addWidget(QLabel("Opacity"))
+        self.fill_alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self.fill_alpha_slider.setRange(0, 100)
+        self.fill_alpha_slider.setValue(31)
+        self.fill_alpha_slider.setFixedWidth(90)
+        self.fill_alpha_slider.valueChanged.connect(self._fill_alpha_changed)
+        fill_row.addWidget(self.fill_alpha_slider)
+        self.fill_alpha_label = QLabel("31%")
+        fill_row.addWidget(self.fill_alpha_label)
         fill_row.addStretch(1)
         colors_layout.addLayout(fill_row)
 
@@ -239,44 +271,17 @@ class EditorWindow(QMainWindow):
         text_row.addWidget(self.text_color_button)
         for color in palette_colors:
             text_row.addWidget(self._create_palette_button(color, "text"))
-        text_row.addStretch(1)
-        colors_layout.addLayout(text_row)
-
-        opacity_row = QHBoxLayout()
-        opacity_row.setContentsMargins(0, 0, 0, 0)
-        opacity_row.setSpacing(6)
-
-        opacity_row.addWidget(QLabel("Border Opacity"))
-        self.stroke_alpha_slider = QSlider(Qt.Orientation.Horizontal)
-        self.stroke_alpha_slider.setRange(0, 100)
-        self.stroke_alpha_slider.setValue(100)
-        self.stroke_alpha_slider.setFixedWidth(90)
-        self.stroke_alpha_slider.valueChanged.connect(self._stroke_alpha_changed)
-        opacity_row.addWidget(self.stroke_alpha_slider)
-        self.stroke_alpha_label = QLabel("100%")
-        opacity_row.addWidget(self.stroke_alpha_label)
-
-        opacity_row.addWidget(QLabel("Background Opacity"))
-        self.fill_alpha_slider = QSlider(Qt.Orientation.Horizontal)
-        self.fill_alpha_slider.setRange(0, 100)
-        self.fill_alpha_slider.setValue(31)
-        self.fill_alpha_slider.setFixedWidth(90)
-        self.fill_alpha_slider.valueChanged.connect(self._fill_alpha_changed)
-        opacity_row.addWidget(self.fill_alpha_slider)
-        self.fill_alpha_label = QLabel("31%")
-        opacity_row.addWidget(self.fill_alpha_label)
-
-        opacity_row.addWidget(QLabel("Text Opacity"))
+        text_row.addWidget(QLabel("Opacity"))
         self.text_alpha_slider = QSlider(Qt.Orientation.Horizontal)
         self.text_alpha_slider.setRange(0, 100)
         self.text_alpha_slider.setValue(100)
         self.text_alpha_slider.setFixedWidth(90)
         self.text_alpha_slider.valueChanged.connect(self._text_alpha_changed)
-        opacity_row.addWidget(self.text_alpha_slider)
+        text_row.addWidget(self.text_alpha_slider)
         self.text_alpha_label = QLabel("100%")
-        opacity_row.addWidget(self.text_alpha_label)
-        opacity_row.addStretch(1)
-        colors_layout.addLayout(opacity_row)
+        text_row.addWidget(self.text_alpha_label)
+        text_row.addStretch(1)
+        colors_layout.addLayout(text_row)
         self._toolbar_groups.append(colors_group)
 
         text_group, text_layout = self._create_toolbar_group("Text Style")
@@ -542,12 +547,12 @@ class EditorWindow(QMainWindow):
 
         tooltips = {
             Tool.SELECT: "Select and move annotations.",
-            Tool.RECT: "Draw a rectangle annotation.",
-            Tool.ELLIPSE: "Draw a circle or ellipse annotation.",
-            Tool.LINE: "Draw a straight line annotation.",
-            Tool.ARROW: "Draw an arrow annotation.",
-            Tool.TEXT: "Insert a text annotation.",
-            Tool.FILL_BG: "Fill screenshot background area.",
+            Tool.RECT: "Draw one rectangle. Double-click to lock tool.",
+            Tool.ELLIPSE: "Draw one ellipse. Double-click to lock tool.",
+            Tool.LINE: "Draw one line. Double-click to lock tool.",
+            Tool.ARROW: "Draw one arrow. Double-click to lock tool.",
+            Tool.TEXT: "Insert one text item. Double-click to lock tool.",
+            Tool.FILL_BG: "Fill one area. Double-click to lock tool.",
             Tool.CROP: "Create a crop selection area.",
         }
         for tool_key, button in self._tool_buttons.items():
@@ -697,10 +702,133 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        self._active_tool = tool
         for key, button in self._tool_buttons.items():
             button.setChecked(key == tool)
         self.canvas.set_tool(tool)
         self.statusBar().showMessage(f"Tool: {tool}")
+
+    def eventFilter(self, watched, event) -> bool:
+        """
+        Handles double-click locking for drawing tool buttons.
+
+        Args:
+            watched: Watched QObject.
+            event: Incoming Qt event.
+
+        Returns:
+            bool: True when handled.
+        """
+
+        if isinstance(watched, QToolButton):
+            tool_key = self._tool_button_to_key.get(watched)
+            if tool_key is not None and event.type() == QEvent.Type.MouseButtonDblClick:
+                self._toggle_tool_lock(tool_key)
+                return True
+        return super().eventFilter(watched, event)
+
+    def _is_lockable_tool(self, tool: str) -> bool:
+        """
+        Indicates whether a tool supports drawing lock mode.
+
+        Args:
+            tool: Tool identifier.
+
+        Returns:
+            bool: True when tool can be locked.
+        """
+
+        return tool in {
+            Tool.RECT,
+            Tool.ELLIPSE,
+            Tool.LINE,
+            Tool.ARROW,
+            Tool.TEXT,
+            Tool.FILL_BG,
+        }
+
+    def _on_tool_button_clicked(self, tool: str) -> None:
+        """
+        Handles normal single-click behavior for tool buttons.
+
+        Args:
+            tool: Clicked tool identifier.
+
+        Returns:
+            None
+        """
+
+        if self._locked_tool is not None and tool == self._locked_tool:
+            self._clear_tool_lock()
+            self._set_tool(Tool.SELECT)
+            self._one_shot_tool = None
+            return
+
+        if tool == Tool.SELECT:
+            self._clear_tool_lock()
+            self._one_shot_tool = None
+            self._set_tool(Tool.SELECT)
+            return
+
+        if self._locked_tool is not None and tool != self._locked_tool:
+            self._clear_tool_lock()
+
+        self._set_tool(tool)
+        self._one_shot_tool = tool if self._is_lockable_tool(tool) else None
+
+    def _toggle_tool_lock(self, tool: str) -> None:
+        """
+        Enables or disables persistent lock mode for one drawing tool.
+
+        Args:
+            tool: Tool identifier.
+
+        Returns:
+            None
+        """
+
+        if not self._is_lockable_tool(tool):
+            self._one_shot_tool = None
+            self._set_tool(tool)
+            return
+
+        if self._locked_tool == tool:
+            self._clear_tool_lock()
+            self._set_tool(Tool.SELECT)
+            self._one_shot_tool = None
+            return
+
+        self._locked_tool = tool
+        self._one_shot_tool = None
+        self._update_tool_lock_visuals()
+        self._set_tool(tool)
+
+    def _clear_tool_lock(self) -> None:
+        """
+        Disables any active tool lock and updates button visuals.
+
+        Returns:
+            None
+        """
+
+        self._locked_tool = None
+        self._update_tool_lock_visuals()
+
+    def _update_tool_lock_visuals(self) -> None:
+        """
+        Updates tool button captions and lock symbol visibility.
+
+        Returns:
+            None
+        """
+
+        for tool_key in self._tool_button_order:
+            button = self._tool_buttons[tool_key]
+            base_label = self._tool_button_labels[tool_key]
+            if tool_key == self._locked_tool:
+                button.setText(f"{base_label} 🔒")
+            else:
+                button.setText(base_label)
 
     def _set_next_history_label(self, label: str) -> None:
         """
@@ -1063,7 +1191,41 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        action_label = self.canvas.consume_last_action_label()
+        self._set_next_history_label(action_label)
         self._push_history_state()
+        self._apply_one_shot_tool_completion(action_label)
+
+    def _apply_one_shot_tool_completion(self, action_label: str) -> None:
+        """
+        Switches back to select after one-shot drawing completion.
+
+        Args:
+            action_label: Last canvas action label.
+
+        Returns:
+            None
+        """
+
+        if self._one_shot_tool is None:
+            return
+        if self._locked_tool is not None:
+            return
+        expected_action_by_tool = {
+            Tool.RECT: "Draw rectangle",
+            Tool.ELLIPSE: "Draw ellipse",
+            Tool.LINE: "Draw line",
+            Tool.ARROW: "Draw arrow",
+            Tool.TEXT: "Insert text",
+            Tool.FILL_BG: "Fill background",
+        }
+        expected = expected_action_by_tool.get(self._one_shot_tool)
+        if expected is None:
+            return
+        if action_label != expected:
+            return
+        self._one_shot_tool = None
+        self._set_tool(Tool.SELECT)
 
     def _on_selection_style_changed(self, payload: dict[str, Any]) -> None:
         """
@@ -1142,6 +1304,8 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        self._one_shot_tool = None
+        self._clear_tool_lock()
         self._set_tool(Tool.SELECT)
 
     def _serialize_state(self) -> dict[str, Any]:
