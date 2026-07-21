@@ -66,6 +66,8 @@ It combines fast capture workflows with a tabbed editor, non-destructive annotat
 
 ## Screenshots
 
+The images below reflect the current SnapAgent UI, including the gray editor pasteboard around the drawable document.
+
 ### Capture Panel
 
 ![SnapAgent Capture Panel](docs/screenshots/capture-panel.png)
@@ -80,7 +82,7 @@ It combines fast capture workflows with a tabbed editor, non-destructive annotat
 
 ### Editor Window
 
-![SnapAgent Editor Window](docs/screenshots/editor-window.png)
+![SnapAgent Editor Window with annotations and gray pasteboard](docs/screenshots/editor-window.png)
 
 ### System Tray Menu
 
@@ -89,6 +91,12 @@ It combines fast capture workflows with a tabbed editor, non-destructive annotat
 ### First-Time Setup
 
 ![SnapAgent First-Time Setup](docs/screenshots/first-time-setup.png)
+
+Regenerate screenshots after UI changes:
+
+```bash
+.venv/bin/python scripts/generate_readme_screenshots.py
+```
 
 ## Requirements
 
