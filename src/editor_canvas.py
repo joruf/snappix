@@ -1020,9 +1020,31 @@ class EditorCanvas(QGraphicsView):
             return
         super().wheelEvent(event)
 
+    def _annotation_item_at_view_pos(self, view_pos: QPoint) -> QGraphicsItem | None:
+        """
+        Returns the annotation under a view position for context menu actions.
+
+        Args:
+            view_pos: View coordinate to inspect.
+
+        Returns:
+            QGraphicsItem | None: Drawable annotation item or None.
+        """
+
+        hit_item = self.itemAt(view_pos)
+        if hit_item is None:
+            return None
+        if hit_item is self._resize_overlay_item and self._resize_overlay_target is not None:
+            return self._resize_overlay_target
+        if hit_item in self._non_annotation_scene_items():
+            return None
+        if not str(hit_item.data(ITEM_ROLE_TYPE) or ""):
+            return None
+        return hit_item
+
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         """
-        Shows context menu with paste action.
+        Shows context menu with paste and annotation actions.
 
         Args:
             event: Context menu event.
@@ -1036,7 +1058,19 @@ class EditorCanvas(QGraphicsView):
         paste_action.setShortcut(QKeySequence.StandardKey.Paste)
         paste_action.triggered.connect(lambda: self.paste_from_clipboard(event.pos()))
         menu.addAction(paste_action)
-        if self._scene.selectedItems():
+
+        annotation_item = self._annotation_item_at_view_pos(event.pos())
+        if annotation_item is not None:
+            if not annotation_item.isSelected():
+                self._scene.clearSelection()
+                annotation_item.setSelected(True)
+            menu.addSeparator()
+            bring_to_front_action = QAction("Bring to Front", self)
+            bring_to_front_action.triggered.connect(self.bring_selected_to_front)
+            menu.addAction(bring_to_front_action)
+            send_to_back_action = QAction("Send to Back", self)
+            send_to_back_action.triggered.connect(self.send_selected_to_back)
+            menu.addAction(send_to_back_action)
             menu.addSeparator()
             grow_action = QAction("Increase Element Size", self)
             grow_action.triggered.connect(lambda: self.resize_selected_items(1.1))
@@ -1044,6 +1078,7 @@ class EditorCanvas(QGraphicsView):
             shrink_action = QAction("Decrease Element Size", self)
             shrink_action.triggered.connect(lambda: self.resize_selected_items(0.9))
             menu.addAction(shrink_action)
+
         if self.has_pending_crop():
             apply_crop_action = QAction("Apply Crop", self)
             apply_crop_action.triggered.connect(self.apply_pending_crop)

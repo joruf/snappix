@@ -162,6 +162,20 @@ class TestEditorCanvasTools(unittest.TestCase):
         )
         self.assertEqual(item.zValue(), max_z)
 
+    def test_annotation_item_at_view_pos_detects_drawn_element(self) -> None:
+        """
+        Ensures context-menu hit testing resolves drawable annotations.
+        """
+
+        canvas, item = self._canvas_with_rect()
+        item.setSelected(False)
+        center = item.sceneBoundingRect().center()
+        view_point = canvas.mapFromScene(center)
+
+        resolved = canvas._annotation_item_at_view_pos(view_point)  # pylint: disable=protected-access
+
+        self.assertIs(resolved, item)
+
     def test_reset_step_counter_and_insert_step(self) -> None:
         """
         Ensures step counter reset and step tool insert numbered badges.
