@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 
 _INSTANCE_LOCK_HANDLE = None
+_INITIALIZED_FILE = None
 
 
 def _project_root() -> Path:
@@ -33,6 +34,9 @@ def _project_root() -> Path:
     """
 
     return Path(__file__).resolve().parent
+
+
+_INITIALIZED_FILE = _project_root() / ".initialized"
 
 
 def _icon_path() -> Path:
@@ -148,6 +152,126 @@ def _autostart_exec_command() -> str:
     return f"python3 \"{script_path}\""
 
 
+def _user_desktop_dir() -> Path:
+    """
+    Resolves the user's desktop folder with XDG and localization fallback.
+
+    Returns:
+        Path: Preferred desktop folder path.
+    """
+
+    user_dirs_file = Path.home() / ".config" / "user-dirs.dirs"
+    if user_dirs_file.is_file():
+        try:
+            for raw_line in user_dirs_file.read_text(encoding="utf-8").splitlines():
+                line = raw_line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if not line.startswith("XDG_DESKTOP_DIR="):
+                    continue
+                value = line.split("=", 1)[1].strip().strip('"')
+                if value.startswith("$HOME/"):
+                    return Path.home() / value[len("$HOME/"):]
+                if value == "$HOME":
+                    return Path.home()
+                return Path(value).expanduser()
+        except OSError:
+            pass
+
+    for folder_name in ("Desktop", "Schreibtisch"):
+        candidate = Path.home() / folder_name
+        if candidate.is_dir():
+            return candidate
+    return Path.home() / "Desktop"
+
+
+def _desktop_shortcut_content() -> str:
+    """
+    Builds desktop shortcut content for direct app start.
+
+    Returns:
+        str: Desktop entry file content.
+    """
+
+    return (
+        "[Desktop Entry]\n"
+        "Version=1.0\n"
+        "Type=Application\n"
+        f"Name={APP_NAME}\n"
+        "Comment=Screenshot and annotation tool\n"
+        f"Exec={_autostart_exec_command()}\n"
+        f"Icon={_icon_path()}\n"
+        "Terminal=false\n"
+        "Categories=Graphics;Utility;\n"
+        "StartupWMClass=snapagent\n"
+        "StartupNotify=true\n"
+    )
+
+
+def _install_desktop_shortcut() -> bool:
+    """
+    Creates a launch shortcut on the user's desktop folder.
+
+    Returns:
+        bool: True on success, otherwise False.
+    """
+
+    try:
+        desktop_dir = _user_desktop_dir()
+        desktop_dir.mkdir(parents=True, exist_ok=True)
+        shortcut_path = desktop_dir / "SnapAgent.desktop"
+        shortcut_path.write_text(_desktop_shortcut_content(), encoding="utf-8")
+        mode = shortcut_path.stat().st_mode
+        shortcut_path.chmod(mode | 0o111)
+        return True
+    except OSError:
+        return False
+
+
+def _mark_initialized() -> None:
+    """
+    Creates first-run marker file in the project root.
+
+    Returns:
+        None
+    """
+
+    try:
+        _INITIALIZED_FILE.touch(exist_ok=True)
+    except OSError:
+        pass
+
+
+def _maybe_prompt_desktop_shortcut() -> None:
+    """
+    Asks once on first start whether a desktop shortcut should be created.
+
+    Returns:
+        None
+    """
+
+    if _INITIALIZED_FILE.exists():
+        return
+
+    from PySide6.QtWidgets import QMessageBox
+
+    answer = QMessageBox.question(
+        None,
+        "Desktop Shortcut",
+        "Would you like to create a desktop shortcut for SnapAgent?",
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.Yes,
+    )
+    if answer == QMessageBox.StandardButton.Yes:
+        if not _install_desktop_shortcut():
+            QMessageBox.warning(
+                None,
+                "Desktop Shortcut",
+                "Could not create the desktop shortcut.",
+            )
+    _mark_initialized()
+
+
 def _ensure_desktop_launcher() -> None:
     """
     Ensures a user-local desktop launcher exists for taskbar integration.
@@ -256,6 +380,7 @@ class AppController:
         self.capture_panel.capture_requested.connect(self.start_capture)
         self.capture_panel.autostart_toggled.connect(self.toggle_autostart)
         self.capture_panel.close_requested.connect(self._hide_to_tray)
+        self.capture_panel.editor_requested.connect(self.open_editor_from_capture)
         self.editors: list[EditorWindow] = []
 
         config_dir = Path.home() / ".config" / "snapagent"
@@ -413,6 +538,37 @@ class AppController:
             self.autostart_tray_action.blockSignals(True)
             self.autostart_tray_action.setChecked(enabled)
             self.autostart_tray_action.blockSignals(False)
+
+    def open_editor_from_capture(self) -> None:
+        """
+        Opens editor host from capture panel without changing capture tool state.
+
+        Returns:
+            None
+        """
+
+        if self.editor_tabs.count() == 0:
+            from PySide6.QtGui import QColor, QPixmap
+            from src.editor_window import EditorWindow
+
+            blank_pixmap = QPixmap(1280, 720)
+            blank_pixmap.fill(QColor(255, 255, 255, 255))
+
+            editor = EditorWindow(blank_pixmap)
+            editor.setWindowIcon(self.editor_host.windowIcon())
+            editor.set_minimize_to_tray_on_close(False)
+            editor.setParent(self.editor_tabs)
+            tab_index = self.editor_tabs.addTab(editor, "New Canvas")
+            self.editor_tabs.setCurrentIndex(tab_index)
+            editor.show()
+            editor.destroyed.connect(lambda *_: self._on_editor_closed(editor))
+            self.editors.append(editor)
+        self.app.setWindowIcon(self.editor_host.windowIcon())
+        self.app.setDesktopFileName("snapagent-editor")
+        self._ensure_editor_host_geometry()
+        self.editor_host.show()
+        self.editor_host.raise_()
+        self.editor_host.activateWindow()
 
     def capture_region_from_tray(self) -> None:
         """
@@ -641,6 +797,7 @@ def main() -> int:
     capture_icon = QIcon(str(_icon_path()))
     editor_icon = QIcon(str(_editor_icon_path()))
     app.setWindowIcon(capture_icon)
+    _maybe_prompt_desktop_shortcut()
     controller = AppController(app)
     controller.capture_panel.setWindowIcon(capture_icon)
     controller.editor_host.setWindowIcon(editor_icon)

@@ -450,10 +450,15 @@ class EditorWindow(QMainWindow):
         file_menu.addAction(save_action)
 
         save_action = QAction("Save Project", self)
-        save_action.setShortcut(QKeySequence.StandardKey.Save)
         save_action.setToolTip("Save changes to the current project.")
         save_action.triggered.connect(self.save_project)
         file_menu.addAction(save_action)
+
+        export_action = QAction("Export...", self)
+        export_action.setShortcut(QKeySequence.StandardKey.Save)
+        export_action.setToolTip("Open export dialog for image or PDF.")
+        export_action.triggered.connect(self.export_with_dialog)
+        file_menu.addAction(export_action)
 
         export_png = QAction("Export as PNG...", self)
         export_png.setToolTip("Export the composited image as PNG.")
@@ -519,6 +524,11 @@ class EditorWindow(QMainWindow):
         shortcuts_action.setToolTip("Show manual and keyboard shortcuts.")
         shortcuts_action.triggered.connect(self.show_manual)
         help_menu.addAction(shortcuts_action)
+
+        shortcuts_reference_action = QAction("Keyboard Shortcuts", self)
+        shortcuts_reference_action.setToolTip("Show keyboard shortcut reference.")
+        shortcuts_reference_action.triggered.connect(self.show_shortcuts_reference)
+        help_menu.addAction(shortcuts_reference_action)
 
         self._update_undo_redo_actions()
 
@@ -1132,6 +1142,42 @@ class EditorWindow(QMainWindow):
         pixmap.save(file_path, fmt)
         self.statusBar().showMessage(f"Exported {fmt}")
 
+    def export_with_dialog(self) -> None:
+        """
+        Opens one unified export dialog for PNG, JPG, and PDF.
+
+        Returns:
+            None
+        """
+
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Export",
+            "",
+            "PNG Files (*.png);;JPEG Files (*.jpg *.jpeg);;PDF Files (*.pdf)",
+        )
+        if not file_path:
+            return
+
+        if "PNG" in selected_filter:
+            if not file_path.lower().endswith(".png"):
+                file_path = f"{file_path}.png"
+            self.canvas.export_composited_pixmap().save(file_path, "PNG")
+            self.statusBar().showMessage("Exported PNG")
+            return
+
+        if "JPEG" in selected_filter:
+            if not file_path.lower().endswith((".jpg", ".jpeg")):
+                file_path = f"{file_path}.jpg"
+            self.canvas.export_composited_pixmap().save(file_path, "JPG")
+            self.statusBar().showMessage("Exported JPG")
+            return
+
+        if not file_path.lower().endswith(".pdf"):
+            file_path = f"{file_path}.pdf"
+        self._write_pdf_to_path(file_path)
+        self.statusBar().showMessage("Exported PDF")
+
     def export_pdf(self) -> None:
         """
         Exports composited screenshot as a PDF page.
@@ -1150,6 +1196,19 @@ class EditorWindow(QMainWindow):
             return
         if not file_path.lower().endswith(".pdf"):
             file_path = f"{file_path}.pdf"
+        self._write_pdf_to_path(file_path)
+        self.statusBar().showMessage("Exported PDF")
+
+    def _write_pdf_to_path(self, file_path: str) -> None:
+        """
+        Writes current composited image as PDF to target path.
+
+        Args:
+            file_path: PDF output path.
+
+        Returns:
+            None
+        """
 
         writer = QPdfWriter(file_path)
         writer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
@@ -1169,7 +1228,6 @@ class EditorWindow(QMainWindow):
         y_offset = int((page_rect.height() - scaled.height()) / 2)
         painter.drawPixmap(x_offset, y_offset, scaled)
         painter.end()
-        self.statusBar().showMessage("Exported PDF")
 
     def print_image(self) -> None:
         """
@@ -1235,18 +1293,46 @@ class EditorWindow(QMainWindow):
             "1) Use the capture panel to create a screenshot.\n"
             "2) Annotate with tools in the top bar.\n"
             "3) Save project, export image, or print from File menu.\n\n"
-            "Shortcuts:\n"
-            "Ctrl+O: Open project\n"
-            "Ctrl+S: Save project\n"
+            "Keyboard shortcuts (standard behavior):\n"
+            "Ctrl+S: Export dialog\n"
+            "Ctrl+P: Print dialog\n"
             "Ctrl+Shift+S: Save project as\n"
+            "Ctrl+O: Open project\n"
             "Ctrl+Z: Undo\n"
             "Ctrl+Y: Redo\n"
+            "Ctrl+C: Copy composited image\n"
             "Ctrl+V: Paste text/image/image URL\n"
-            "Enter: Apply crop selection\n"
-            "Esc: Cancel crop selection\n"
-            "Ctrl+P: Print\n"
             "Ctrl + Mouse Wheel: Zoom\n"
-            "Esc: Cancel capture overlays",
+            "Enter: Apply crop selection\n"
+            "Esc: Cancel crop selection or capture overlays\n\n"
+            "Project shortcuts:\n"
+            "Ctrl+O: Open project\n"
+            "Use File > Save Project to update current .sfp file.",
+        )
+
+    def show_shortcuts_reference(self) -> None:
+        """
+        Displays a dedicated keyboard shortcut reference.
+
+        Returns:
+            None
+        """
+
+        QMessageBox.information(
+            self,
+            "Keyboard Shortcuts",
+            "Editor shortcuts:\n"
+            "Ctrl+S  - Open export dialog (PNG/JPG/PDF)\n"
+            "Ctrl+P  - Open print dialog\n"
+            "Ctrl+Shift+S  - Save project as (.sfp)\n"
+            "Ctrl+O  - Open project\n"
+            "Ctrl+Z  - Undo\n"
+            "Ctrl+Y  - Redo\n"
+            "Ctrl+C  - Copy composited image\n"
+            "Ctrl+V  - Paste text/image/image URL\n"
+            "Ctrl+Mouse Wheel  - Zoom in/out\n"
+            "Enter  - Apply crop\n"
+            "Esc  - Cancel crop or capture overlay\n",
         )
 
     def _update_window_title(self) -> None:

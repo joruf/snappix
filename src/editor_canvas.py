@@ -8,7 +8,7 @@ import base64
 from typing import Any
 
 import requests
-from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QByteArray, QBuffer, QIODevice, QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QAction,
     QColor,
@@ -137,6 +137,7 @@ class EditorCanvas(QGraphicsView):
             font_family="Sans Serif",
         )
         self._zoom_factor = 1.0
+        self._initial_view_pending = False
         self._start_scene_pos = QPointF()
         self._preview_item: QGraphicsItem | None = None
         self._crop_item: CropSelectionItem | None = None
@@ -174,8 +175,52 @@ class EditorCanvas(QGraphicsView):
         self._background_item.setPixmap(pixmap)
         self._background_item.setPos(0, 0)
         self._scene.setSceneRect(QRectF(pixmap.rect()))
-        self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
-        self._zoom_factor = 1.0
+        self._initial_view_pending = True
+        QTimer.singleShot(0, self._apply_initial_screenshot_view)
+
+    def resizeEvent(self, event) -> None:
+        """
+        Applies pending initial screenshot scaling after viewport resize.
+
+        Args:
+            event: Qt resize event.
+
+        Returns:
+            None
+        """
+
+        super().resizeEvent(event)
+        if self._initial_view_pending:
+            self._apply_initial_screenshot_view()
+
+    def _apply_initial_screenshot_view(self) -> None:
+        """
+        Shows screenshot at original size unless it is wider than viewport.
+
+        Returns:
+            None
+        """
+
+        screenshot = self.screenshot()
+        if screenshot.isNull():
+            self._initial_view_pending = False
+            self._zoom_factor = 1.0
+            self.zoom_changed.emit(self._zoom_factor)
+            return
+
+        viewport_width = self.viewport().width()
+        if viewport_width <= 1:
+            return
+
+        self.resetTransform()
+        if screenshot.width() > viewport_width:
+            zoom_factor = viewport_width / float(screenshot.width())
+            self.scale(zoom_factor, zoom_factor)
+            self._zoom_factor = zoom_factor
+        else:
+            self._zoom_factor = 1.0
+        self.centerOn(self._background_item)
+        self._initial_view_pending = False
         self.zoom_changed.emit(self._zoom_factor)
 
     def set_tool(self, tool: str) -> None:

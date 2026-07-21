@@ -14,7 +14,6 @@ from PySide6.QtCore import QPoint, QRect, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
-    QCheckBox,
     QFormLayout,
     QFrame,
     QHBoxLayout,
@@ -78,6 +77,7 @@ class CapturePanel(QWidget):
     capture_requested = Signal(CaptureRequest)
     autostart_toggled = Signal(bool)
     close_requested = Signal()
+    editor_requested = Signal()
 
     def __init__(self) -> None:
         """
@@ -126,10 +126,24 @@ class CapturePanel(QWidget):
         delay_row.addWidget(self.delay_value_label)
         form.addRow("Delay:", delay_row)
 
-        self.autostart_checkbox = QCheckBox("Start at login")
-        self.autostart_checkbox.toggled.connect(self.autostart_toggled.emit)
-        self.autostart_checkbox.setToolTip("Launch SnapAgent automatically after login.")
-        form.addRow("Autostart:", self.autostart_checkbox)
+        self._autostart_enabled = False
+
+        self.open_editor_button = QPushButton("Open Editor")
+        self.open_editor_button.setFlat(True)
+        self.open_editor_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.open_editor_button.setStyleSheet(
+            "QPushButton { color: #78b8ff; text-decoration: underline; background: transparent; border: none; padding: 2px 4px; }"
+            "QPushButton:hover { color: #a9d1ff; }"
+        )
+        self.open_editor_button.setToolTip(
+            "Open the editor window with your existing tabs."
+        )
+        self.open_editor_button.clicked.connect(self.editor_requested.emit)
+        open_editor_row = QHBoxLayout()
+        open_editor_row.setContentsMargins(0, 0, 0, 0)
+        open_editor_row.addStretch(1)
+        open_editor_row.addWidget(self.open_editor_button)
+        form.addRow("", open_editor_row)
         self._minimize_to_tray_on_close = True
 
         buttons = QHBoxLayout()
@@ -189,7 +203,7 @@ class CapturePanel(QWidget):
 
     def set_autostart_checked(self, enabled: bool) -> None:
         """
-        Updates autostart checkbox state without recursive signals.
+        Stores autostart state from tray/config synchronization.
 
         Args:
             enabled: Desired checked state.
@@ -198,9 +212,7 @@ class CapturePanel(QWidget):
             None
         """
 
-        self.autostart_checkbox.blockSignals(True)
-        self.autostart_checkbox.setChecked(enabled)
-        self.autostart_checkbox.blockSignals(False)
+        self._autostart_enabled = enabled
 
     def set_minimize_to_tray_on_close(self, enabled: bool) -> None:
         """
