@@ -333,6 +333,37 @@ def apply_x11_wm_class(widget, instance_name: str, class_name: str) -> bool:
         return False
 
 
+def raise_qt_window(widget) -> bool:
+    """
+    Raises one Qt top-level window on X11 when possible.
+
+    Args:
+        widget: Top-level widget to raise.
+
+    Returns:
+        bool: True when a raise request was attempted successfully.
+    """
+
+    from PySide6.QtGui import QGuiApplication
+
+    if QGuiApplication.platformName() not in {"xcb", "x11"}:
+        return False
+
+    try:
+        window_handle = widget.windowHandle()
+        if window_handle is None:
+            widget.show()
+            window_handle = widget.windowHandle()
+        if window_handle is None:
+            return False
+        win_id = int(window_handle.winId())
+        if win_id <= 0:
+            return False
+        return raise_x11_window(str(win_id))
+    except (AttributeError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 def apply_linux_window_identity(
     widget,
     *,

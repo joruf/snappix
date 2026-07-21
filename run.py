@@ -928,17 +928,13 @@ class AppController:
         editor.setParent(self.editor_tabs)
         tab_index = self.editor_tabs.addTab(editor, title)
         self.editor_tabs.setCurrentIndex(tab_index)
-        self._apply_editor_taskbar_identity()
-        self._ensure_editor_host_geometry()
-        self.editor_host.show()
-        self.editor_host.raise_()
-        self.editor_host.activateWindow()
         editor.show()
         editor.destroyed.connect(lambda *_: self._on_editor_closed(editor))
         self.editors.append(editor)
         if source_path:
             editor._current_project_path = source_path
             editor._update_window_title()
+        self._show_editor_host()
         if persist_session:
             self._save_editor_session()
         return editor
@@ -1057,11 +1053,7 @@ class AppController:
         if restored_count == 0:
             return
 
-        self._apply_editor_taskbar_identity()
-        self._ensure_editor_host_geometry()
-        self.editor_host.show()
-        self.editor_host.raise_()
-        self.editor_host.activateWindow()
+        self._show_editor_host()
         self._save_editor_session()
 
     def _open_project_in_editor(self, project_path: str) -> None:
@@ -1208,11 +1200,27 @@ class AppController:
             blank_pixmap.fill(QColor(255, 255, 255, 255))
             self._create_editor_tab(blank_pixmap, "New Canvas")
             return
+        self._show_editor_host()
+
+    def _show_editor_host(self) -> None:
+        """
+        Shows and focuses the editor host when tabs are available.
+
+        Returns:
+            None
+        """
+
+        if self.editor_tabs.count() <= 0:
+            return
+
+        from src.platform import raise_qt_window
+
         self._apply_editor_taskbar_identity()
         self._ensure_editor_host_geometry()
         self.editor_host.show()
         self.editor_host.raise_()
         self.editor_host.activateWindow()
+        raise_qt_window(self.editor_host)
 
     def capture_region_from_tray(self) -> None:
         """
@@ -1356,7 +1364,7 @@ class AppController:
 
     def _show_from_tray(self) -> None:
         """
-        Restores the main capture panel from system tray.
+        Restores the capture panel from the system tray.
 
         Returns:
             None
@@ -1365,12 +1373,6 @@ class AppController:
         self.capture_panel.show()
         self.capture_panel.raise_()
         self.capture_panel.activateWindow()
-        if self.editor_tabs.count() > 0:
-            self._apply_editor_taskbar_identity()
-            self.editor_host.show()
-            self.editor_host.raise_()
-            self.editor_host.activateWindow()
-            return
         self._apply_capture_taskbar_identity()
 
     def _on_tray_activated(self, reason) -> None:

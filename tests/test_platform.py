@@ -18,6 +18,7 @@ from src.platform import (
     has_grim_and_slurp,
     has_tesseract,
     is_wayland_session,
+    raise_qt_window,
 )
 
 
@@ -249,3 +250,20 @@ class TestLinuxWindowIdentity(unittest.TestCase):
         """
 
         self.assertFalse(apply_x11_wm_class(MagicMock(), "snapagent", "snapagent"))
+
+    @patch("src.platform.raise_x11_window", return_value=True)
+    @patch("PySide6.QtGui.QGuiApplication.platformName", return_value="xcb")
+    def test_raise_qt_window_uses_native_window_id(
+        self,
+        _mock_platform_name: MagicMock,
+        mock_raise_x11_window: MagicMock,
+    ) -> None:
+        """
+        Ensures Qt top-level widgets are raised through xdotool on X11.
+        """
+
+        widget = MagicMock()
+        widget.windowHandle.return_value = MagicMock()
+        widget.windowHandle.return_value.winId.return_value = 12345
+        self.assertTrue(raise_qt_window(widget))
+        mock_raise_x11_window.assert_called_once_with("12345")
