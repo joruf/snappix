@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from src.autostart import AutostartManager
 from src.config import AppConfig, ConfigManager
-from src.constants import APP_NAME
+from src.constants import ABOUT_GITHUB, APP_NAME
 
 if TYPE_CHECKING:
     from PySide6.QtWidgets import QApplication
@@ -396,7 +396,7 @@ class AppController:
         self.capture_panel.set_autostart_checked(self.config.autostart_enabled)
         self.editor_host = EditorHostWindow()
         self.editor_host.setWindowTitle(f"{APP_NAME} Editor")
-        self.editor_host.resize(1400, 900)
+        self.editor_host.resize(1240, 860)
         self.editor_tabs = QTabWidget(self.editor_host)
         self.editor_tabs.setTabsClosable(True)
         self.editor_tabs.tabCloseRequested.connect(self._close_editor_tab_by_index)
@@ -755,11 +755,11 @@ class AppController:
             return
         screen = QGuiApplication.primaryScreen()
         if screen is None:
-            self.editor_host.resize(1400, 900)
+            self.editor_host.resize(1240, 860)
             return
         available = screen.availableGeometry()
-        width = max(1200, int(available.width() * 0.8))
-        height = max(700, int(available.height() * 0.8))
+        width = max(1080, int(available.width() * 0.72))
+        height = max(680, int(available.height() * 0.78))
         self.editor_host.resize(width, height)
     def _close_editor_tab_by_index(self, index: int) -> None:
         """
@@ -796,6 +796,21 @@ class AppController:
             return
         self.capture_panel.hide()
         self.editor_host.hide()
+        for editor in list(self.editors):
+            try:
+                editor.hide()
+            except RuntimeError:
+                continue
+        for widget in self.app.topLevelWidgets():
+            if widget is self.capture_panel or widget is self.editor_host:
+                continue
+            try:
+                if widget.isVisible():
+                    widget.hide()
+            except RuntimeError:
+                continue
+        self.app.setDesktopFileName("snapagent")
+        self.app.setWindowIcon(self.capture_panel.windowIcon())
         if self.tray_icon.isVisible():
             self.tray_icon.showMessage(
                 APP_NAME,
@@ -879,6 +894,7 @@ class AppController:
                 "Joachim Ruf\n"
                 "Loresoft\n"
                 "https://www.loresoft.de\n"
+                f"{ABOUT_GITHUB}\n"
             ),
         )
 

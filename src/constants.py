@@ -11,3 +11,4 @@ PROJECT_FORMAT_VERSION = 3
 
 ABOUT_AUTHOR = "Joachim Ruf"
 ABOUT_WEBSITE = "loresoft.de"
+ABOUT_GITHUB = "https://github.com/joruf/snapagent"

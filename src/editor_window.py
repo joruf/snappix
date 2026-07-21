@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
 
 from src.constants import (
     ABOUT_AUTHOR,
+    ABOUT_GITHUB,
     ABOUT_WEBSITE,
     APP_FILE_EXTENSION,
     APP_NAME,
@@ -2053,7 +2054,8 @@ class EditorWindow(QMainWindow):
             f"About {APP_NAME}",
             f"{APP_NAME}\n"
             f"Author: {ABOUT_AUTHOR}\n"
-            f"Website: {ABOUT_WEBSITE}\n\n"
+            f"Website: {ABOUT_WEBSITE}\n"
+            f"GitHub: {ABOUT_GITHUB}\n\n"
             "A Linux screenshot editor inspired by SnagIt.",
         )
 
