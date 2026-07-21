@@ -7,9 +7,10 @@ from __future__ import annotations
 import unittest
 
 try:
+    from PySide6.QtCore import QRectF, Qt
     from PySide6.QtGui import QColor, QImage, QPixmap
 
-    from src.editor_canvas import EditorCanvas
+    from src.editor_canvas import EditorCanvas, Tool
     from src.storage import pixmap_to_base64_png
     from src.models import AnnotationModel
     from tests.qt_test_utils import ensure_qapp
@@ -317,4 +318,55 @@ class TestEditorCanvasResize(unittest.TestCase):
 
         self.assertTrue(changed)
         self.assertGreater(after_width, before_width)
+
+    def test_set_tool_updates_cursor_shape(self) -> None:
+        """
+        Ensures cursor shape follows active tool changes.
+        """
+
+        canvas = EditorCanvas()
+        canvas.set_screenshot(_solid_pixmap(150, 100))
+
+        canvas.set_tool(Tool.SELECT)
+        self.assertEqual(canvas.viewport().cursor().shape(), Qt.CursorShape.ArrowCursor)
+
+        canvas.set_tool(Tool.TEXT)
+        self.assertEqual(canvas.viewport().cursor().shape(), Qt.CursorShape.IBeamCursor)
+
+        canvas.set_tool(Tool.RECT)
+        self.assertEqual(canvas.viewport().cursor().shape(), Qt.CursorShape.CrossCursor)
+
+    def test_crop_keeps_annotations_editable(self) -> None:
+        """
+        Ensures annotations remain editable after cropping.
+        """
+
+        annotation = AnnotationModel(
+            annotation_type="rect",
+            x=60.0,
+            y=40.0,
+            width=80.0,
+            height=50.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[255, 0, 0, 80],
+            stroke_width=2.0,
+        )
+        canvas, _item = self._canvas_with_item(annotation)
+
+        canvas._apply_crop(QRectF(20.0, 20.0, 180.0, 120.0))  # pylint: disable=protected-access
+        annotations_after_crop = canvas.collect_annotations()
+
+        self.assertEqual(len(annotations_after_crop), 1)
+        self.assertEqual(annotations_after_crop[0].annotation_type, "rect")
+
+        resized_item = None
+        for candidate in canvas.scene().items():
+            if str(candidate.data(1001) or "") == "rect":
+                resized_item = candidate
+                break
+        self.assertIsNotNone(resized_item)
+        resized_item.setSelected(True)
+
+        changed = canvas.resize_selected_items(1.25)
+        self.assertTrue(changed)
 

@@ -23,6 +23,7 @@ from PySide6.QtGui import (
     QPixmap,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QGraphicsEllipseItem,
     QGraphicsItem,
     QGraphicsLineItem,
@@ -240,12 +241,33 @@ class EditorCanvas(QGraphicsView):
         if self._tool == Tool.CROP and tool != Tool.CROP:
             self.cancel_crop()
         self._tool = tool
+        QApplication.restoreOverrideCursor()
+        self._apply_tool_cursor(tool)
         if tool == Tool.SELECT:
             self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         else:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
         if tool == Tool.CROP and not self.has_pending_crop():
             self._create_default_crop_selection()
+
+    def _apply_tool_cursor(self, tool: str) -> None:
+        """
+        Applies the expected mouse cursor for the active tool.
+
+        Args:
+            tool: Active tool identifier.
+
+        Returns:
+            None
+        """
+
+        if tool == Tool.SELECT:
+            self.viewport().setCursor(Qt.CursorShape.ArrowCursor)
+            return
+        if tool == Tool.TEXT:
+            self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
+            return
+        self.viewport().setCursor(Qt.CursorShape.CrossCursor)
 
     def set_style(
         self,
@@ -679,21 +701,14 @@ class EditorCanvas(QGraphicsView):
         if crop_rect.width() < 2 or crop_rect.height() < 2:
             return
 
-        crop_item_was_visible = False
-        crop_shade_was_visible = False
-        if self._crop_item is not None:
-            crop_item_was_visible = self._crop_item.isVisible()
-            self._crop_item.setVisible(False)
-        if self._crop_shade_item is not None:
-            crop_shade_was_visible = self._crop_shade_item.isVisible()
-            self._crop_shade_item.setVisible(False)
-
-        flattened = self.export_composited_pixmap()
-
-        if self._crop_item is not None:
-            self._crop_item.setVisible(crop_item_was_visible)
-        if self._crop_shade_item is not None:
-            self._crop_shade_item.setVisible(crop_shade_was_visible)
+        source_screenshot = self.screenshot()
+        if source_screenshot.isNull():
+            return
+        annotation_models = self.collect_annotations()
+        transformed_annotations = self._transform_annotations_for_crop(
+            annotation_models,
+            crop_rect,
+        )
 
         crop_rect_int = crop_rect.toAlignedRect()
         background_color = self._background_base_color()
@@ -702,13 +717,76 @@ class EditorCanvas(QGraphicsView):
         painter = QPainter(expanded)
         source_offset_x = -crop_rect_int.x()
         source_offset_y = -crop_rect_int.y()
-        painter.drawPixmap(source_offset_x, source_offset_y, flattened)
+        painter.drawPixmap(source_offset_x, source_offset_y, source_screenshot)
         painter.end()
         cropped = QPixmap.fromImage(expanded)
         self.cancel_crop()
         self.clear_annotations()
         self.set_screenshot(cropped)
+        self.load_annotations(transformed_annotations)
         self.content_changed.emit()
+
+    def _transform_annotations_for_crop(
+        self,
+        annotations: list[AnnotationModel],
+        crop_rect: QRectF,
+    ) -> list[AnnotationModel]:
+        """
+        Translates annotations into the cropped coordinate system.
+
+        Args:
+            annotations: Existing annotation models.
+            crop_rect: Crop rectangle in old scene coordinates.
+
+        Returns:
+            list[AnnotationModel]: Cropped/translated annotations.
+        """
+
+        transformed: list[AnnotationModel] = []
+        for annotation in annotations:
+            annotation_rect = self._annotation_bounds(annotation)
+            if not annotation_rect.intersects(crop_rect):
+                continue
+            transformed.append(
+                AnnotationModel(
+                    annotation_type=annotation.annotation_type,
+                    x=annotation.x - crop_rect.x(),
+                    y=annotation.y - crop_rect.y(),
+                    width=annotation.width,
+                    height=annotation.height,
+                    stroke_rgba=list(annotation.stroke_rgba),
+                    fill_rgba=list(annotation.fill_rgba),
+                    stroke_width=annotation.stroke_width,
+                    text=annotation.text,
+                    font_size=annotation.font_size,
+                    font_family=annotation.font_family,
+                    payload=dict(annotation.payload),
+                )
+            )
+        return transformed
+
+    def _annotation_bounds(self, annotation: AnnotationModel) -> QRectF:
+        """
+        Computes scene-space bounds for one serialized annotation.
+
+        Args:
+            annotation: Annotation model.
+
+        Returns:
+            QRectF: Annotation geometry bounds.
+        """
+
+        if annotation.annotation_type in {"line", "arrow"}:
+            return QRectF(
+                QPointF(annotation.x, annotation.y),
+                QPointF(annotation.x + annotation.width, annotation.y + annotation.height),
+            ).normalized()
+        return QRectF(
+            annotation.x,
+            annotation.y,
+            annotation.width,
+            annotation.height,
+        ).normalized()
 
     def has_pending_crop(self) -> bool:
         """

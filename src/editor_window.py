@@ -7,17 +7,21 @@ from __future__ import annotations
 import tempfile
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import (
     QAction,
+    QBrush,
     QColor,
     QFontDatabase,
     QGuiApplication,
+    QIcon,
     QKeySequence,
     QPainter,
     QPageLayout,
     QPageSize,
     QPagedPaintDevice,
+    QPen,
+    QPolygonF,
     QPdfWriter,
     QPixmap,
 )
@@ -158,6 +162,8 @@ class EditorWindow(QMainWindow):
             button = QToolButton()
             button.setText(label)
             button.setCheckable(True)
+            button.setIcon(self._build_tool_icon(tool_key))
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
             button.clicked.connect(lambda checked, t=tool_key: self._set_tool(t))
             tools_layout.addWidget(button)
             self._tool_buttons[tool_key] = button
@@ -328,6 +334,83 @@ class EditorWindow(QMainWindow):
         self._update_color_button_preview(self.text_color_button, QColor("#2c3e50"))
         self._apply_toolbar_tooltips()
         return bar
+
+    def _build_tool_icon(self, tool: str) -> QIcon:
+        """
+        Builds a compact vector icon for one toolbar drawing tool.
+
+        Args:
+            tool: Tool identifier.
+
+        Returns:
+            QIcon: Rendered icon.
+        """
+
+        pixmap = QPixmap(18, 18)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        stroke_pen = QPen(QColor("#d7e3f1"), 1.6)
+        accent_pen = QPen(QColor("#4aa3ff"), 1.6)
+
+        if tool == Tool.SELECT:
+            painter.setPen(stroke_pen)
+            pointer_shape = QPolygonF(
+                [
+                    QPointF(3.0, 2.5),
+                    QPointF(3.0, 14.5),
+                    QPointF(7.0, 10.8),
+                    QPointF(10.8, 15.5),
+                    QPointF(12.4, 14.1),
+                    QPointF(8.6, 9.6),
+                    QPointF(14.5, 9.2),
+                ]
+            )
+            painter.drawPolygon(pointer_shape)
+        elif tool == Tool.RECT:
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(74, 163, 255, 70)))
+            painter.drawRect(QRectF(3.0, 4.0, 12.0, 10.0))
+        elif tool == Tool.ELLIPSE:
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(74, 163, 255, 70)))
+            painter.drawEllipse(QRectF(3.0, 4.0, 12.0, 10.0))
+        elif tool == Tool.LINE:
+            painter.setPen(stroke_pen)
+            painter.drawLine(3, 14, 15, 4)
+        elif tool == Tool.ARROW:
+            painter.setPen(accent_pen)
+            painter.drawLine(3, 14, 13, 5)
+            painter.drawLine(13, 5, 11, 5)
+            painter.drawLine(13, 5, 13, 7)
+        elif tool == Tool.TEXT:
+            painter.setPen(stroke_pen)
+            text_font = painter.font()
+            text_font.setBold(True)
+            text_font.setPointSize(10)
+            painter.setFont(text_font)
+            painter.drawText(QRectF(2.0, 1.0, 14.0, 16.0), "T")
+        elif tool == Tool.FILL_BG:
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(74, 163, 255, 100)))
+            painter.drawRect(QRectF(2.5, 9.0, 13.0, 6.0))
+            painter.drawLine(5, 8, 9, 4)
+            painter.drawLine(9, 4, 12, 7)
+        elif tool == Tool.CROP:
+            painter.setPen(accent_pen)
+            painter.drawLine(3, 3, 9, 3)
+            painter.drawLine(3, 3, 3, 9)
+            painter.drawLine(15, 15, 9, 15)
+            painter.drawLine(15, 15, 15, 9)
+            painter.setPen(stroke_pen)
+            painter.drawRect(QRectF(5.0, 5.0, 8.0, 8.0))
+        else:
+            painter.setPen(stroke_pen)
+            painter.drawRect(QRectF(4.0, 4.0, 10.0, 10.0))
+
+        painter.end()
+        return QIcon(pixmap)
 
     def _create_toolbar_group(self, title: str) -> tuple[QFrame, QHBoxLayout]:
         """

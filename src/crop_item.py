@@ -8,7 +8,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QCursor, QPainter, QPen
-from PySide6.QtWidgets import QApplication, QGraphicsItem, QGraphicsRectItem
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem
 
 
 class CropSelectionItem(QGraphicsRectItem):
@@ -127,7 +127,7 @@ class CropSelectionItem(QGraphicsRectItem):
             None
         """
 
-        QApplication.restoreOverrideCursor()
+        self.unsetCursor()
         super().hoverLeaveEvent(event)
 
     def mousePressEvent(self, event) -> None:
@@ -229,7 +229,7 @@ class CropSelectionItem(QGraphicsRectItem):
             "top": Qt.CursorShape.SizeVerCursor,
             "bottom": Qt.CursorShape.SizeVerCursor,
         }
-        QApplication.setOverrideCursor(QCursor(cursor_map.get(handle_name, Qt.CursorShape.SizeAllCursor)))
+        self.setCursor(QCursor(cursor_map.get(handle_name, Qt.CursorShape.SizeAllCursor)))
 
     def _handle_rects(self) -> dict[str, QRectF]:
         """
