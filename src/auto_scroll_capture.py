@@ -258,6 +258,79 @@ def _is_scrollbar_at_top(scrollbar: ScrollbarInfo | None) -> bool:
     return scrollbar.thumb_rect.y() <= track_top + SCROLLBAR_TOP_MARGIN_PX
 
 
+def _estimate_overlap_from_scrollbars(
+    previous_scrollbar: ScrollbarInfo | None,
+    current_scrollbar: ScrollbarInfo | None,
+    frame_height: int,
+) -> int | None:
+    """
+    Estimates stitch overlap from consecutive scrollbar thumb positions.
+
+    Args:
+        previous_scrollbar: Scrollbar metadata from the previous frame.
+        current_scrollbar: Scrollbar metadata from the current frame.
+        frame_height: Frame height in pixels.
+
+    Returns:
+        int | None: Estimated overlap row count or None when unreliable.
+    """
+
+    if frame_height <= 1:
+        return None
+    if not _is_scrollbar_reliable(previous_scrollbar) or not _is_scrollbar_reliable(current_scrollbar):
+        return None
+
+    assert previous_scrollbar is not None
+    assert current_scrollbar is not None
+    assert previous_scrollbar.thumb_rect is not None
+    assert current_scrollbar.thumb_rect is not None
+
+    thumb_delta = current_scrollbar.thumb_rect.y() - previous_scrollbar.thumb_rect.y()
+    if thumb_delta <= 0:
+        return None
+
+    track_height = max(1, previous_scrollbar.track_rect.height())
+    thumb_height = max(
+        previous_scrollbar.thumb_rect.height(),
+        current_scrollbar.thumb_rect.height(),
+    )
+    track_travel = max(1, track_height - thumb_height)
+    scrollable_rows = frame_height * (track_height / max(1, thumb_height) - 1.0)
+    if scrollable_rows <= 0:
+        return None
+
+    new_content_rows = round(thumb_delta * scrollable_rows / track_travel)
+    new_content_rows = max(1, min(new_content_rows, frame_height - 1))
+    return frame_height - new_content_rows
+
+
+def _build_scroll_overlap_hints(frames: list[QPixmap]) -> list[int | None]:
+    """
+    Builds optional overlap hints from scrollbar movement between consecutive frames.
+
+    Args:
+        frames: Capture frames from top to bottom.
+
+    Returns:
+        list[int | None]: Overlap hints for each consecutive frame pair.
+    """
+
+    if len(frames) < 2:
+        return []
+
+    scrollbars = [detect_vertical_scrollbar(frame) for frame in frames]
+    hints: list[int | None] = []
+    for frame_index in range(1, len(frames)):
+        hints.append(
+            _estimate_overlap_from_scrollbars(
+                scrollbars[frame_index - 1],
+                scrollbars[frame_index],
+                frames[frame_index].height(),
+            )
+        )
+    return hints
+
+
 def _should_stop_without_scrollbar(
     previous_frame: QPixmap,
     current_frame: QPixmap,
@@ -447,7 +520,8 @@ def perform_auto_scroll_capture(
             )
 
         merged_frames = dedupe_scroll_frames(frames)
-        stitched = stitch_vertical_pixmaps(merged_frames)
+        overlap_hints = _build_scroll_overlap_hints(merged_frames)
+        stitched = stitch_vertical_pixmaps(merged_frames, overlap_hints=overlap_hints)
         if stitched.isNull():
             return AutoScrollCaptureResult(
                 pixmap=empty,

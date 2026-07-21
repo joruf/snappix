@@ -266,6 +266,53 @@ class TestScrollCapture(unittest.TestCase):
         self.assertGreater(duplicate_color.blue(), 100)
         self.assertNotAlmostEqual(duplicate_color.red(), header_color.red(), delta=8)
 
+    def test_refine_stitch_overlap_at_seam_aligns_boundary_row(self) -> None:
+        """
+        Ensures seam refinement prefers overlap values that align the combined tail.
+        """
+
+        from src.scroll_capture import (
+            _pixmap_to_gray_rows,
+            _refine_stitch_overlap_at_seam,
+            stitch_vertical_pixmaps,
+        )
+
+        first, second = self._build_scrolled_pair(shared_height=20, top_unique=30, bottom_unique=25)
+        combined = stitch_vertical_pixmaps([first])
+        bottom_rows = _pixmap_to_gray_rows(second)
+        adjusted = _refine_stitch_overlap_at_seam(combined, bottom_rows, 19, second.height())
+        self.assertEqual(adjusted, 20)
+
+        exact = _refine_stitch_overlap_at_seam(combined, bottom_rows, 20, second.height())
+        self.assertEqual(exact, 20)
+
+    def test_append_vertical_frame_replaces_capture_artifact_seam_row(self) -> None:
+        """
+        Ensures the stitch seam uses the next frame row instead of a capture artifact tail.
+        """
+
+        from src.scroll_capture import _append_vertical_frame
+
+        top = QPixmap(80, 40)
+        top.fill(QColor(255, 255, 255))
+        bottom = QPixmap(80, 40)
+        bottom.fill(QColor(255, 255, 255))
+        bottom_image = bottom.toImage()
+        for column_index in range(80):
+            bottom_image.setPixelColor(column_index, 12, QColor(0, 0, 0))
+        bottom = QPixmap.fromImage(bottom_image)
+
+        top_image = top.toImage()
+        for column_index in range(80):
+            top_image.setPixelColor(column_index, 39, QColor(30, 30, 30))
+        top = QPixmap.fromImage(top_image)
+
+        stitched = _append_vertical_frame(top, bottom, overlap=12)
+        seam_color = stitched.toImage().pixelColor(10, 38)
+        self.assertGreater(seam_color.red(), 200)
+        self.assertGreater(stitched.toImage().pixelColor(10, 39).red(), 200)
+        self.assertLess(stitched.toImage().pixelColor(10, 40).red(), 20)
+
     def test_stitch_vertical_pixmaps_uses_pairwise_overlap(self) -> None:
         """
         Ensures stitching consecutive frames produces the expected total height.

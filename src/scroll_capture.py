@@ -23,6 +23,8 @@ _MIN_CONTENT_TOP_SKIP_PX = 80
 _FIXED_HEADER_ROW_DIFF_THRESHOLD = 0.5
 _MIN_FIXED_HEADER_ROWS = 16
 _MAX_FIXED_HEADER_SCAN_RATIO = 0.35
+_SEAM_ROW_DIFF_THRESHOLD = 1.0
+_STITCH_SEAM_REFINE_RANGE = 3
 
 
 @dataclass(slots=True)
@@ -148,6 +150,75 @@ def _pixmap_to_gray_rows(
     for row_index in range(start_row, end_row):
         rows.append(_image_row_gray_values(image, row_index, x_start, x_end, step))
     return rows
+
+
+def _pixmap_tail_gray_row(pixmap: QPixmap) -> list[int]:
+    """
+    Reads the last grayscale row from one pixmap.
+
+    Args:
+        pixmap: Source pixmap.
+
+    Returns:
+        list[int]: Sampled grayscale values for the bottom row.
+    """
+
+    image = pixmap.toImage().convertToFormat(QImage.Format.Format_Grayscale8)
+    width = image.width()
+    height = image.height()
+    if width <= 0 or height <= 0:
+        return []
+
+    x_start, x_end, step = _content_column_range(width)
+    return _image_row_gray_values(image, height - 1, x_start, x_end, step)
+
+
+def _refine_stitch_overlap_at_seam(
+    combined: QPixmap,
+    frame_gray_rows: list[list[int]],
+    overlap: int,
+    frame_height: int,
+    *,
+    overlap_hint: int | None = None,
+) -> int:
+    """
+    Picks the overlap row count that best aligns the combined tail with the next frame.
+
+    Args:
+        combined: Current stitched image.
+        frame_gray_rows: Cached grayscale rows for the lower frame.
+        overlap: Initial overlap row count.
+        frame_height: Lower frame height in pixels.
+        overlap_hint: Optional overlap hint from scrollbar movement.
+
+    Returns:
+        int: Overlap row count with the cleanest stitch boundary.
+    """
+
+    combined_tail_row = _pixmap_tail_gray_row(combined)
+    if not combined_tail_row or not frame_gray_rows:
+        return _clamp_overlap(overlap, frame_height)
+
+    candidate_values: set[int] = set()
+    for delta in range(-_STITCH_SEAM_REFINE_RANGE, _STITCH_SEAM_REFINE_RANGE + 1):
+        candidate_values.add(overlap + delta)
+    if overlap_hint is not None:
+        candidate_values.add(overlap_hint)
+        for delta in (-1, 0, 1):
+            candidate_values.add(overlap_hint + delta)
+
+    best_overlap = _clamp_overlap(overlap, frame_height)
+    best_seam_score = float("inf")
+    for candidate in candidate_values:
+        if candidate <= 0 or candidate >= frame_height:
+            continue
+        seam_row = frame_gray_rows[candidate - 1]
+        seam_score = _row_difference(combined_tail_row, seam_row)
+        if seam_score < best_seam_score or (seam_score == best_seam_score and candidate > best_overlap):
+            best_seam_score = seam_score
+            best_overlap = candidate
+
+    return _clamp_overlap(best_overlap, frame_height)
 
 
 def _average_frame_difference(
@@ -626,6 +697,8 @@ def _measure_stitch_overlap(
     previous_gray_rows: list[list[int]],
     frame_gray_rows: list[list[int]],
     overlap_history: list[int],
+    *,
+    overlap_hint: int | None = None,
 ) -> int:
     """
     Resolves overlap rows for stitching while accounting for fixed browser chrome.
@@ -648,7 +721,10 @@ def _measure_stitch_overlap(
         lenient_match = None
         if match.overlap_rows == 0 or match.difference_score > _MAX_OVERLAP_SCORE:
             lenient_match = measure_vertical_overlap_lenient(previous_frame, frame)
-        return _resolve_stitch_overlap(match, frame_height, overlap_history, lenient_match)
+        image_overlap = _resolve_stitch_overlap(match, frame_height, overlap_history, lenient_match)
+        if overlap_hint is not None and overlap_hint > 0:
+            return _clamp_overlap(overlap_hint, frame_height)
+        return image_overlap
 
     top_content_rows = previous_gray_rows[fixed_rows:]
     bottom_content_rows = frame_gray_rows[fixed_rows:]
@@ -668,7 +744,10 @@ def _measure_stitch_overlap(
         lenient_match,
     )
     total_overlap = fixed_rows + content_overlap
-    return max(fixed_rows, _clamp_overlap(total_overlap, frame_height))
+    image_overlap = max(fixed_rows, _clamp_overlap(total_overlap, frame_height))
+    if overlap_hint is not None and overlap_hint > fixed_rows:
+        return _clamp_overlap(overlap_hint, frame_height)
+    return image_overlap
 
 
 def _clamp_overlap(overlap: int, frame_height: int) -> int:
@@ -744,23 +823,33 @@ def _append_vertical_frame(combined: QPixmap, frame: QPixmap, overlap: int) -> Q
     frame_height = frame_image.height()
     width = min(combined_image.width(), frame_image.width())
     overlap = _clamp_overlap(overlap, frame_height)
-    append_height = max(0, frame_height - overlap)
+    use_seam_replace = overlap > 0 and combined_height > 0
+    source_row = overlap - 1 if use_seam_replace else overlap
+    if use_seam_replace:
+        combined_image = combined_image.copy(0, 0, width, combined_height - 1)
+        combined_height -= 1
+    append_height = max(0, frame_height - source_row)
     output_height = combined_height + append_height
     output = QImage(width, output_height, QImage.Format.Format_ARGB32)
     output.fill(Qt.GlobalColor.transparent)
     painter = QPainter(output)
     painter.drawImage(0, 0, combined_image)
-    painter.drawImage(0, combined_height, frame_image, 0, overlap, width, append_height)
+    painter.drawImage(0, combined_height, frame_image, 0, source_row, width, append_height)
     painter.end()
     return QPixmap.fromImage(output)
 
 
-def stitch_vertical_pixmaps(frames: list[QPixmap]) -> QPixmap:
+def stitch_vertical_pixmaps(
+    frames: list[QPixmap],
+    *,
+    overlap_hints: list[int | None] | None = None,
+) -> QPixmap:
     """
     Stitches multiple vertically scrolling frames into one pixmap.
 
     Args:
         frames: Capture frames from top to bottom.
+        overlap_hints: Optional overlap row hints for each consecutive frame pair.
 
     Returns:
         QPixmap: Combined pixmap.
@@ -778,12 +867,23 @@ def stitch_vertical_pixmaps(frames: list[QPixmap]) -> QPixmap:
     for frame_index in range(1, len(valid_frames)):
         previous_frame = valid_frames[frame_index - 1]
         frame = valid_frames[frame_index]
+        overlap_hint = None
+        if overlap_hints is not None and frame_index - 1 < len(overlap_hints):
+            overlap_hint = overlap_hints[frame_index - 1]
         overlap = _measure_stitch_overlap(
             previous_frame,
             frame,
             gray_cache[frame_index - 1],
             gray_cache[frame_index],
             overlap_history,
+            overlap_hint=overlap_hint,
+        )
+        overlap = _refine_stitch_overlap_at_seam(
+            combined,
+            gray_cache[frame_index],
+            overlap,
+            frame.height(),
+            overlap_hint=overlap_hint,
         )
         overlap_history.append(overlap)
         combined = _append_vertical_frame(combined, frame, overlap)
