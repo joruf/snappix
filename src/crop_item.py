@@ -46,6 +46,7 @@ class CropSelectionItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self._active_handle: str | None = None
         self._resizing = False
+        self._always_show_handles = False
         self.on_geometry_changed: Callable[[], None] | None = None
 
         border_pen = QPen(QColor(52, 152, 219, 230), 2.0, Qt.PenStyle.DashLine)
@@ -77,7 +78,7 @@ class CropSelectionItem(QGraphicsRectItem):
         """
 
         super().paint(painter, option, widget)
-        if not self.isSelected():
+        if not self.isSelected() and not self._always_show_handles:
             return
         painter.save()
         painter.setPen(QPen(QColor(255, 255, 255, 230), 1))
@@ -85,6 +86,20 @@ class CropSelectionItem(QGraphicsRectItem):
         for handle in self._handle_rects().values():
             painter.drawRect(handle)
         painter.restore()
+
+    def set_always_show_handles(self, enabled: bool) -> None:
+        """
+        Controls whether resize handles stay visible without selection.
+
+        Args:
+            enabled: True to always show handles.
+
+        Returns:
+            None
+        """
+
+        self._always_show_handles = enabled
+        self.update()
 
     def hoverMoveEvent(self, event) -> None:
         """
