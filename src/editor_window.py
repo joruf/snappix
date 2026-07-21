@@ -102,7 +102,7 @@ class EditorWindow(QMainWindow):
         self.setWindowTitle(f"{APP_NAME} Editor")
         self.resize(1400, 900)
         self._current_project_path = ""
-        self._recovery_path = self.recovery_snapshot_path()
+        self._recovery_path = ""
         self._minimize_to_tray_on_close = True
         self._jpeg_quality = 90
         self._pdf_dpi = 300
@@ -2069,6 +2069,29 @@ class EditorWindow(QMainWindow):
         self._update_window_title()
         self.statusBar().showMessage("Project loaded")
 
+    def set_recovery_path(self, path: str) -> None:
+        """
+        Sets the auto-save target path for this editor tab.
+
+        Args:
+            path: Recovery project file path.
+
+        Returns:
+            None
+        """
+
+        self._recovery_path = path.strip()
+
+    def recovery_path(self) -> str:
+        """
+        Returns the auto-save target path for this editor tab.
+
+        Returns:
+            str: Recovery project file path.
+        """
+
+        return self._recovery_path
+
     @classmethod
     def recovery_snapshot_path(cls) -> str:
         """
@@ -2083,33 +2106,28 @@ class EditorWindow(QMainWindow):
     @classmethod
     def has_recovery_snapshot(cls) -> bool:
         """
-        Indicates whether a recovery snapshot exists and is non-empty.
+        Indicates whether a recoverable editor session exists.
 
         Returns:
-            bool: True when recovery snapshot exists.
+            bool: True when recovery data exists.
         """
 
-        path = cls.recovery_snapshot_path()
-        try:
-            return os.path.isfile(path) and os.path.getsize(path) > 0
-        except OSError:
-            return False
+        from src.session_recovery import has_recovery_data
+
+        return has_recovery_data()
 
     @classmethod
     def discard_recovery_snapshot(cls) -> None:
         """
-        Removes the current recovery snapshot if it exists.
+        Removes current editor recovery data if it exists.
 
         Returns:
             None
         """
 
-        path = cls.recovery_snapshot_path()
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except OSError:
-            return
+        from src.session_recovery import clear_editor_session
+
+        clear_editor_session()
 
     def load_project_model(
         self,
@@ -2149,7 +2167,7 @@ class EditorWindow(QMainWindow):
 
         if not self.has_recovery_snapshot():
             return False
-        recovery_path = self.recovery_snapshot_path()
+        recovery_path = self.recovery_path() or self.recovery_snapshot_path()
         project_model = load_project(recovery_path)
         self.load_project_model(project_model, "")
         self.statusBar().showMessage("Recovered auto-saved project")
@@ -2501,15 +2519,27 @@ class EditorWindow(QMainWindow):
             super().timerEvent(event)
             return
 
-        if not self._current_project_path:
-            target_path = self._recovery_path
-        else:
-            target_path = self._current_project_path
+        self.flush_recovery_snapshot()
+
+    def flush_recovery_snapshot(self) -> None:
+        """
+        Persists the current tab state to its recovery project file.
+
+        Returns:
+            None
+        """
+
+        if not self._recovery_path:
+            return
+
         model = build_project_model(
             screenshot=self.canvas.screenshot(),
             annotation_models=self.canvas.collect_annotations(),
         )
-        save_project(target_path, model)
+        save_project(self._recovery_path, model)
+
+        if self._current_project_path:
+            save_project(self._current_project_path, model)
 
     def set_minimize_to_tray_on_close(self, enabled: bool) -> None:
         """

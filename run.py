@@ -14,6 +14,29 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+
+def _prepare_linux_session_env() -> None:
+    """
+    Prepares Linux session environment before GUI libraries initialize.
+
+    Returns:
+        None
+    """
+
+    if sys.platform != "linux":
+        return
+
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+    if not runtime_dir:
+        return
+
+    dconf_user = Path(runtime_dir) / "dconf" / "user"
+    if dconf_user.exists() and not os.access(dconf_user, os.W_OK):
+        os.environ.setdefault("GSETTINGS_BACKEND", "memory")
+
+
+_prepare_linux_session_env()
+
 from src.autostart import AutostartManager
 from src.config import (
     POST_CAPTURE_CLIPBOARD,
@@ -869,21 +892,34 @@ class AppController:
             return
         self._maybe_restore_recovery_snapshot()
 
-    def _create_editor_tab(self, screenshot, title: str) -> "EditorWindow":
+    def _create_editor_tab(
+        self,
+        screenshot,
+        title: str,
+        *,
+        recovery_path: str = "",
+        source_path: str = "",
+        persist_session: bool = True,
+    ) -> "EditorWindow":
         """
         Creates one editor tab for a screenshot and focuses editor host.
 
         Args:
             screenshot: Screenshot pixmap for the new tab.
             title: Tab title text.
+            recovery_path: Optional existing recovery project path.
+            source_path: Optional source project path for the tab.
+            persist_session: When True, flush and persist the editor session.
 
         Returns:
             EditorWindow: Created editor instance.
         """
 
         from src.editor_window import EditorWindow
+        from src.session_recovery import create_tab_recovery_path
 
         editor = EditorWindow(screenshot)
+        editor.set_recovery_path(recovery_path or create_tab_recovery_path())
         editor.set_theme_selection(self.config.theme)
         editor.theme_changed.connect(self.set_theme)
         editor.settings_requested.connect(self.show_settings_dialog)
@@ -900,7 +936,73 @@ class AppController:
         editor.show()
         editor.destroyed.connect(lambda *_: self._on_editor_closed(editor))
         self.editors.append(editor)
+        if source_path:
+            editor._current_project_path = source_path
+            editor._update_window_title()
+        if persist_session:
+            self._save_editor_session()
         return editor
+
+    def _flush_editor_tab_recovery(self, editor) -> None:
+        """
+        Writes one editor tab state to its recovery project file.
+
+        Args:
+            editor: Editor tab widget.
+
+        Returns:
+            None
+        """
+
+        try:
+            editor.flush_recovery_snapshot()
+        except RuntimeError:
+            return
+
+    def _collect_editor_session_tabs(self) -> list:
+        """
+        Builds the current editor session tab list for recovery persistence.
+
+        Returns:
+            list: Serializable editor session tabs.
+        """
+
+        from src.session_recovery import EditorSessionTab
+
+        tabs: list[EditorSessionTab] = []
+        for tab_index in range(self.editor_tabs.count()):
+            editor = self.editor_tabs.widget(tab_index)
+            if editor is None:
+                continue
+            try:
+                self._flush_editor_tab_recovery(editor)
+                title = self.editor_tabs.tabText(tab_index).strip() or f"Tab {tab_index + 1}"
+                recovery_path = editor.recovery_path()
+                source_path = getattr(editor, "_current_project_path", "")
+            except RuntimeError:
+                continue
+            if not recovery_path:
+                continue
+            tabs.append(
+                EditorSessionTab(
+                    title=title,
+                    recovery_path=recovery_path,
+                    source_path=str(source_path or ""),
+                )
+            )
+        return tabs
+
+    def _save_editor_session(self) -> None:
+        """
+        Persists all open editor tabs for startup recovery.
+
+        Returns:
+            None
+        """
+
+        from src.session_recovery import save_editor_session
+
+        save_editor_session(self._collect_editor_session_tabs())
 
     def _maybe_restore_recovery_snapshot(self) -> None:
         """
@@ -911,26 +1013,56 @@ class AppController:
         """
 
         from src.editor_window import EditorWindow
+        from src.session_recovery import (
+            load_editor_session,
+            load_legacy_recovery_tab,
+        )
+        from src.storage import base64_png_to_pixmap, load_project
 
         if not EditorWindow.has_recovery_snapshot():
             return
 
-        from src.storage import load_project, base64_png_to_pixmap
+        session_tabs = load_editor_session()
+        if not session_tabs:
+            legacy_tab = load_legacy_recovery_tab()
+            if legacy_tab is not None:
+                session_tabs = [legacy_tab]
 
-        recovery_path = EditorWindow.recovery_snapshot_path()
-        try:
-            recovered_model = load_project(recovery_path)
-        except Exception as exc:
-            self._QMessageBox.warning(
-                self.capture_panel,
-                "Recovery",
-                f"Recovery snapshot could not be loaded:\n{exc}",
-            )
+        if not session_tabs:
             return
 
-        screenshot = base64_png_to_pixmap(recovered_model.screenshot_png_base64)
-        editor = self._create_editor_tab(screenshot, "Recovered Session")
-        editor.load_project_model(recovered_model, "")
+        restored_count = 0
+        for tab_entry in session_tabs:
+            try:
+                recovered_model = load_project(tab_entry.recovery_path)
+            except Exception as exc:
+                self._QMessageBox.warning(
+                    self.capture_panel,
+                    "Recovery",
+                    f"Recovery snapshot could not be loaded:\n{exc}",
+                )
+                continue
+
+            screenshot = base64_png_to_pixmap(recovered_model.screenshot_png_base64)
+            editor = self._create_editor_tab(
+                screenshot,
+                tab_entry.title,
+                recovery_path=tab_entry.recovery_path,
+                source_path=tab_entry.source_path,
+                persist_session=False,
+            )
+            editor.load_project_model(recovered_model, tab_entry.source_path)
+            restored_count += 1
+
+        if restored_count == 0:
+            return
+
+        self._apply_editor_taskbar_identity()
+        self._ensure_editor_host_geometry()
+        self.editor_host.show()
+        self.editor_host.raise_()
+        self.editor_host.activateWindow()
+        self._save_editor_session()
 
     def _open_project_in_editor(self, project_path: str) -> None:
         """
@@ -1195,6 +1327,7 @@ class AppController:
 
         if self._is_quitting:
             return
+        self._save_editor_session()
         self.editor_host.hide()
         self.capture_panel.show()
         self.capture_panel.raise_()
@@ -1211,6 +1344,7 @@ class AppController:
 
         if self._is_quitting:
             return
+        self._save_editor_session()
         self.capture_panel.hide()
         if self._tray_available and self.tray_icon.isVisible():
             self.tray_icon.showMessage(
@@ -1267,6 +1401,7 @@ class AppController:
         """
 
         self._is_quitting = True
+        self._save_editor_session()
         self._hotkey_manager.stop()
         self.capture_panel.set_minimize_to_tray_on_close(False)
         self.editor_host.set_minimize_to_tray_on_close(False)
@@ -1348,6 +1483,7 @@ def _launch_gui(startup_project_path: str = "") -> int:
     app.setWindowIcon(capture_icon)
     _maybe_prompt_desktop_shortcut()
     controller = AppController(app, startup_project_path=startup_project_path)
+    app.aboutToQuit.connect(controller._save_editor_session)
     controller.show()
     return app.exec()
 
