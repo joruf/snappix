@@ -35,6 +35,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QTransform,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -957,6 +958,7 @@ class EditorCanvas(QGraphicsView):
                 self._preview_item = None
                 if crop_rect.width() > 2 and crop_rect.height() > 2:
                     self._crop_item = CropSelectionItem(crop_rect)
+                    self._crop_item.set_aspect_ratio_lock_enabled(True)
                     self._crop_item.on_geometry_changed = self._update_crop_shade
                     self._scene.addItem(self._crop_item)
                     self._crop_item.setSelected(True)
@@ -2231,6 +2233,7 @@ class EditorCanvas(QGraphicsView):
             overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
             overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
             overlay.set_always_show_handles(True)
+            overlay.set_aspect_ratio_lock_enabled(True)
             overlay.on_geometry_changed = self._apply_resize_overlay_to_target
             overlay.setZValue(1400)
             self._scene.addItem(overlay)
@@ -2357,10 +2360,13 @@ class EditorCanvas(QGraphicsView):
 
         if annotation_type == "image":
             pixmap = target.pixmap()
-            if pixmap.width() <= 0:
+            if pixmap.width() <= 0 or pixmap.height() <= 0:
                 return False
+            target.setTransform(QTransform())
             target.setPos(new_rect.topLeft())
-            target.setScale(new_rect.width() / float(pixmap.width()))
+            scale_x = new_rect.width() / float(pixmap.width())
+            scale_y = new_rect.height() / float(pixmap.height())
+            target.setTransform(QTransform.fromScale(scale_x, scale_y))
             return True
 
         return False
@@ -2596,6 +2602,7 @@ class EditorCanvas(QGraphicsView):
 
         rect = QRectF(self.document_rect())
         self._crop_item = CropSelectionItem(rect)
+        self._crop_item.set_aspect_ratio_lock_enabled(True)
         self._crop_item.on_geometry_changed = self._update_crop_shade
         self._scene.addItem(self._crop_item)
         self._crop_item.setSelected(True)

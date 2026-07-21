@@ -47,6 +47,8 @@ class CropSelectionItem(QGraphicsRectItem):
         self._active_handle: str | None = None
         self._resizing = False
         self._always_show_handles = False
+        self._aspect_ratio_lock_enabled = True
+        self._resize_aspect_ratio = 1.0
         self.on_geometry_changed: Callable[[], None] | None = None
 
         border_pen = QPen(QColor(52, 152, 219, 230), 2.0, Qt.PenStyle.DashLine)
@@ -101,6 +103,19 @@ class CropSelectionItem(QGraphicsRectItem):
         self._always_show_handles = enabled
         self.update()
 
+    def set_aspect_ratio_lock_enabled(self, enabled: bool) -> None:
+        """
+        Enables Shift-modified resize to preserve the current width/height ratio.
+
+        Args:
+            enabled: True for crop selections that should support ratio locking.
+
+        Returns:
+            None
+        """
+
+        self._aspect_ratio_lock_enabled = bool(enabled)
+
     def hoverMoveEvent(self, event) -> None:
         """
         Updates cursor style when hovering handles.
@@ -148,6 +163,11 @@ class CropSelectionItem(QGraphicsRectItem):
             if handle_name is not None:
                 self._active_handle = handle_name
                 self._resizing = True
+                scene_rect = self.scene_rect()
+                if scene_rect.height() > 0.0:
+                    self._resize_aspect_ratio = scene_rect.width() / scene_rect.height()
+                else:
+                    self._resize_aspect_ratio = 1.0
                 self.grabMouse()
                 event.accept()
                 return
@@ -165,7 +185,15 @@ class CropSelectionItem(QGraphicsRectItem):
         """
 
         if self._resizing and self._active_handle is not None:
-            self._resize_from_handle(self._active_handle, event.scenePos())
+            lock_aspect_ratio = (
+                self._aspect_ratio_lock_enabled
+                and bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            )
+            self._resize_from_handle(
+                self._active_handle,
+                event.scenePos(),
+                lock_aspect_ratio=lock_aspect_ratio,
+            )
             event.accept()
             return
         super().mouseMoveEvent(event)
@@ -310,17 +338,28 @@ class CropSelectionItem(QGraphicsRectItem):
             return "right"
         return None
 
-    def _resize_from_handle(self, handle_name: str, scene_pos: QPointF) -> None:
+    def _resize_from_handle(
+        self,
+        handle_name: str,
+        scene_pos: QPointF,
+        *,
+        lock_aspect_ratio: bool = False,
+    ) -> None:
         """
         Resizes rectangle based on dragged handle.
 
         Args:
             handle_name: Active handle identifier.
             scene_pos: Current cursor position in scene coordinates.
+            lock_aspect_ratio: True to preserve the ratio active at resize start.
 
         Returns:
             None
         """
+
+        if lock_aspect_ratio:
+            self._resize_from_handle_with_aspect_ratio(handle_name, scene_pos)
+            return
 
         rect = self.scene_rect()
         left = rect.left()
@@ -338,6 +377,107 @@ class CropSelectionItem(QGraphicsRectItem):
             bottom = max(scene_pos.y(), top + self.MIN_SIZE)
 
         resized = QRectF(QPointF(left, top), QPointF(right, bottom)).normalized()
+        self.setPos(resized.topLeft())
+        self.setRect(QRectF(0.0, 0.0, resized.width(), resized.height()))
+        self.update()
+        self._notify_geometry_changed()
+
+    def _fit_aspect_size(self, width: float, height: float, aspect_ratio: float) -> tuple[float, float]:
+        """
+        Returns one width/height pair that matches the requested aspect ratio.
+
+        Args:
+            width: Proposed width.
+            height: Proposed height.
+            aspect_ratio: Width divided by height.
+
+        Returns:
+            tuple[float, float]: Adjusted width and height.
+        """
+
+        if width / max(height, 0.0001) >= aspect_ratio:
+            height = width / aspect_ratio
+        else:
+            width = height * aspect_ratio
+        width = max(width, self.MIN_SIZE)
+        height = max(height, self.MIN_SIZE)
+        if width / max(height, 0.0001) >= aspect_ratio:
+            height = width / aspect_ratio
+        else:
+            width = height * aspect_ratio
+        return width, height
+
+    def _resize_from_handle_with_aspect_ratio(self, handle_name: str, scene_pos: QPointF) -> None:
+        """
+        Resizes the crop frame while preserving its starting aspect ratio.
+
+        Args:
+            handle_name: Active handle identifier.
+            scene_pos: Current cursor position in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        rect = self.scene_rect()
+        left = rect.left()
+        top = rect.top()
+        right = rect.right()
+        bottom = rect.bottom()
+        aspect_ratio = self._resize_aspect_ratio
+        resized: QRectF
+
+        if handle_name == "bottom_right":
+            new_width, new_height = self._fit_aspect_size(
+                max(self.MIN_SIZE, scene_pos.x() - left),
+                max(self.MIN_SIZE, scene_pos.y() - top),
+                aspect_ratio,
+            )
+            resized = QRectF(left, top, new_width, new_height)
+        elif handle_name == "top_left":
+            new_width, new_height = self._fit_aspect_size(
+                max(self.MIN_SIZE, right - scene_pos.x()),
+                max(self.MIN_SIZE, bottom - scene_pos.y()),
+                aspect_ratio,
+            )
+            resized = QRectF(right - new_width, bottom - new_height, new_width, new_height)
+        elif handle_name == "top_right":
+            new_width, new_height = self._fit_aspect_size(
+                max(self.MIN_SIZE, scene_pos.x() - left),
+                max(self.MIN_SIZE, bottom - scene_pos.y()),
+                aspect_ratio,
+            )
+            resized = QRectF(left, bottom - new_height, new_width, new_height)
+        elif handle_name == "bottom_left":
+            new_width, new_height = self._fit_aspect_size(
+                max(self.MIN_SIZE, right - scene_pos.x()),
+                max(self.MIN_SIZE, scene_pos.y() - top),
+                aspect_ratio,
+            )
+            resized = QRectF(right - new_width, top, new_width, new_height)
+        elif handle_name == "right":
+            new_width = max(self.MIN_SIZE, scene_pos.x() - left)
+            new_height = max(new_width / aspect_ratio, self.MIN_SIZE)
+            new_width = new_height * aspect_ratio
+            resized = QRectF(left, top, new_width, new_height)
+        elif handle_name == "left":
+            new_width = max(self.MIN_SIZE, right - scene_pos.x())
+            new_height = max(new_width / aspect_ratio, self.MIN_SIZE)
+            new_width = new_height * aspect_ratio
+            resized = QRectF(right - new_width, top, new_width, new_height)
+        elif handle_name == "bottom":
+            new_height = max(self.MIN_SIZE, scene_pos.y() - top)
+            new_width = max(new_height * aspect_ratio, self.MIN_SIZE)
+            new_height = new_width / aspect_ratio
+            resized = QRectF(left, top, new_width, new_height)
+        elif handle_name == "top":
+            new_height = max(self.MIN_SIZE, bottom - scene_pos.y())
+            new_width = max(new_height * aspect_ratio, self.MIN_SIZE)
+            new_height = new_width / aspect_ratio
+            resized = QRectF(left, bottom - new_height, new_width, new_height)
+        else:
+            return
+
         self.setPos(resized.topLeft())
         self.setRect(QRectF(0.0, 0.0, resized.width(), resized.height()))
         self.update()

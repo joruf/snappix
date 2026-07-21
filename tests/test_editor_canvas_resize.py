@@ -7,7 +7,7 @@ from __future__ import annotations
 import unittest
 
 try:
-    from PySide6.QtCore import QRectF, Qt
+    from PySide6.QtCore import QPointF, QRectF, Qt
     from PySide6.QtGui import QColor, QImage, QPixmap
     from PySide6.QtWidgets import QApplication
 
@@ -217,6 +217,39 @@ class TestEditorCanvasResize(unittest.TestCase):
 
         self.assertGreater(after_width, before_width)
         self.assertGreater(after_height, before_height)
+
+    def test_shift_overlay_resize_preserves_annotation_aspect_ratio(self) -> None:
+        """
+        Ensures Shift-resize on annotation handles keeps the starting ratio.
+        """
+
+        annotation = AnnotationModel(
+            annotation_type="rect",
+            x=30.0,
+            y=25.0,
+            width=80.0,
+            height=40.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[255, 0, 0, 80],
+            stroke_width=2.0,
+        )
+        canvas, item = self._canvas_with_item(annotation)
+        item.setSelected(True)
+        canvas._on_selection_changed()  # pylint: disable=protected-access
+        overlay = canvas._resize_overlay_item  # pylint: disable=protected-access
+        self.assertIsNotNone(overlay)
+        assert overlay is not None
+
+        overlay._resize_aspect_ratio = 2.0  # pylint: disable=protected-access
+        overlay._resize_from_handle(  # pylint: disable=protected-access
+            "bottom_right",
+            overlay.scene_rect().bottomRight() + QPointF(40.0, 10.0),
+            lock_aspect_ratio=True,
+        )
+        canvas._apply_resize_overlay_to_target()  # pylint: disable=protected-access
+
+        resized = canvas._item_scene_rect(item)  # pylint: disable=protected-access
+        self.assertAlmostEqual(resized.width() / resized.height(), 2.0, places=4)
 
     def test_line_overlay_resize_updates_line_extent(self) -> None:
         """

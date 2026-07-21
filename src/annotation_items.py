@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap, QTransform
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -321,7 +321,7 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
 
     if annotation_type == "image":
         image_item = cast(QGraphicsPixmapItem, item)
-        rect = image_item.boundingRect().translated(image_item.pos())
+        rect = image_item.sceneBoundingRect().normalized()
         return AnnotationModel(
             annotation_type=annotation_type,
             x=rect.x(),
@@ -426,9 +426,11 @@ def add_annotation_to_scene(
             return None
         item = QGraphicsPixmapItem(_decode_base64_to_pixmap(encoded))
         item.setPos(annotation.x, annotation.y)
-        item.setScale(
-            1.0 if item.pixmap().width() == 0 else annotation.width / item.pixmap().width()
-        )
+        pixmap = item.pixmap()
+        if pixmap.width() > 0 and pixmap.height() > 0:
+            scale_x = annotation.width / pixmap.width()
+            scale_y = annotation.height / pixmap.height()
+            item.setTransform(QTransform.fromScale(scale_x, scale_y))
         configure_graphics_item(item, "image")
         item.setData(2001, encoded)
         scene.addItem(item)
