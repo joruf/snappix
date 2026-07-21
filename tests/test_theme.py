@@ -11,6 +11,8 @@ from src.theme import (
     THEME_DARK,
     THEME_LIGHT,
     build_application_stylesheet,
+    build_editor_accent_stylesheet,
+    get_editor_accent_colors,
     get_theme_colors,
     normalize_theme_name,
     set_current_theme,
@@ -58,6 +60,17 @@ class TestThemeHelpers(unittest.TestCase):
         self.assertIn(get_theme_colors(THEME_LIGHT).accent, light_stylesheet)
         self.assertIn("QComboBox", dark_stylesheet)
         self.assertIn("QTextEdit", light_stylesheet)
+
+    def test_build_editor_accent_stylesheet_uses_red_editor_colors(self) -> None:
+        """
+        Ensures editor accent overrides use the red logo palette.
+        """
+
+        editor_stylesheet = build_editor_accent_stylesheet(THEME_DARK)
+        accent, _hover = get_editor_accent_colors(THEME_DARK)
+        self.assertIn("#editorHost", editor_stylesheet)
+        self.assertIn(accent, editor_stylesheet)
+        self.assertNotIn(get_theme_colors(THEME_DARK).accent, editor_stylesheet)
 
     def test_dynamic_button_styles_use_theme_border(self) -> None:
         """

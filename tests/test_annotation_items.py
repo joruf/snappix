@@ -7,7 +7,7 @@ from __future__ import annotations
 import unittest
 
 try:
-    from PySide6.QtCore import QRectF
+    from PySide6.QtCore import QRectF, Qt
     from PySide6.QtGui import QColor, QFont, QImage, QPixmap
     from PySide6.QtWidgets import QGraphicsRectItem, QGraphicsScene
 
@@ -20,6 +20,11 @@ try:
         configure_graphics_item,
         create_pen,
         list_to_color,
+        normalize_stroke_style,
+        stroke_style_to_qt,
+        STROKE_STYLE_DASH,
+        STROKE_STYLE_DOT,
+        STROKE_STYLE_SOLID,
     )
     from src.models import AnnotationModel
     from src.storage import pixmap_to_base64_png
@@ -189,4 +194,48 @@ class TestAnnotationItems(unittest.TestCase):
         assert item is not None
         self.assertEqual(item.data(ITEM_ROLE_TYPE), "image")
         self.assertEqual(str(item.data(2001)), encoded)
+
+    def test_normalize_stroke_style_falls_back_to_solid(self) -> None:
+        """
+        Ensures unknown stroke styles default to solid.
+        """
+
+        self.assertEqual(normalize_stroke_style("invalid"), STROKE_STYLE_SOLID)
+        self.assertEqual(normalize_stroke_style(STROKE_STYLE_DASH), STROKE_STYLE_DASH)
+
+    def test_stroke_style_to_qt_maps_dash_and_dot(self) -> None:
+        """
+        Ensures stroke style identifiers map to Qt pen styles.
+        """
+
+        self.assertEqual(stroke_style_to_qt(STROKE_STYLE_DASH), Qt.PenStyle.DashLine)
+        self.assertEqual(stroke_style_to_qt(STROKE_STYLE_DOT), Qt.PenStyle.DotLine)
+        self.assertEqual(stroke_style_to_qt(STROKE_STYLE_SOLID), Qt.PenStyle.SolidLine)
+
+    def test_line_annotation_roundtrip_preserves_stroke_style(self) -> None:
+        """
+        Ensures dashed line annotations serialize stroke style in payload.
+        """
+
+        scene = QGraphicsScene()
+        annotation = AnnotationModel(
+            annotation_type="line",
+            x=10.0,
+            y=20.0,
+            width=80.0,
+            height=0.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[0, 0, 0, 0],
+            stroke_width=2.0,
+            payload={"stroke_style": STROKE_STYLE_DASH},
+        )
+        item = add_annotation_to_scene(scene, annotation)
+        self.assertIsNotNone(item)
+        assert item is not None
+        self.assertEqual(item.pen().style(), Qt.PenStyle.DashLine)
+
+        restored = annotation_from_item(item)
+        self.assertIsNotNone(restored)
+        assert restored is not None
+        self.assertEqual(restored.payload.get("stroke_style"), STROKE_STYLE_DASH)
 

@@ -7,17 +7,26 @@ from __future__ import annotations
 
 import fcntl
 import os
+import shutil
+import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.autostart import AutostartManager
-from src.config import AppConfig, ConfigManager
+from src.config import (
+    POST_CAPTURE_CLIPBOARD,
+    POST_CAPTURE_SAVE,
+    AppConfig,
+    ConfigManager,
+)
 from src.constants import ABOUT_GITHUB, APP_NAME
 from src.theme import (
     THEME_DARK,
     THEME_LIGHT,
     build_application_stylesheet,
+    build_editor_accent_stylesheet,
     normalize_theme_name,
     set_current_theme,
 )
@@ -66,6 +75,74 @@ def _editor_icon_path() -> Path:
     """
 
     return _project_root() / "assets" / "snapagent-red.svg"
+
+
+def _build_capture_icon():
+    """
+    Builds the blue capture taskbar icon.
+
+    Returns:
+        QIcon: Capture icon with theme fallback.
+    """
+
+    from PySide6.QtGui import QIcon
+
+    return QIcon.fromTheme("snapagent", QIcon(str(_icon_path())))
+
+
+def _build_editor_icon():
+    """
+    Builds the red editor taskbar icon.
+
+    Returns:
+        QIcon: Editor icon with theme fallback.
+    """
+
+    from PySide6.QtGui import QIcon
+
+    return QIcon.fromTheme("snapagent-editor", QIcon(str(_editor_icon_path())))
+
+
+def _refresh_icon_theme_cache(hicolor_dir: Path) -> None:
+    """
+    Refreshes the local hicolor icon cache when possible.
+
+    Args:
+        hicolor_dir: Hicolor icon theme directory.
+
+    Returns:
+        None
+    """
+
+    cache_tool = shutil.which("gtk-update-icon-cache")
+    if cache_tool is None:
+        return
+    try:
+        subprocess.run(
+            [cache_tool, "-f", "-t", str(hicolor_dir)],
+            check=False,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _install_application_icons() -> None:
+    """
+    Installs capture and editor icons into the local icon theme.
+
+    Returns:
+        None
+    """
+
+    icon_root = (
+        Path.home() / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps"
+    )
+    icon_root.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(_icon_path(), icon_root / "snapagent.svg")
+    shutil.copy2(_editor_icon_path(), icon_root / "snapagent-editor.svg")
+    _refresh_icon_theme_cache(icon_root.parent.parent)
 
 
 def _resolve_venv_python(project_root: Path) -> Path:
@@ -287,6 +364,7 @@ def _ensure_desktop_launcher() -> None:
         None
     """
 
+    _install_application_icons()
     launcher_dir = Path.home() / ".local" / "share" / "applications"
     launcher_path = launcher_dir / "snapagent.desktop"
     editor_launcher_path = launcher_dir / "snapagent-editor.desktop"
@@ -297,7 +375,7 @@ def _ensure_desktop_launcher() -> None:
         f"Name={APP_NAME}\n"
         "Comment=Screenshot and annotation tool\n"
         f"Exec={_autostart_exec_command()}\n"
-        f"Icon={_icon_path()}\n"
+        "Icon=snapagent\n"
         "Terminal=false\n"
         "Categories=Graphics;Utility;\n"
         "StartupWMClass=snapagent\n"
@@ -309,7 +387,7 @@ def _ensure_desktop_launcher() -> None:
         f"Name={APP_NAME} Editor\n"
         "Comment=Screenshot editor window identity\n"
         f"Exec={_autostart_exec_command()}\n"
-        f"Icon={_editor_icon_path()}\n"
+        "Icon=snapagent-editor\n"
         "Terminal=false\n"
         "Categories=Graphics;Utility;\n"
         "StartupWMClass=snapagent-editor\n"
@@ -367,10 +445,22 @@ class AppController:
 
             def __init__(self) -> None:
                 super().__init__()
+                self.setObjectName("editorHost")
                 self._minimize_to_tray_on_close = True
 
             def set_minimize_to_tray_on_close(self, enabled: bool) -> None:
                 self._minimize_to_tray_on_close = enabled
+
+            def showEvent(self, event) -> None:
+                from src.platform import apply_linux_window_identity
+
+                apply_linux_window_identity(
+                    self,
+                    desktop_file_name="snapagent-editor",
+                    wm_instance="snapagent-editor",
+                    wm_class="snapagent-editor",
+                )
+                super().showEvent(event)
 
             def closeEvent(self, event) -> None:
                 if self._minimize_to_tray_on_close:
@@ -384,11 +474,14 @@ class AppController:
         self._startup_project_path = startup_project_path.strip()
         self._is_quitting = False
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+        self._capture_icon = _build_capture_icon()
+        self._editor_icon = _build_editor_icon()
         self.capture_panel = CapturePanel()
+        self.capture_panel.setWindowIcon(self._capture_icon)
         self.capture_panel.capture_requested.connect(self.start_capture)
         self.capture_panel.color_pick_requested.connect(self.start_color_pick)
         self.capture_panel.autostart_toggled.connect(self.toggle_autostart)
-        self.capture_panel.close_requested.connect(self._hide_to_tray)
+        self.capture_panel.close_requested.connect(self._on_capture_panel_close)
         self.capture_panel.editor_requested.connect(self.open_editor_from_capture)
         self.editors: list[EditorWindow] = []
 
@@ -401,14 +494,22 @@ class AppController:
         if self.autostart_manager.is_enabled():
             self.config.autostart_enabled = True
         self.capture_panel.set_autostart_checked(self.config.autostart_enabled)
+
+        from src.global_hotkeys import GlobalHotkeyManager, HotkeyBridge
+
+        self._hotkey_bridge = HotkeyBridge()
+        self._hotkey_bridge.triggered.connect(self._on_global_hotkey)
+        self._hotkey_manager = GlobalHotkeyManager(self._hotkey_bridge)
+        self._capture_in_progress = False
         self.editor_host = EditorHostWindow()
+        self.editor_host.setWindowIcon(self._editor_icon)
         self.editor_host.setWindowTitle(f"{APP_NAME} Editor")
         self.editor_host.resize(1240, 860)
         self.editor_tabs = QTabWidget(self.editor_host)
         self.editor_tabs.setTabsClosable(True)
         self.editor_tabs.tabCloseRequested.connect(self._close_editor_tab_by_index)
         self.editor_host.setCentralWidget(self.editor_tabs)
-        self.editor_host.close_requested.connect(self._hide_to_tray)
+        self.editor_host.close_requested.connect(self._on_editor_host_close)
 
         self.tray_icon = QSystemTrayIcon(self.app.windowIcon(), self.capture_panel)
         if self._tray_available:
@@ -448,6 +549,10 @@ class AppController:
             self._theme_action_group.addAction(self.theme_light_action)
             theme_menu.addAction(self.theme_light_action)
             tray_menu.addSeparator()
+            settings_action = QAction("Settings...", tray_menu)
+            settings_action.triggered.connect(self.show_settings_dialog)
+            tray_menu.addAction(settings_action)
+            tray_menu.addSeparator()
             about_action = QAction("About", tray_menu)
             about_action.triggered.connect(self.show_about_dialog)
             tray_menu.addAction(about_action)
@@ -458,13 +563,173 @@ class AppController:
             self.tray_icon.activated.connect(self._on_tray_activated)
             self.tray_icon.show()
         else:
-            self.capture_panel.set_minimize_to_tray_on_close(False)
-            self.editor_host.set_minimize_to_tray_on_close(False)
             self._theme_action_group = None
             self.theme_dark_action = None
             self.theme_light_action = None
 
+        self.capture_panel.set_minimize_to_tray_on_close(True)
+        self.editor_host.set_minimize_to_tray_on_close(True)
+
         self._apply_theme(self.config.theme, persist=False)
+        self._apply_hotkeys()
+
+    def _apply_hotkeys(self) -> None:
+        """
+        Registers global hotkeys from the current configuration.
+
+        Returns:
+            None
+        """
+
+        if not self._hotkey_manager.apply_config(self.config):
+            if self.config.hotkeys_enabled and self._hotkey_manager.last_error:
+                self._QMessageBox.warning(
+                    self.capture_panel,
+                    "Global Hotkeys",
+                    self._hotkey_manager.last_error,
+                )
+
+    def _on_global_hotkey(self, action: str) -> None:
+        """
+        Handles one global hotkey action.
+
+        Args:
+            action: Hotkey action identifier.
+
+        Returns:
+            None
+        """
+
+        from src.capture import CaptureMode, CaptureRequest
+
+        if self._capture_in_progress:
+            return
+
+        mode_by_action = {
+            "capture_region": CaptureMode.REGION,
+            "capture_window": CaptureMode.WINDOW,
+            "capture_fullscreen": CaptureMode.FULL_SCREEN,
+        }
+        mode = mode_by_action.get(action)
+        if mode is None:
+            return
+
+        request = CaptureRequest(
+            mode=mode,
+            delay_seconds=int(self.capture_panel.delay_slider.value()),
+        )
+        self.start_capture(request)
+
+    def show_settings_dialog(self) -> None:
+        """
+        Opens the application settings dialog.
+
+        Returns:
+            None
+        """
+
+        from src.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(self.config, self.capture_panel)
+        if dialog.exec() != dialog.DialogCode.Accepted:
+            return
+
+        self.config = dialog.build_config()
+        self.config_manager.save(self.config)
+        self._apply_hotkeys()
+
+    def _capture_save_directory(self) -> Path:
+        """
+        Resolves the directory used for automatic capture saves.
+
+        Returns:
+            Path: Existing or newly created save directory.
+        """
+
+        configured = self.config.capture_save_directory.strip()
+        if configured:
+            target = Path(configured).expanduser()
+        else:
+            target = Path.home() / "Pictures" / "SnapAgent"
+        target.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def _save_capture_pixmap(self, pixmap) -> Path | None:
+        """
+        Saves one capture pixmap to the configured save folder.
+
+        Args:
+            pixmap: Captured screenshot pixmap.
+
+        Returns:
+            Path | None: Saved file path or None on failure.
+        """
+
+        filename = datetime.now().strftime("snapagent_%Y-%m-%d_%H-%M-%S.png")
+        target_path = self._capture_save_directory() / filename
+        if not pixmap.save(str(target_path), "PNG"):
+            return None
+        return target_path
+
+    def _handle_capture_result(self, pixmap) -> None:
+        """
+        Applies the configured post-capture action to one screenshot.
+
+        Args:
+            pixmap: Captured screenshot pixmap.
+
+        Returns:
+            None
+        """
+
+        from PySide6.QtGui import QGuiApplication
+
+        if pixmap.isNull():
+            self._QMessageBox.warning(
+                self.capture_panel,
+                "Capture Error",
+                "No screenshot could be captured.",
+            )
+            self.capture_panel.show()
+            return
+
+        action = self.config.post_capture_action
+        if action == POST_CAPTURE_CLIPBOARD:
+            QGuiApplication.clipboard().setPixmap(pixmap)
+            self.capture_panel.show()
+            if self._tray_available and self.tray_icon.isVisible():
+                self.tray_icon.showMessage(
+                    APP_NAME,
+                    "Screenshot copied to clipboard.",
+                    self.tray_icon.MessageIcon.Information,
+                    2200,
+                )
+            return
+
+        if action == POST_CAPTURE_SAVE:
+            saved_path = self._save_capture_pixmap(pixmap)
+            self.capture_panel.show()
+            if saved_path is None:
+                self._QMessageBox.warning(
+                    self.capture_panel,
+                    "Save Error",
+                    "Could not save the screenshot.",
+                )
+                return
+            if self._tray_available and self.tray_icon.isVisible():
+                self.tray_icon.showMessage(
+                    APP_NAME,
+                    f"Screenshot saved to {saved_path}",
+                    self.tray_icon.MessageIcon.Information,
+                    2800,
+                )
+            return
+
+        self._create_editor_tab(
+            pixmap,
+            f"Screenshot {self.editor_tabs.count() + 1}",
+        )
+        self.capture_panel.show()
 
     def _sync_theme_tray_actions(self, theme_name: str) -> None:
         """
@@ -521,6 +786,7 @@ class AppController:
         normalized = normalize_theme_name(theme_name)
         set_current_theme(normalized)
         self.app.setStyleSheet(build_application_stylesheet(normalized))
+        self.editor_host.setStyleSheet(build_editor_accent_stylesheet(normalized))
         self.config.theme = normalized
         if persist:
             self.config_manager.save(self.config)
@@ -549,6 +815,45 @@ class AppController:
             return
         self._apply_theme(theme_name, persist=True)
 
+    def _apply_capture_taskbar_identity(self) -> None:
+        """
+        Applies blue capture identity for the taskbar and app icon.
+
+        Returns:
+            None
+        """
+
+        from src.platform import apply_linux_window_identity
+
+        self.capture_panel.setWindowIcon(self._capture_icon)
+        self.app.setWindowIcon(self._capture_icon)
+        if self.capture_panel.isVisible():
+            apply_linux_window_identity(
+                self.capture_panel,
+                desktop_file_name="snapagent",
+                wm_instance="snapagent",
+                wm_class="snapagent",
+            )
+
+    def _apply_editor_taskbar_identity(self) -> None:
+        """
+        Applies red editor identity for the taskbar and app icon.
+
+        Returns:
+            None
+        """
+
+        from src.platform import apply_linux_window_identity
+
+        self.editor_host.setWindowIcon(self._editor_icon)
+        self.app.setWindowIcon(self._editor_icon)
+        apply_linux_window_identity(
+            self.editor_host,
+            desktop_file_name="snapagent-editor",
+            wm_instance="snapagent-editor",
+            wm_class="snapagent-editor",
+        )
+
     def show(self) -> None:
         """
         Shows the capture panel.
@@ -557,7 +862,7 @@ class AppController:
             None
         """
 
-        self.app.setWindowIcon(self.capture_panel.windowIcon())
+        self._apply_capture_taskbar_identity()
         self.capture_panel.show()
         if self._startup_project_path:
             self._open_project_in_editor(self._startup_project_path)
@@ -581,12 +886,13 @@ class AppController:
         editor = EditorWindow(screenshot)
         editor.set_theme_selection(self.config.theme)
         editor.theme_changed.connect(self.set_theme)
-        editor.setWindowIcon(self.editor_host.windowIcon())
+        editor.settings_requested.connect(self.show_settings_dialog)
+        editor.setWindowIcon(self._editor_icon)
         editor.set_minimize_to_tray_on_close(False)
         editor.setParent(self.editor_tabs)
         tab_index = self.editor_tabs.addTab(editor, title)
         self.editor_tabs.setCurrentIndex(tab_index)
-        self.app.setWindowIcon(self.editor_host.windowIcon())
+        self._apply_editor_taskbar_identity()
         self._ensure_editor_host_geometry()
         self.editor_host.show()
         self.editor_host.raise_()
@@ -598,7 +904,7 @@ class AppController:
 
     def _maybe_restore_recovery_snapshot(self) -> None:
         """
-        Prompts for restoring auto-saved recovery data at startup.
+        Restores auto-saved recovery data at startup when available.
 
         Returns:
             None
@@ -607,17 +913,6 @@ class AppController:
         from src.editor_window import EditorWindow
 
         if not EditorWindow.has_recovery_snapshot():
-            return
-
-        answer = self._QMessageBox.question(
-            self.capture_panel,
-            "Recovery",
-            "An auto-saved snapshot was found. Restore it now?",
-            self._QMessageBox.StandardButton.Yes | self._QMessageBox.StandardButton.No,
-            self._QMessageBox.StandardButton.Yes,
-        )
-        if answer != self._QMessageBox.StandardButton.Yes:
-            EditorWindow.discard_recovery_snapshot()
             return
 
         from src.storage import load_project, base64_png_to_pixmap
@@ -677,25 +972,18 @@ class AppController:
 
         from src.capture import execute_capture_request
 
+        if self._capture_in_progress:
+            return
+
+        self._capture_in_progress = True
         self.capture_panel.hide()
 
         def on_capture_done(pixmap) -> None:
-            if pixmap.isNull():
-                self._QMessageBox.warning(
-                    self.capture_panel,
-                    "Capture Error",
-                    "No screenshot could be captured.",
-                )
-                self.capture_panel.show()
-                return
-
-            self._create_editor_tab(
-                pixmap,
-                f"Screenshot {self.editor_tabs.count() + 1}",
-            )
-            self.capture_panel.show()
+            self._capture_in_progress = False
+            self._handle_capture_result(pixmap)
 
         def on_capture_cancelled() -> None:
+            self._capture_in_progress = False
             self.capture_panel.show()
 
         execute_capture_request(
@@ -788,7 +1076,7 @@ class AppController:
             blank_pixmap.fill(QColor(255, 255, 255, 255))
             self._create_editor_tab(blank_pixmap, "New Canvas")
             return
-        self.app.setWindowIcon(self.editor_host.windowIcon())
+        self._apply_editor_taskbar_identity()
         self._ensure_editor_host_geometry()
         self.editor_host.show()
         self.editor_host.raise_()
@@ -847,7 +1135,9 @@ class AppController:
                 self.editor_tabs.removeTab(tab_index)
             if self.editor_tabs.count() == 0:
                 self.editor_host.hide()
-                self.app.setWindowIcon(self.capture_panel.windowIcon())
+                self.capture_panel.show()
+                self.capture_panel.raise_()
+                self._apply_capture_taskbar_identity()
         except RuntimeError:
             return
 
@@ -891,10 +1181,13 @@ class AppController:
         tab_widget.deleteLater()
         if self.editor_tabs.count() == 0:
             self.editor_host.hide()
+            self.capture_panel.show()
+            self.capture_panel.raise_()
+            self._apply_capture_taskbar_identity()
 
-    def _hide_to_tray(self) -> None:
+    def _on_editor_host_close(self) -> None:
         """
-        Hides all windows and keeps app running in system tray.
+        Hides only the editor host and keeps the capture panel available.
 
         Returns:
             None
@@ -902,28 +1195,27 @@ class AppController:
 
         if self._is_quitting:
             return
-        if not self._tray_available:
+        self.editor_host.hide()
+        self.capture_panel.show()
+        self.capture_panel.raise_()
+        self.capture_panel.activateWindow()
+        self._apply_capture_taskbar_identity()
+
+    def _on_capture_panel_close(self) -> None:
+        """
+        Hides only the capture panel and leaves open editors untouched.
+
+        Returns:
+            None
+        """
+
+        if self._is_quitting:
             return
         self.capture_panel.hide()
-        self.editor_host.hide()
-        for editor in list(self.editors):
-            try:
-                editor.hide()
-            except RuntimeError:
-                continue
-        for widget in self.app.topLevelWidgets():
-            if widget is self.capture_panel or widget is self.editor_host:
-                continue
-            try:
-                if widget.isVisible():
-                    widget.hide()
-            except RuntimeError:
-                continue
-        self.app.setWindowIcon(self.capture_panel.windowIcon())
-        if self.tray_icon.isVisible():
+        if self._tray_available and self.tray_icon.isVisible():
             self.tray_icon.showMessage(
                 APP_NAME,
-                "Running in system tray. Use tray menu to reopen or quit.",
+                "Capture panel hidden. Use tray menu to reopen or quit.",
                 self.tray_icon.MessageIcon.Information,
                 2500,
             )
@@ -940,12 +1232,12 @@ class AppController:
         self.capture_panel.raise_()
         self.capture_panel.activateWindow()
         if self.editor_tabs.count() > 0:
-            self.app.setWindowIcon(self.editor_host.windowIcon())
+            self._apply_editor_taskbar_identity()
             self.editor_host.show()
             self.editor_host.raise_()
             self.editor_host.activateWindow()
             return
-        self.app.setWindowIcon(self.capture_panel.windowIcon())
+        self._apply_capture_taskbar_identity()
 
     def _on_tray_activated(self, reason) -> None:
         """
@@ -975,6 +1267,7 @@ class AppController:
         """
 
         self._is_quitting = True
+        self._hotkey_manager.stop()
         self.capture_panel.set_minimize_to_tray_on_close(False)
         self.editor_host.set_minimize_to_tray_on_close(False)
         while self.editor_tabs.count() > 0:
@@ -1014,7 +1307,6 @@ def main() -> int:
         int: Process exit code.
     """
 
-    _reexec_into_venv_if_available(_project_root())
     runtime_code = _ensure_qt_runtime()
     if runtime_code != 0:
         return runtime_code
@@ -1045,24 +1337,22 @@ def _launch_gui(startup_project_path: str = "") -> int:
         return 0
     _ensure_desktop_launcher()
 
-    from PySide6.QtGui import QGuiApplication, QIcon
+    from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication
 
     QGuiApplication.setDesktopFileName("snapagent")
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
-    capture_icon = QIcon(str(_icon_path()))
-    editor_icon = QIcon(str(_editor_icon_path()))
+    capture_icon = _build_capture_icon()
     app.setWindowIcon(capture_icon)
     _maybe_prompt_desktop_shortcut()
     controller = AppController(app, startup_project_path=startup_project_path)
-    controller.capture_panel.setWindowIcon(capture_icon)
-    controller.editor_host.setWindowIcon(editor_icon)
     controller.show()
     return app.exec()
 
 
 if __name__ == "__main__":
+    _reexec_into_venv_if_available(_project_root())
     raise SystemExit(main())
 

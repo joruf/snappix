@@ -55,14 +55,31 @@ from PySide6.QtWidgets import (
 from src.annotation_items import (
     ArrowItem,
     ITEM_ROLE_TYPE,
+    STROKE_STYLE_DASH,
+    STROKE_STYLE_DASH_DOT,
+    STROKE_STYLE_DOT,
+    STROKE_STYLE_SOLID,
     StyleState,
     add_annotation_to_scene,
     annotation_from_item,
     color_to_list,
     configure_graphics_item,
+    create_pen,
+    normalize_stroke_style,
+    stroke_style_to_qt,
+)
+from src.annotation_shapes import (
+    StepBadgeItem,
+    StyledTextItem,
+    TEXT_STYLE_BOX,
+    TEXT_STYLE_BUBBLE,
+    TEXT_STYLE_PLAIN,
 )
 from src.crop_item import CropSelectionItem
+from src.image_effects import pixelate_qimage_region
 from src.models import AnnotationModel
+from src.ocr import extract_text_from_png_bytes
+from src.scroll_capture import pixmap_to_png_bytes
 
 
 def decode_base64_to_pixmap(value: str) -> QPixmap:
@@ -113,6 +130,9 @@ class Tool:
     TEXT = "text"
     CROP = "crop"
     FILL_BG = "fill_bg"
+    BLUR = "blur"
+    STEP = "step"
+    OCR = "ocr"
 
 
 class EditorCanvas(QGraphicsView):
@@ -154,6 +174,8 @@ class EditorCanvas(QGraphicsView):
             font_bold=False,
             font_italic=False,
             font_underline=False,
+            stroke_style=STROKE_STYLE_SOLID,
+            text_style=TEXT_STYLE_PLAIN,
         )
         self._zoom_factor = 1.0
         self._initial_view_pending = False
@@ -168,6 +190,8 @@ class EditorCanvas(QGraphicsView):
         self._grid_visible = False
         self._snap_enabled = False
         self._grid_size = 16
+        self._blur_block_size = 16
+        self._next_step_number = 1
         self._alignment_threshold = 8.0
         self._alignment_guides: list[QLineF] = []
 
@@ -223,7 +247,7 @@ class EditorCanvas(QGraphicsView):
 
     def _apply_initial_screenshot_view(self) -> None:
         """
-        Shows screenshot at original size unless it is wider than viewport.
+        Fits large screenshots into the viewport while keeping smaller ones at 100%.
 
         Returns:
             None
@@ -237,17 +261,27 @@ class EditorCanvas(QGraphicsView):
             return
 
         viewport_width = self.viewport().width()
-        if viewport_width <= 1:
+        viewport_height = self.viewport().height()
+        if viewport_width <= 1 or viewport_height <= 1:
             return
 
         self.resetTransform()
-        if screenshot.width() > viewport_width:
-            zoom_factor = viewport_width / float(screenshot.width())
-            self.scale(zoom_factor, zoom_factor)
-            self._zoom_factor = zoom_factor
+        screenshot_rect = QRectF(screenshot.rect())
+        needs_fit = (
+            screenshot_rect.width() > viewport_width
+            or screenshot_rect.height() > viewport_height
+        )
+        if needs_fit:
+            self.fitInView(screenshot_rect, Qt.AspectRatioMode.KeepAspectRatio)
+            self._zoom_factor = self.transform().m11()
+            self.ensureVisible(
+                screenshot_rect.left(),
+                screenshot_rect.top(),
+                1,
+                1,
+            )
         else:
             self._zoom_factor = 1.0
-        self.centerOn(self._background_item)
         self._initial_view_pending = False
         self.zoom_changed.emit(self._zoom_factor)
 
@@ -332,6 +366,8 @@ class EditorCanvas(QGraphicsView):
         font_bold: bool | None = None,
         font_italic: bool | None = None,
         font_underline: bool | None = None,
+        stroke_style: str | None = None,
+        text_style: str | None = None,
     ) -> None:
         """
         Updates active style options and selected item style.
@@ -369,6 +405,10 @@ class EditorCanvas(QGraphicsView):
             self._style.font_italic = bool(font_italic)
         if font_underline is not None:
             self._style.font_underline = bool(font_underline)
+        if stroke_style is not None:
+            self._style.stroke_style = normalize_stroke_style(stroke_style)
+        if text_style is not None:
+            self._style.text_style = text_style
 
         changed = False
         for item in self._scene.selectedItems():
@@ -393,7 +433,31 @@ class EditorCanvas(QGraphicsView):
                     pen.setColor(stroke_color)
                 if stroke_width is not None:
                     pen.setWidthF(stroke_width)
+                if stroke_style is not None:
+                    pen.setStyle(stroke_style_to_qt(stroke_style))
                 line_item.setPen(pen)
+                changed = True
+            elif annotation_type == "text" and isinstance(item, StyledTextItem):
+                if text_color is not None or stroke_color is not None:
+                    item.set_colors(
+                        text_color=text_color or stroke_color,
+                        stroke_color=stroke_color or text_color,
+                    )
+                if fill_color is not None:
+                    item.set_colors(fill_color=fill_color)
+                if font_size is not None or font_family is not None or font_bold is not None or font_italic is not None or font_underline is not None:
+                    font = item._font
+                    if font_size is not None:
+                        font.setPointSize(font_size)
+                    if font_family is not None and font_family.strip():
+                        font.setFamily(font_family.strip())
+                    if font_bold is not None:
+                        font.setBold(bool(font_bold))
+                    if font_italic is not None:
+                        font.setItalic(bool(font_italic))
+                    if font_underline is not None:
+                        font.setUnderline(bool(font_underline))
+                    item.set_font(font)
                 changed = True
             elif annotation_type == "text":
                 text_item = item
@@ -523,19 +587,47 @@ class EditorCanvas(QGraphicsView):
         if self._tool == Tool.TEXT:
             text = self._prompt_text_input()
             if text:
-                item = self._scene.addText(text)
-                item.setDefaultTextColor(self._style.text_color)
-                font = item.font()
-                font.setPointSize(self._style.font_size)
-                font.setFamily(self._style.font_family)
-                font.setBold(self._style.font_bold)
-                font.setItalic(self._style.font_italic)
-                font.setUnderline(self._style.font_underline)
-                item.setFont(font)
-                item.setPos(scene_pos)
-                item.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
-                configure_graphics_item(item, "text")
+                scene_pos = self._snap_point_to_grid(scene_pos)
+                if self._style.text_style in {TEXT_STYLE_BOX, TEXT_STYLE_BUBBLE}:
+                    font = QFont()
+                    font.setPointSize(self._style.font_size)
+                    font.setFamily(self._style.font_family)
+                    font.setBold(self._style.font_bold)
+                    font.setItalic(self._style.font_italic)
+                    font.setUnderline(self._style.font_underline)
+                    item = StyledTextItem(
+                        text=text,
+                        text_style=self._style.text_style,
+                        font=font,
+                        text_color=QColor(self._style.text_color),
+                        fill_color=QColor(self._style.fill_color),
+                        stroke_color=QColor(self._style.stroke_color),
+                        stroke_width=self._style.stroke_width,
+                    )
+                    item.setPos(scene_pos)
+                    self._scene.addItem(item)
+                else:
+                    item = self._scene.addText(text)
+                    item.setDefaultTextColor(self._style.text_color)
+                    font = item.font()
+                    font.setPointSize(self._style.font_size)
+                    font.setFamily(self._style.font_family)
+                    font.setBold(self._style.font_bold)
+                    font.setItalic(self._style.font_italic)
+                    font.setUnderline(self._style.font_underline)
+                    item.setFont(font)
+                    item.setPos(scene_pos)
+                    item.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
+                    configure_graphics_item(item, "text")
                 self._emit_content_changed("Insert text")
+            return
+
+        if self._tool == Tool.STEP:
+            badge = StepBadgeItem(self._next_step_number)
+            badge.setPos(scene_pos.x() - badge.rect().width() / 2.0, scene_pos.y() - badge.rect().height() / 2.0)
+            self._scene.addItem(badge)
+            self._next_step_number += 1
+            self._emit_content_changed("Insert step")
             return
 
         if self._tool in {Tool.RECT, Tool.ELLIPSE, Tool.LINE, Tool.ARROW}:
@@ -545,6 +637,18 @@ class EditorCanvas(QGraphicsView):
                 self._scene.addItem(self._preview_item)
             return
         if self._tool == Tool.FILL_BG:
+            self._clear_resize_overlay()
+            self._preview_item = self._create_preview_item(scene_pos)
+            if self._preview_item is not None:
+                self._scene.addItem(self._preview_item)
+            return
+        if self._tool == Tool.BLUR:
+            self._clear_resize_overlay()
+            self._preview_item = self._create_preview_item(scene_pos)
+            if self._preview_item is not None:
+                self._scene.addItem(self._preview_item)
+            return
+        if self._tool == Tool.OCR:
             self._clear_resize_overlay()
             self._preview_item = self._create_preview_item(scene_pos)
             if self._preview_item is not None:
@@ -693,6 +797,18 @@ class EditorCanvas(QGraphicsView):
                 self._scene.removeItem(self._preview_item)
                 self._preview_item = None
                 self._apply_background_fill(fill_rect)
+                return
+            if self._tool == Tool.BLUR:
+                blur_rect = self._preview_item.boundingRect().translated(self._preview_item.pos())
+                self._scene.removeItem(self._preview_item)
+                self._preview_item = None
+                self._apply_region_blur(blur_rect)
+                return
+            if self._tool == Tool.OCR:
+                ocr_rect = self._preview_item.boundingRect().translated(self._preview_item.pos())
+                self._scene.removeItem(self._preview_item)
+                self._preview_item = None
+                self._run_ocr_on_region(ocr_rect)
                 return
 
             configure_graphics_item(self._preview_item, self._tool)
@@ -844,7 +960,7 @@ class EditorCanvas(QGraphicsView):
             QGraphicsItem: Preview item instance.
         """
 
-        pen = QPen(self._style.stroke_color, self._style.stroke_width)
+        pen = create_pen(self._style)
         if self._tool == Tool.RECT:
             item = QGraphicsRectItem(QRectF(start, start))
             item.setPen(pen)
@@ -874,6 +990,18 @@ class EditorCanvas(QGraphicsView):
             item = QGraphicsRectItem(QRectF(start, start))
             item.setPen(fill_pen)
             item.setBrush(QColor(self._style.fill_color.red(), self._style.fill_color.green(), self._style.fill_color.blue(), 90))
+            return item
+        if self._tool == Tool.BLUR:
+            blur_pen = QPen(QColor(155, 89, 182, 220), 1.5, Qt.PenStyle.DashLine)
+            item = QGraphicsRectItem(QRectF(start, start))
+            item.setPen(blur_pen)
+            item.setBrush(QColor(155, 89, 182, 70))
+            return item
+        if self._tool == Tool.OCR:
+            ocr_pen = QPen(QColor(46, 204, 113, 220), 1.5, Qt.PenStyle.DashLine)
+            item = QGraphicsRectItem(QRectF(start, start))
+            item.setPen(ocr_pen)
+            item.setBrush(QColor(46, 204, 113, 70))
             return item
         return QGraphicsRectItem(QRectF(start, start))
 
@@ -1176,6 +1304,12 @@ class EditorCanvas(QGraphicsView):
             None
         """
 
+        if (
+            event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            and event.key() == Qt.Key.Key_D
+        ):
+            if self.duplicate_selected_items():
+                return
         if event.matches(QKeySequence.StandardKey.Paste):
             self.paste_from_clipboard()
             return
@@ -1353,6 +1487,205 @@ class EditorCanvas(QGraphicsView):
         painter.end()
         self._background_item.setPixmap(QPixmap.fromImage(image))
         self._emit_content_changed("Fill background")
+
+    def set_blur_block_size(self, block_size: int) -> None:
+        """
+        Sets the pixel block size used by the blur tool.
+
+        Args:
+            block_size: Pixelation block size in pixels.
+
+        Returns:
+            None
+        """
+
+        self._blur_block_size = max(4, min(int(block_size), 64))
+
+    def blur_block_size(self) -> int:
+        """
+        Returns the active blur block size.
+
+        Returns:
+            int: Blur block size in pixels.
+        """
+
+        return self._blur_block_size
+
+    def _apply_region_blur(self, rect: QRectF) -> None:
+        """
+        Pixelates a rectangular screenshot area for redaction.
+
+        Args:
+            rect: Target area in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        clipped = rect.intersected(self._scene.sceneRect()).normalized()
+        if clipped.width() < 1 or clipped.height() < 1:
+            return
+        screenshot = self.screenshot()
+        if screenshot.isNull():
+            return
+        image = screenshot.toImage()
+        blurred = pixelate_qimage_region(
+            image,
+            clipped.toAlignedRect(),
+            self._blur_block_size,
+        )
+        self._background_item.setPixmap(QPixmap.fromImage(blurred))
+        self._emit_content_changed("Blur region")
+
+    def duplicate_selected_items(self) -> bool:
+        """
+        Duplicates the current selection with a small offset.
+
+        Returns:
+            bool: True when at least one item was duplicated.
+        """
+
+        selected_items = [
+            item
+            for item in self._scene.selectedItems()
+            if item not in {self._background_item, self._crop_item, self._crop_shade_item, self._resize_overlay_item}
+        ]
+        if not selected_items:
+            return False
+
+        created_items: list[QGraphicsItem] = []
+        for item in selected_items:
+            model = annotation_from_item(item)
+            if model is None:
+                continue
+            model.x += 16.0
+            model.y += 16.0
+            max_z = max(
+                (existing.zValue() for existing in self._annotation_items()),
+                default=0.0,
+            )
+            created = add_annotation_to_scene(self._scene, model)
+            if created is None:
+                continue
+            created.setZValue(max_z + 1.0)
+            created_items.append(created)
+        if not created_items:
+            return False
+        self._scene.clearSelection()
+        for created in created_items:
+            created.setSelected(True)
+        self._emit_content_changed("Duplicate selection")
+        return True
+
+    def bring_selected_forward(self) -> None:
+        """
+        Moves selected items one step toward the front.
+
+        Returns:
+            None
+        """
+
+        self._change_selected_z_order(1.0)
+
+    def send_selected_backward(self) -> None:
+        """
+        Moves selected items one step toward the back.
+
+        Returns:
+            None
+        """
+
+        self._change_selected_z_order(-1.0)
+
+    def bring_selected_to_front(self) -> None:
+        """
+        Moves selected items to the topmost z-order.
+
+        Returns:
+            None
+        """
+
+        selected = self._scene.selectedItems()
+        if not selected:
+            return
+        max_z = max((item.zValue() for item in self._annotation_items()), default=0.0)
+        for index, item in enumerate(selected):
+            item.setZValue(max_z + 1.0 + index)
+        self._emit_content_changed("Bring to front")
+
+    def send_selected_to_back(self) -> None:
+        """
+        Moves selected items to the lowest z-order.
+
+        Returns:
+            None
+        """
+
+        selected = self._scene.selectedItems()
+        if not selected:
+            return
+        min_z = min((item.zValue() for item in self._annotation_items()), default=0.0)
+        for index, item in enumerate(selected):
+            item.setZValue(min_z - 1.0 - index)
+        self._emit_content_changed("Send to back")
+
+    def reset_step_counter(self, value: int = 1) -> None:
+        """
+        Sets the next step badge number.
+
+        Args:
+            value: Next step number.
+
+        Returns:
+            None
+        """
+
+        self._next_step_number = max(1, int(value))
+
+    def _change_selected_z_order(self, delta: float) -> None:
+        """
+        Applies a z-order delta to selected annotation items.
+
+        Args:
+            delta: Z-order delta.
+
+        Returns:
+            None
+        """
+
+        selected = self._scene.selectedItems()
+        if not selected:
+            return
+        for item in selected:
+            item.setZValue(item.zValue() + delta)
+        self._emit_content_changed("Change layer order")
+
+    def _run_ocr_on_region(self, rect: QRectF) -> None:
+        """
+        Runs OCR on one screenshot region and copies text to clipboard.
+
+        Args:
+            rect: Target region in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        clipped = rect.intersected(self._scene.sceneRect()).normalized()
+        if clipped.width() < 2 or clipped.height() < 2:
+            return
+        composited = self.export_composited_pixmap()
+        if composited.isNull():
+            return
+        cropped = composited.copy(clipped.toAlignedRect())
+        if cropped.isNull():
+            return
+        text = extract_text_from_png_bytes(pixmap_to_png_bytes(cropped))
+        if not text:
+            self._emit_content_changed("OCR found no text")
+            return
+        QGuiApplication.clipboard().setText(text)
+        self._emit_content_changed("Copy OCR text")
 
     def _try_paste_image_url(self, url: str, scene_pos: QPointF) -> bool:
         """

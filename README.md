@@ -3,49 +3,66 @@
 SnapAgent is a Linux screenshot and annotation application inspired by SnagIt.  
 It combines fast capture workflows with a tabbed editor, non-destructive annotations, and project-based editing.
 
+## Documentation
+
+- **[Technical Documentation](docs/TECHNICAL.md)** — architecture, modules, config schema, capture pipeline, annotation model, platform notes
+
 ## Key Features
 
-- Compact **Capture Panel** (delay slider, fullscreen/area/window capture, Open Editor link).
+### Capture
+
+- Compact **Capture Panel** with delay slider (0–20 s).
+- Capture modes: **Fullscreen**, **Area**, **Window**, **Scroll**, and **Color Picker**.
+- **Scroll capture** for long pages: select a window, SnapAgent scrolls it automatically and stitches the result.
+- **Post-capture actions:** open in editor, copy to clipboard, or save to folder.
+- **Global hotkeys** (configurable): default `Ctrl+Shift+A/W/F` for area/window/fullscreen.
+- **Wayland support:** region capture via `grim`+`slurp` when available.
+- Live **Window Overlay** preview (X11) and drag **Region Overlay**.
 - **Color Picker Overlay** with cross-guides and clipboard copy.
-- **Window Overlay** with live preview frame and `Esc` cancellation.
+
+### Editor
+
 - Unified **Editor Host** with tabs for multiple screenshots.
-- Annotation tools: `Select`, `Rectangle`, `Circle`, `Line`, `Arrow`, `Text`, `Bg Fill`, `Crop`.
-- One-shot drawing + lock mode (double-click tool to lock).
+- Annotation tools:
+  - `Select`, `Rectangle`, `Circle`, `Line`, `Arrow`, `Text`
+  - `Bg Fill`, `Blur` (redaction), `Step` (numbered callouts), `OCR`, `Crop`
+- **Text styles:** plain, text box, speech bubble.
+- **Line styles:** solid, dash, dot, dash-dot (lines and arrows).
+- One-shot drawing + **lock mode** (double-click tool to lock).
 - Editable elements with interactive resize handles.
+- **Layer order:** bring forward/backward, bring to front/send to back.
+- **Duplicate selection** (`Ctrl+D`).
 - Full color workflow:
   - Border / Background / Text color
   - Per-target opacity sliders
   - Color palette quick buttons
-- Text comfort features:
-  - Font family dropdown
-  - Font size dropdown
-  - Bold / Italic / Underline toggles
-  - Multi-line text input dialog
-- History workflow:
-  - Toolbar `Undo` / `Redo`
-  - Labeled history list with jump-to-state
-- Zoom workflow:
-  - Slider + `+`, `-`, `Reset`
-  - Ctrl + mouse wheel support
-- Alignment aids:
-  - Optional grid overlay
-  - Snap-to-grid and magnetic alignment behavior
-- Non-destructive crop behavior (annotations remain editable).
-- Clipboard support for text, image, and image URL paste.
+- Text features: font family/size, bold/italic/underline, multi-line dialog.
+- History: toolbar Undo/Redo + labeled history list with jump-to-state.
+- Zoom: slider, +/-, Reset, Ctrl + mouse wheel.
+- Alignment: optional grid, snap-to-grid, magnetic guides.
+- Non-destructive crop (annotations remain editable).
+- Clipboard: paste text, image, image URL; copy composited image.
+
+### Themes & Settings
+
+- **Light** and **Dark** themes (View → Theme or tray menu).
+- Theme persisted in user config and restored on startup.
+- **Settings dialog** (View → Settings or tray): hotkeys, post-capture action, save folder.
+
+### Linux Integration
+
+- Single-instance enforcement.
+- System tray with capture shortcuts, theme, settings, autostart.
+- Autostart toggle (XDG `.desktop` entry).
+- First-run dependency installer (Tkinter progress UI).
+- Desktop shortcut prompt on first run.
+- Startup recovery: auto-save every 30 s, restore prompt on launch.
+
+### Projects & Export
+
 - Project format `*.sfp` (save/load editable projects).
-- Export as PNG/JPEG/PDF:
-  - Automatic file extension append
-  - JPEG quality prompt
-  - PDF DPI prompt
-- Startup recovery:
-  - Auto-save snapshot every 30 seconds
-  - Restore prompt on startup if snapshot exists
-- Linux integration:
-  - Single-instance enforcement
-  - Tray integration
-  - Autostart toggle in tray
-  - First-run dependency installer UI
-  - Desktop shortcut prompt on first run
+- Export PNG / JPEG / PDF with quality and DPI prompts.
+- Print support.
 
 ## Screenshots
 
@@ -75,11 +92,27 @@ It combines fast capture workflows with a tabbed editor, non-destructive annotat
 
 ## Requirements
 
+### Required
+
 - Python `3.11+`
 - Linux desktop session
-- System tools for capture/window detection:
-  - `xdotool`
-  - `xwininfo`
+- Python packages (installed automatically into `.venv`):
+  - PySide6, Pillow, requests, pynput
+
+### X11 capture (window capture)
+
+- `xdotool`
+- `xwininfo`
+
+### Optional (recommended)
+
+```bash
+# Wayland region capture
+sudo apt install grim slurp
+
+# OCR text extraction in editor
+sudo apt install tesseract-ocr
+```
 
 ## Install and Run
 
@@ -93,21 +126,44 @@ On first start, SnapAgent creates a local `.venv`, installs dependencies, and re
 
 ## Usage Notes
 
-- **Capture Panel**
-  - `Capture Fullscreen`: captures complete virtual desktop.
-  - `Capture Area`: opens drag-selection overlay.
-  - `Capture Window`: opens live window selection overlay.
-  - `Open Editor`: opens a blank editor tab if none exists.
-- **Editor**
-  - Use toolbar tool groups (`Tools`, `Color Palette`, `Text Style`, `Align & Grid`, `History`, `Zoom`).
-  - Use `Ctrl+C` to copy composited image.
-  - Use `Ctrl+V` to paste clipboard content.
-  - Use `Enter` to apply active crop selection.
-  - Use `Esc` to cancel crop selection or active capture overlay.
+### Capture Panel
+
+| Control | Action |
+|---------|--------|
+| Capture Fullscreen | Captures complete virtual desktop |
+| Capture Area | Opens drag-selection overlay |
+| Capture Window | X11 window selection (Wayland: use Area/Scroll) |
+| Scroll | Multi-frame scroll capture |
+| Color picker | Eyedropper → clipboard |
+| Open Editor | Opens editor or blank canvas tab |
+
+### Scroll Capture
+
+1. Click **Scroll** and click the target window (same picker as **Capture Window**).
+2. SnapAgent detects the scrollbar, jumps to the top, scrolls to the bottom, and merges the frames.
+3. The stitched screenshot opens in the editor automatically.
+2. Scroll the target content.
+3. Press **Space** to capture another frame (repeat as needed).
+4. Press **Enter** to stitch frames, or **Esc** to cancel.
+
+### Editor Tools
+
+| Tool | Description |
+|------|-------------|
+| Blur | Pixelate area for redaction (adjust **Blur px** in toolbar) |
+| Step | Place numbered tutorial badges |
+| OCR | Select region; recognized text copied to clipboard |
+| Text + Style | Choose Plain / Text box / Speech bubble under Text Style |
+
+### Settings
+
+Open via **View → Settings** (editor) or tray **Settings**:
+
+- Enable/configure global hotkeys
+- Choose action after capture (editor / clipboard / save)
+- Set capture save folder (default: `~/Pictures/SnapAgent/`)
 
 ## CLI
-
-SnapAgent also supports command-line control:
 
 ```bash
 # Capture full desktop as PNG
@@ -130,17 +186,39 @@ python3 run.py open --project ./example.sfp
 
 ## Keyboard Shortcuts
 
-- `Ctrl+S`: open export dialog
-- `Ctrl+P`: print dialog
-- `Ctrl+Shift+S`: save project as
-- `Ctrl+O`: open project
-- `Ctrl+Z`: undo
-- `Ctrl+Y` / `Ctrl+Shift+Z`: redo
-- `Ctrl+C`: copy composited image
-- `Ctrl+V`: paste text/image/image URL
-- `Ctrl + Mouse Wheel`: zoom
-- `Enter`: apply crop
-- `Esc`: cancel crop/overlay
+### Editor
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+S` | Export dialog |
+| `Ctrl+P` | Print |
+| `Ctrl+Shift+S` | Save project as |
+| `Ctrl+O` | Open project |
+| `Ctrl+Z` | Undo |
+| `Ctrl+Y` / `Ctrl+Shift+Z` | Redo |
+| `Ctrl+D` | Duplicate selection |
+| `Ctrl+C` | Copy composited image |
+| `Ctrl+V` | Paste text/image/URL |
+| `Ctrl + Mouse Wheel` | Zoom |
+| `Ctrl++` / `Ctrl+-` | Resize selection ±10% |
+| `Enter` | Apply crop |
+| `Esc` | Cancel crop/overlay |
+
+### Global (default, configurable)
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+A` | Capture area |
+| `Ctrl+Shift+W` | Capture window |
+| `Ctrl+Shift+F` | Capture fullscreen |
+
+### Scroll Capture Overlay
+
+| Key | Action |
+|-----|--------|
+| `Space` | Add frame |
+| `Enter` | Finish and stitch |
+| `Esc` | Cancel |
 
 ## Project Format
 
@@ -148,13 +226,25 @@ SnapAgent saves projects as ZIP-based `*.sfp` files:
 
 - `manifest.json` with metadata and annotations
 - `assets/screenshot.png` as base image
-- optional `assets/image-*.png` files for embedded pasted images
+- optional `assets/image-*.png` for embedded pasted images
 
-The format is versioned and migration-friendly.
+Annotation payload extensions include `stroke_style`, `text_style`, `z_index`, and `step_number`.  
+See [Technical Documentation](docs/TECHNICAL.md#annotation-model) for details.
+
+## Configuration
+
+User settings: `~/.config/snapagent/config.json`
+
+Includes theme, autostart, hotkeys, post-capture action, and save directory.  
+Full schema: [Technical Documentation → Configuration](docs/TECHNICAL.md#configuration).
+
+## Testing
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+```
 
 ## Release and Deployment
-
-Distribution helper scripts are included:
 
 ```bash
 # Debian package
@@ -165,3 +255,7 @@ Distribution helper scripts are included:
 ```
 
 Build artifacts are written to `dist/`.
+
+## License
+
+See repository license file for terms.

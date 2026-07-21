@@ -9,6 +9,7 @@ import unittest
 try:
     from PySide6.QtCore import QRectF, Qt
     from PySide6.QtGui import QColor, QImage, QPixmap
+    from PySide6.QtWidgets import QApplication
 
     from src.editor_canvas import EditorCanvas, Tool
     from src.storage import pixmap_to_base64_png
@@ -292,6 +293,24 @@ class TestEditorCanvasResize(unittest.TestCase):
         collected = canvas.collect_annotations()
         self.assertEqual(len(collected), 1)
         self.assertEqual(collected[0].annotation_type, "rect")
+
+    def test_initial_view_fits_tall_screenshot_in_viewport(self) -> None:
+        """
+        Ensures very tall screenshots are fully visible after initial fit.
+        """
+
+        canvas = EditorCanvas()
+        canvas.resize(420, 320)
+        canvas.show()
+        QApplication.processEvents()
+        canvas.set_screenshot(_solid_pixmap(240, 2400))
+        canvas._apply_initial_screenshot_view()  # pylint: disable=protected-access
+
+        visible_rect = canvas.mapToScene(canvas.viewport().rect()).boundingRect()
+        scene_rect = canvas.sceneRect()
+        self.assertGreaterEqual(visible_rect.width(), scene_rect.width() * 0.95)
+        self.assertGreaterEqual(visible_rect.height(), scene_rect.height() * 0.95)
+        self.assertLessEqual(canvas.transform().m11(), 1.0)
 
     def test_resize_selected_image_updates_scale(self) -> None:
         """

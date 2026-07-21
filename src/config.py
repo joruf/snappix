@@ -10,6 +10,58 @@ from pathlib import Path
 
 from src.theme import DEFAULT_THEME, normalize_theme_name
 
+POST_CAPTURE_EDITOR = "editor"
+POST_CAPTURE_CLIPBOARD = "clipboard"
+POST_CAPTURE_SAVE = "save"
+DEFAULT_POST_CAPTURE_ACTION = POST_CAPTURE_EDITOR
+VALID_POST_CAPTURE_ACTIONS = frozenset(
+    {
+        POST_CAPTURE_EDITOR,
+        POST_CAPTURE_CLIPBOARD,
+        POST_CAPTURE_SAVE,
+    }
+)
+POST_CAPTURE_ACTIONS = {
+    POST_CAPTURE_EDITOR: "Open in editor",
+    POST_CAPTURE_CLIPBOARD: "Copy to clipboard",
+    POST_CAPTURE_SAVE: "Save to folder",
+}
+
+DEFAULT_HOTKEY_CAPTURE_REGION = "ctrl+shift+a"
+DEFAULT_HOTKEY_CAPTURE_WINDOW = "ctrl+shift+w"
+DEFAULT_HOTKEY_CAPTURE_FULLSCREEN = "ctrl+shift+f"
+
+
+def normalize_hotkey_spec(spec: str) -> str:
+    """
+    Normalizes one hotkey specification string.
+
+    Args:
+        spec: Hotkey text such as ``Ctrl+Shift+A``.
+
+    Returns:
+        str: Lowercase normalized hotkey text.
+    """
+
+    parts = [part.strip().lower() for part in spec.split("+") if part.strip()]
+    return "+".join(parts)
+
+
+def normalize_post_capture_action(action: str) -> str:
+    """
+    Returns a supported post-capture action identifier.
+
+    Args:
+        action: Requested action identifier.
+
+    Returns:
+        str: Valid post-capture action.
+    """
+
+    if action in VALID_POST_CAPTURE_ACTIONS:
+        return action
+    return DEFAULT_POST_CAPTURE_ACTION
+
 
 @dataclass(slots=True)
 class AppConfig:
@@ -19,10 +71,22 @@ class AppConfig:
     Attributes:
         autostart_enabled: Whether app launches at desktop login.
         theme: Active UI theme identifier (light or dark).
+        hotkeys_enabled: Whether global capture hotkeys are active.
+        hotkey_capture_region: Hotkey for region capture.
+        hotkey_capture_window: Hotkey for window capture.
+        hotkey_capture_fullscreen: Hotkey for fullscreen capture.
+        post_capture_action: Action after a successful capture.
+        capture_save_directory: Optional folder for automatic capture saves.
     """
 
     autostart_enabled: bool = False
     theme: str = DEFAULT_THEME
+    hotkeys_enabled: bool = True
+    hotkey_capture_region: str = DEFAULT_HOTKEY_CAPTURE_REGION
+    hotkey_capture_window: str = DEFAULT_HOTKEY_CAPTURE_WINDOW
+    hotkey_capture_fullscreen: str = DEFAULT_HOTKEY_CAPTURE_FULLSCREEN
+    post_capture_action: str = DEFAULT_POST_CAPTURE_ACTION
+    capture_save_directory: str = ""
 
 
 class ConfigManager:
@@ -57,6 +121,25 @@ class ConfigManager:
         return AppConfig(
             autostart_enabled=bool(payload.get("autostart_enabled", False)),
             theme=normalize_theme_name(str(payload.get("theme", DEFAULT_THEME))),
+            hotkeys_enabled=bool(payload.get("hotkeys_enabled", True)),
+            hotkey_capture_region=normalize_hotkey_spec(
+                str(payload.get("hotkey_capture_region", DEFAULT_HOTKEY_CAPTURE_REGION))
+            ),
+            hotkey_capture_window=normalize_hotkey_spec(
+                str(payload.get("hotkey_capture_window", DEFAULT_HOTKEY_CAPTURE_WINDOW))
+            ),
+            hotkey_capture_fullscreen=normalize_hotkey_spec(
+                str(
+                    payload.get(
+                        "hotkey_capture_fullscreen",
+                        DEFAULT_HOTKEY_CAPTURE_FULLSCREEN,
+                    )
+                )
+            ),
+            post_capture_action=normalize_post_capture_action(
+                str(payload.get("post_capture_action", DEFAULT_POST_CAPTURE_ACTION))
+            ),
+            capture_save_directory=str(payload.get("capture_save_directory", "")).strip(),
         )
 
     def save(self, config: AppConfig) -> None:
@@ -74,6 +157,14 @@ class ConfigManager:
         payload = {
             "autostart_enabled": config.autostart_enabled,
             "theme": normalize_theme_name(config.theme),
+            "hotkeys_enabled": config.hotkeys_enabled,
+            "hotkey_capture_region": normalize_hotkey_spec(config.hotkey_capture_region),
+            "hotkey_capture_window": normalize_hotkey_spec(config.hotkey_capture_window),
+            "hotkey_capture_fullscreen": normalize_hotkey_spec(
+                config.hotkey_capture_fullscreen
+            ),
+            "post_capture_action": normalize_post_capture_action(config.post_capture_action),
+            "capture_save_directory": config.capture_save_directory.strip(),
         }
         self.config_path.write_text(
             json.dumps(payload, indent=2, ensure_ascii=True),

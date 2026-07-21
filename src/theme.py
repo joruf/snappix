@@ -115,6 +115,11 @@ _THEME_COLORS: dict[str, ThemeColors] = {
     THEME_LIGHT: _LIGHT_COLORS,
 }
 
+_EDITOR_DARK_ACCENT = "#c73838"
+_EDITOR_DARK_ACCENT_HOVER = "#d64545"
+_EDITOR_LIGHT_ACCENT = "#c73838"
+_EDITOR_LIGHT_ACCENT_HOVER = "#a61f1f"
+
 
 def normalize_theme_name(theme_name: str) -> str:
     """
@@ -172,6 +177,54 @@ def get_theme_colors(theme_name: str | None = None) -> ThemeColors:
 
     resolved = normalize_theme_name(theme_name or _current_theme)
     return _THEME_COLORS[resolved]
+
+
+def get_editor_accent_colors(theme_name: str | None = None) -> tuple[str, str]:
+    """
+    Returns accent colors for editor chrome aligned with the red editor logo.
+
+    Args:
+        theme_name: Optional theme identifier; uses current theme when omitted.
+
+    Returns:
+        tuple[str, str]: Accent and hover accent hex colors.
+    """
+
+    resolved = normalize_theme_name(theme_name or _current_theme)
+    if resolved == THEME_LIGHT:
+        return _EDITOR_LIGHT_ACCENT, _EDITOR_LIGHT_ACCENT_HOVER
+    return _EDITOR_DARK_ACCENT, _EDITOR_DARK_ACCENT_HOVER
+
+
+def build_editor_accent_stylesheet(theme_name: str | None = None) -> str:
+    """
+    Builds editor-only accent overrides scoped to the editor host window.
+
+    Args:
+        theme_name: Optional theme identifier; uses current theme when omitted.
+
+    Returns:
+        str: Editor accent stylesheet.
+    """
+
+    colors = get_theme_colors(theme_name)
+    accent, accent_hover = get_editor_accent_colors(theme_name)
+    checked_text = colors.button_checked_text
+    return (
+        f"#editorHost QToolButton:checked {{"
+        f" background: {accent}; border: 1px solid {accent}; color: {checked_text};"
+        f" }}"
+        f"#editorHost QPushButton#primaryButton {{"
+        f" background: {accent}; color: {checked_text}; border: none;"
+        f" }}"
+        f"#editorHost QPushButton#primaryButton:hover {{ background: {accent_hover}; }}"
+        f"#editorHost QTabBar::tab:selected {{ background: {accent}; color: {checked_text}; }}"
+        f"#editorHost QSlider::handle:horizontal {{ background: {accent}; }}"
+        f"#editorHost QComboBox QAbstractItemView {{"
+        f" selection-background-color: {accent}; selection-color: {checked_text};"
+        f" }}"
+        f"#editorHost QMenu::item:selected {{ background: {accent}; color: {checked_text}; }}"
+    )
 
 
 def build_application_stylesheet(theme_name: str | None = None) -> str:
@@ -233,6 +286,19 @@ def build_application_stylesheet(theme_name: str | None = None) -> str:
         f" background: {colors.surface_alt};"
         f" }}"
         f"QFrame[toolbarGroup=\"true\"] QLabel {{ color: {colors.text}; }}"
+        f"QWidget#editorToolbar QToolButton, QWidget#editorToolbar QPushButton {{"
+        f" padding: 1px 5px; min-height: 18px; max-height: 24px;"
+        f" }}"
+        f"QWidget#editorToolbar QComboBox, QWidget#editorToolbar QSpinBox {{"
+        f" padding: 1px 3px; min-height: 18px; max-height: 24px;"
+        f" }}"
+        f"QWidget#editorToolbar QLabel#mutedLabel {{"
+        f" font-size: 10px; color: {colors.text_muted}; margin: 0; padding: 0;"
+        f" }}"
+        f"QWidget#editorToolbar QSlider::groove:horizontal {{ height: 4px; }}"
+        f"QWidget#editorToolbar QSlider::handle:horizontal {{"
+        f" width: 12px; height: 12px; margin: -4px 0; border-radius: 6px;"
+        f" }}"
         f"QLabel#mutedLabel {{ font-size: 11px; color: {colors.text_muted}; }}"
         f"QLabel#titleLabel {{ font-size: 16px; font-weight: 700; color: {colors.text}; }}"
         f"QTabWidget::pane {{ border: 1px solid {colors.border_strong}; background: {colors.window_bg}; }}"
