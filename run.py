@@ -42,6 +42,17 @@ def _icon_path() -> Path:
     return _project_root() / "assets" / "snapagent.svg"
 
 
+def _editor_icon_path() -> Path:
+    """
+    Returns the red editor icon path.
+
+    Returns:
+        Path: Editor icon file path.
+    """
+
+    return _project_root() / "assets" / "snapagent-red.svg"
+
+
 def _resolve_venv_python(project_root: Path) -> Path:
     """
     Resolves preferred .venv Python interpreter.
@@ -143,6 +154,7 @@ def _ensure_desktop_launcher() -> None:
 
     launcher_dir = Path.home() / ".local" / "share" / "applications"
     launcher_path = launcher_dir / "snapagent.desktop"
+    editor_launcher_path = launcher_dir / "snapagent-editor.desktop"
     launcher_dir.mkdir(parents=True, exist_ok=True)
     content = (
         "[Desktop Entry]\n"
@@ -156,6 +168,19 @@ def _ensure_desktop_launcher() -> None:
         "StartupWMClass=snapagent\n"
     )
     launcher_path.write_text(content, encoding="utf-8")
+    editor_content = (
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        f"Name={APP_NAME} Editor\n"
+        "Comment=Screenshot editor window identity\n"
+        f"Exec={_autostart_exec_command()}\n"
+        f"Icon={_editor_icon_path()}\n"
+        "Terminal=false\n"
+        "Categories=Graphics;Utility;\n"
+        "StartupWMClass=snapagent-editor\n"
+        "NoDisplay=true\n"
+    )
+    editor_launcher_path.write_text(editor_content, encoding="utf-8")
 
 
 class AppController:
@@ -263,6 +288,8 @@ class AppController:
             None
         """
 
+        self.app.setWindowIcon(self.capture_panel.windowIcon())
+        self.app.setDesktopFileName("snapagent")
         self.capture_panel.show()
 
     def start_capture(self, request: CaptureRequest) -> None:
@@ -292,7 +319,7 @@ class AppController:
                 return
 
             editor = EditorWindow(pixmap)
-            editor.setWindowIcon(self.app.windowIcon())
+            editor.setWindowIcon(self.editor_host.windowIcon())
             editor.set_minimize_to_tray_on_close(False)
             editor.setParent(self.editor_tabs)
             tab_index = self.editor_tabs.addTab(
@@ -300,6 +327,8 @@ class AppController:
                 f"Screenshot {self.editor_tabs.count() + 1}",
             )
             self.editor_tabs.setCurrentIndex(tab_index)
+            self.app.setWindowIcon(self.editor_host.windowIcon())
+            self.app.setDesktopFileName("snapagent-editor")
             self._ensure_editor_host_geometry()
             self.editor_host.show()
             self.editor_host.raise_()
@@ -408,6 +437,8 @@ class AppController:
                 self.editor_tabs.removeTab(tab_index)
             if self.editor_tabs.count() == 0:
                 self.editor_host.hide()
+                self.app.setWindowIcon(self.capture_panel.windowIcon())
+                self.app.setDesktopFileName("snapagent")
         except RuntimeError:
             return
 
@@ -486,9 +517,14 @@ class AppController:
         self.capture_panel.raise_()
         self.capture_panel.activateWindow()
         if self.editor_tabs.count() > 0:
+            self.app.setWindowIcon(self.editor_host.windowIcon())
+            self.app.setDesktopFileName("snapagent-editor")
             self.editor_host.show()
             self.editor_host.raise_()
             self.editor_host.activateWindow()
+            return
+        self.app.setWindowIcon(self.capture_panel.windowIcon())
+        self.app.setDesktopFileName("snapagent")
 
     def _on_tray_activated(self, reason) -> None:
         """
@@ -569,11 +605,12 @@ def main() -> int:
     app.setApplicationName(APP_NAME)
     app.setDesktopFileName("snapagent")
     app.setQuitOnLastWindowClosed(False)
-    icon = QIcon(str(_icon_path()))
-    app.setWindowIcon(icon)
+    capture_icon = QIcon(str(_icon_path()))
+    editor_icon = QIcon(str(_editor_icon_path()))
+    app.setWindowIcon(capture_icon)
     controller = AppController(app)
-    controller.capture_panel.setWindowIcon(icon)
-    controller.editor_host.setWindowIcon(icon)
+    controller.capture_panel.setWindowIcon(capture_icon)
+    controller.editor_host.setWindowIcon(editor_icon)
     controller.show()
     return app.exec()
 

@@ -418,6 +418,7 @@ class WindowCaptureOverlay(QWidget):
         )
         self.setGeometry(self._virtual_geometry)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self._poll_timer.start()
 
@@ -561,6 +562,7 @@ class WindowCaptureOverlay(QWidget):
         """
 
         self._poll_timer.stop()
+        self.releaseKeyboard()
         super().closeEvent(event)
 
 
@@ -852,6 +854,9 @@ def execute_capture_request(
         overlay = WindowCaptureOverlay(screenshot, virtual_geometry)
         _track_overlay(overlay)
         overlay.show()
+        overlay.raise_()
+        overlay.activateWindow()
+        overlay.grabKeyboard()
 
         process = subprocess.Popen(
             ["xdotool", "selectwindow"],
@@ -859,8 +864,23 @@ def execute_capture_request(
             stderr=subprocess.PIPE,
             text=True,
         )
+        selection_state = {"cancelled": False}
+
+        def cancel_selection() -> None:
+            if selection_state["cancelled"]:
+                return
+            selection_state["cancelled"] = True
+            if process.poll() is None:
+                process.terminate()
+            _untrack_overlay(overlay)
+            overlay.close()
+            on_cancel()
+
+        overlay.capture_cancelled.connect(cancel_selection)
 
         def check_selection_process() -> None:
+            if selection_state["cancelled"]:
+                return
             return_code = process.poll()
             if return_code is None:
                 QTimer.singleShot(70, check_selection_process)
