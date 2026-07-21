@@ -446,7 +446,6 @@ class AppController:
         """
 
         self.app.setWindowIcon(self.capture_panel.windowIcon())
-        self.app.setDesktopFileName("snapagent")
         self.capture_panel.show()
         if self._startup_project_path:
             self._open_project_in_editor(self._startup_project_path)
@@ -474,7 +473,6 @@ class AppController:
         tab_index = self.editor_tabs.addTab(editor, title)
         self.editor_tabs.setCurrentIndex(tab_index)
         self.app.setWindowIcon(self.editor_host.windowIcon())
-        self.app.setDesktopFileName("snapagent-editor")
         self._ensure_editor_host_geometry()
         self.editor_host.show()
         self.editor_host.raise_()
@@ -677,7 +675,6 @@ class AppController:
             self._create_editor_tab(blank_pixmap, "New Canvas")
             return
         self.app.setWindowIcon(self.editor_host.windowIcon())
-        self.app.setDesktopFileName("snapagent-editor")
         self._ensure_editor_host_geometry()
         self.editor_host.show()
         self.editor_host.raise_()
@@ -737,7 +734,6 @@ class AppController:
             if self.editor_tabs.count() == 0:
                 self.editor_host.hide()
                 self.app.setWindowIcon(self.capture_panel.windowIcon())
-                self.app.setDesktopFileName("snapagent")
         except RuntimeError:
             return
 
@@ -809,7 +805,6 @@ class AppController:
                     widget.hide()
             except RuntimeError:
                 continue
-        self.app.setDesktopFileName("snapagent")
         self.app.setWindowIcon(self.capture_panel.windowIcon())
         if self.tray_icon.isVisible():
             self.tray_icon.showMessage(
@@ -832,13 +827,11 @@ class AppController:
         self.capture_panel.activateWindow()
         if self.editor_tabs.count() > 0:
             self.app.setWindowIcon(self.editor_host.windowIcon())
-            self.app.setDesktopFileName("snapagent-editor")
             self.editor_host.show()
             self.editor_host.raise_()
             self.editor_host.activateWindow()
             return
         self.app.setWindowIcon(self.capture_panel.windowIcon())
-        self.app.setDesktopFileName("snapagent")
 
     def _on_tray_activated(self, reason) -> None:
         """
@@ -938,12 +931,12 @@ def _launch_gui(startup_project_path: str = "") -> int:
         return 0
     _ensure_desktop_launcher()
 
-    from PySide6.QtGui import QIcon
+    from PySide6.QtGui import QGuiApplication, QIcon
     from PySide6.QtWidgets import QApplication
 
+    QGuiApplication.setDesktopFileName("snapagent")
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
-    app.setDesktopFileName("snapagent")
     app.setQuitOnLastWindowClosed(False)
     capture_icon = QIcon(str(_icon_path()))
     editor_icon = QIcon(str(_editor_icon_path()))

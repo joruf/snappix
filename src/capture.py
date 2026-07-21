@@ -567,6 +567,55 @@ class WindowCaptureOverlay(QWidget):
             self.capture_cancelled.emit()
             self.close()
 
+    def _to_local_rect(self, global_rect: QRect) -> QRect:
+        """
+        Converts a global desktop rect into local overlay coordinates.
+
+        Args:
+            global_rect: Geometry in global desktop coordinates.
+
+        Returns:
+            QRect: Geometry mapped into local scene coordinates.
+        """
+
+        return global_rect.translated(
+            -self._virtual_geometry.x(),
+            -self._virtual_geometry.y(),
+        )
+
+    def _update_hover_from_cursor(self) -> None:
+        """
+        Polls cursor position and updates highlighted target window.
+
+        Returns:
+            None
+        """
+
+        rect = detect_window_geometry(QCursor.pos())
+        if rect == self._hover_rect:
+            return
+        self._hover_rect = rect
+        if rect.isNull():
+            self._hover_label = ""
+        else:
+            self._hover_label = f"X:{rect.x()} Y:{rect.y()} W:{rect.width()} H:{rect.height()}"
+        self.update()
+
+    def closeEvent(self, event) -> None:
+        """
+        Stops polling timer when overlay closes.
+
+        Args:
+            event: Qt close event.
+
+        Returns:
+            None
+        """
+
+        self._poll_timer.stop()
+        self.releaseKeyboard()
+        super().closeEvent(event)
+
 
 class ColorPickerOverlay(QWidget):
     """
@@ -755,56 +804,6 @@ class ColorPickerOverlay(QWidget):
             return None
         image = self._screenshot.toImage()
         return image.pixelColor(local_pos)
-
-    def _to_local_rect(self, global_rect: QRect) -> QRect:
-        """
-        Converts a global desktop rect into local overlay coordinates.
-
-        Args:
-            global_rect: Geometry in global desktop coordinates.
-
-        Returns:
-            QRect: Geometry mapped into local scene coordinates.
-        """
-
-        return global_rect.translated(
-            -self._virtual_geometry.x(),
-            -self._virtual_geometry.y(),
-        )
-
-    def _update_hover_from_cursor(self) -> None:
-        """
-        Polls cursor position and updates highlighted target window.
-
-        Returns:
-            None
-        """
-
-        rect = detect_window_geometry(QCursor.pos())
-        if rect == self._hover_rect:
-            return
-        self._hover_rect = rect
-        if rect.isNull():
-            self._hover_label = ""
-        else:
-            self._hover_label = f"X:{rect.x()} Y:{rect.y()} W:{rect.width()} H:{rect.height()}"
-        self.update()
-
-    def closeEvent(self, event) -> None:
-        """
-        Stops polling timer when overlay closes.
-
-        Args:
-            event: Qt close event.
-
-        Returns:
-            None
-        """
-
-        self._poll_timer.stop()
-        self.releaseKeyboard()
-        super().closeEvent(event)
-
 
 def detect_window_geometry(global_pos: QPoint) -> QRect:
     """
