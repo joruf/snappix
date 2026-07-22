@@ -292,7 +292,7 @@ def build_application_stylesheet(theme_name: str | None = None) -> str:
         f"QWidget#editorToolbar {{ background: {colors.surface_alt}; }}"
         f"QWidget#editorToolStrip {{ background: transparent; }}"
         f"QWidget#editorToolbar QToolButton, QWidget#editorToolbar QPushButton {{"
-        f" padding: 0px 4px; min-height: 18px; max-height: 24px;"
+        f" padding: 0px 4px; min-height: 18px; max-height: 28px;"
         f" }}"
         f"QWidget#editorToolbar QComboBox, QWidget#editorToolbar QSpinBox,"
         f" QWidget#editorToolbar QDoubleSpinBox {{"

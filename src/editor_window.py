@@ -17,6 +17,7 @@ from PySide6.QtCore import (
     QIODevice,
     QPointF,
     QRectF,
+    QSize,
     Qt,
     Signal,
     QMimeData,
@@ -420,10 +421,11 @@ class EditorWindow(QMainWindow):
             button.setText(label)
             button.setCheckable(True)
             button.setIcon(self._build_tool_icon(tool_key))
+            button.setIconSize(QSize(22, 22))
             button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            button.setFixedSize(26, 24)
+            button.setFixedSize(32, 28)
             button.setToolTip(label)
-            self._configure_compact_toolbar_height(button, 24)
+            self._configure_compact_toolbar_height(button, 28)
             button.clicked.connect(
                 lambda _checked=False, t=tool_key: self._on_tool_button_clicked(t)
             )
@@ -877,21 +879,25 @@ class EditorWindow(QMainWindow):
         } or resolved_type in {"rect", "ellipse", "line", "arrow", "step", "image"}:
             self._property_tabs.setCurrentIndex(self._PROPERTY_TAB_STYLE)
 
-    def _build_tool_icon(self, tool: str) -> QIcon:
+    def _build_tool_icon(self, tool: str, *, locked: bool = False) -> QIcon:
         """
-        Builds a compact vector icon for one toolbar drawing tool.
+        Builds a vector icon for one toolbar drawing tool.
 
         Args:
             tool: Tool identifier.
+            locked: True to overlay a lock badge on the icon.
 
         Returns:
             QIcon: Rendered icon.
         """
 
-        pixmap = QPixmap(18, 18)
+        size = 22
+        scale = size / 18.0
+        pixmap = QPixmap(size, size)
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.scale(scale, scale)
 
         stroke_pen = QPen(QColor("#d7e3f1"), 1.6)
         accent_pen = QPen(QColor(get_editor_accent_colors()[0]), 1.6)
@@ -951,7 +957,11 @@ class EditorWindow(QMainWindow):
             painter.setBrush(QBrush(QColor(231, 76, 60, 230)))
             painter.drawEllipse(QRectF(3.0, 3.0, 12.0, 12.0))
             painter.setPen(QColor(255, 255, 255, 255))
-            painter.drawText(QRectF(3.0, 2.0, 12.0, 14.0), int(Qt.AlignmentFlag.AlignCenter), "1")
+            painter.drawText(
+                QRectF(3.0, 2.0, 12.0, 14.0),
+                int(Qt.AlignmentFlag.AlignCenter),
+                "1",
+            )
         elif tool == Tool.OCR:
             painter.setPen(QPen(QColor("#2ecc71"), 1.6))
             text_font = painter.font()
@@ -970,6 +980,18 @@ class EditorWindow(QMainWindow):
         else:
             painter.setPen(stroke_pen)
             painter.drawRect(QRectF(4.0, 4.0, 10.0, 10.0))
+
+        if locked:
+            painter.resetTransform()
+            badge_bg = QColor(20, 24, 32, 230)
+            badge_pen = QPen(QColor("#f1c40f"), 1.2)
+            painter.setPen(badge_pen)
+            painter.setBrush(QBrush(badge_bg))
+            body = QRectF(size - 10.0, size - 8.5, 8.5, 6.5)
+            painter.drawRoundedRect(body, 1.2, 1.2)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            shackle = QRectF(size - 8.4, size - 12.2, 5.2, 5.0)
+            painter.drawArc(shackle, 0 * 16, 180 * 16)
 
         painter.end()
         return QIcon(pixmap)
@@ -1504,7 +1526,7 @@ class EditorWindow(QMainWindow):
 
     def _update_tool_lock_visuals(self) -> None:
         """
-        Updates tool button captions and lock symbol visibility.
+        Updates tool button icons to show a lock badge when locked.
 
         Returns:
             None
@@ -1513,10 +1535,12 @@ class EditorWindow(QMainWindow):
         for tool_key in self._tool_button_order:
             button = self._tool_buttons[tool_key]
             base_label = self._tool_button_labels[tool_key]
-            if tool_key == self._locked_tool:
-                button.setText(f"{base_label} 🔒")
+            locked = tool_key == self._locked_tool
+            button.setIcon(self._build_tool_icon(tool_key, locked=locked))
+            if locked:
+                button.setToolTip(f"{base_label} (locked – double-click to unlock)")
             else:
-                button.setText(base_label)
+                button.setToolTip(base_label)
 
     def _set_next_history_label(self, label: str) -> None:
         """
