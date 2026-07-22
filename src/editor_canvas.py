@@ -92,7 +92,13 @@ from src.models import AnnotationModel
 from src.ocr import extract_text_from_png_bytes
 from src.platform import has_tesseract
 from src.scroll_capture import pixmap_to_png_bytes
-from src.theme import THEME_LIGHT, current_theme_name, get_theme_colors, normalize_theme_name
+from src.theme import (
+    THEME_LIGHT,
+    current_theme_name,
+    get_editor_accent_colors,
+    get_theme_colors,
+    normalize_theme_name,
+)
 
 _WORKSPACE_MARGIN_MIN = 96.0
 _WORKSPACE_MARGIN_RATIO = 0.15
@@ -193,6 +199,12 @@ class EditorCanvas(QGraphicsView):
         self._base_content_size = QSizeF(0.0, 0.0)
         self._fitting_document = False
         self._auto_crop_on_shrink = True
+        self._copy_feedback_item: QGraphicsRectItem | None = None
+        self._copy_feedback_timer = QTimer(self)
+        self._copy_feedback_timer.setInterval(40)
+        self._copy_feedback_timer.timeout.connect(self._on_copy_feedback_tick)
+        self._copy_feedback_dash_offset = 0.0
+        self._copy_feedback_ticks = 0
         self._workspace_item = QGraphicsRectItem()
         self._workspace_item.setZValue(-2000)
         self._workspace_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
@@ -349,6 +361,8 @@ class EditorCanvas(QGraphicsView):
             blocked.add(self._crop_shade_item)
         if self._resize_overlay_item is not None:
             blocked.add(self._resize_overlay_item)
+        if self._copy_feedback_item is not None:
+            blocked.add(self._copy_feedback_item)
         return frozenset(blocked)
 
     def _compute_workspace_margin(self, width: float, height: float) -> float:
@@ -1680,6 +1694,7 @@ class EditorCanvas(QGraphicsView):
         self._crop_item = None
         self._remove_crop_shade_item()
         self._clear_resize_overlay()
+        self.clear_copy_feedback()
         self.crop_selection_changed.emit(False)
 
     def collect_annotations(self) -> list[AnnotationModel]:
@@ -1734,6 +1749,10 @@ class EditorCanvas(QGraphicsView):
         if self._resize_overlay_item is not None:
             resize_overlay_was_visible = self._resize_overlay_item.isVisible()
             self._resize_overlay_item.setVisible(False)
+        copy_feedback_was_visible = False
+        if self._copy_feedback_item is not None:
+            copy_feedback_was_visible = self._copy_feedback_item.isVisible()
+            self._copy_feedback_item.setVisible(False)
         image = QImage(rect.size(), QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.transparent)
         painter = QPainter(image)
@@ -1741,7 +1760,87 @@ class EditorCanvas(QGraphicsView):
         painter.end()
         if self._resize_overlay_item is not None:
             self._resize_overlay_item.setVisible(resize_overlay_was_visible)
+        if self._copy_feedback_item is not None:
+            self._copy_feedback_item.setVisible(copy_feedback_was_visible)
         return QPixmap.fromImage(image)
+
+    def flash_copy_feedback(self) -> None:
+        """
+        Shows a temporary dashed frame around the copied drawing area.
+
+        Returns:
+            None
+        """
+
+        document_rect = self.document_rect()
+        if document_rect.width() < 1.0 or document_rect.height() < 1.0:
+            return
+
+        self.clear_copy_feedback()
+        accent_hex, _ = get_editor_accent_colors()
+        accent = QColor(accent_hex)
+        frame_rect = document_rect.adjusted(-3.0, -3.0, 3.0, 3.0)
+        item = QGraphicsRectItem(frame_rect)
+        pen = QPen(accent, 2.5, Qt.PenStyle.DashLine)
+        pen.setCosmetic(True)
+        pen.setDashPattern([7.0, 5.0])
+        item.setPen(pen)
+        fill = QColor(accent)
+        fill.setAlpha(40)
+        item.setBrush(QBrush(fill))
+        item.setZValue(12000)
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self._scene.addItem(item)
+        self._copy_feedback_item = item
+        self._copy_feedback_dash_offset = 0.0
+        self._copy_feedback_ticks = 0
+        self._copy_feedback_timer.start()
+
+    def clear_copy_feedback(self) -> None:
+        """
+        Removes the temporary copy-feedback frame from the scene.
+
+        Returns:
+            None
+        """
+
+        self._copy_feedback_timer.stop()
+        if self._copy_feedback_item is not None and self._copy_feedback_item.scene() is self._scene:
+            self._scene.removeItem(self._copy_feedback_item)
+        self._copy_feedback_item = None
+        self._copy_feedback_dash_offset = 0.0
+        self._copy_feedback_ticks = 0
+
+    def _on_copy_feedback_tick(self) -> None:
+        """
+        Animates the copy-feedback frame and removes it after a short delay.
+
+        Returns:
+            None
+        """
+
+        if self._copy_feedback_item is None:
+            self._copy_feedback_timer.stop()
+            return
+
+        self._copy_feedback_ticks += 1
+        self._copy_feedback_dash_offset += 1.8
+        pen = self._copy_feedback_item.pen()
+        pen.setDashOffset(self._copy_feedback_dash_offset)
+        self._copy_feedback_item.setPen(pen)
+
+        # Fade the fill after the first half of the animation.
+        if self._copy_feedback_ticks >= 18:
+            brush = self._copy_feedback_item.brush()
+            color = brush.color()
+            color.setAlpha(max(0, color.alpha() - 4))
+            brush.setColor(color)
+            self._copy_feedback_item.setBrush(brush)
+
+        # ~1.4s at 40ms interval.
+        if self._copy_feedback_ticks >= 35:
+            self.clear_copy_feedback()
 
     def paste_from_clipboard(self, view_pos: QPoint | None = None) -> None:
         """

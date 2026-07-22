@@ -3939,7 +3939,7 @@ class EditorWindow(QMainWindow):
 
         mime_data = self._build_canvas_clipboard_mime_data()
         QGuiApplication.clipboard().setMimeData(mime_data)
-        self.statusBar().showMessage("Drawing area copied to clipboard")
+        self._show_drawing_area_copied_feedback()
 
     def copy_drawing_area_to_clipboard(self) -> None:
         """
@@ -3951,7 +3951,26 @@ class EditorWindow(QMainWindow):
 
         mime_data = self._build_canvas_clipboard_mime_data()
         QGuiApplication.clipboard().setMimeData(mime_data)
-        self.statusBar().showMessage("Drawing area copied for cross-tab paste", 2500)
+        self._show_drawing_area_copied_feedback()
+
+    def _show_drawing_area_copied_feedback(self) -> None:
+        """
+        Shows canvas and status-bar feedback after copying the drawing area.
+
+        Returns:
+            None
+        """
+
+        self.canvas.flash_copy_feedback()
+        document = self.canvas.document_rect()
+        width = max(1, int(round(document.width())))
+        height = max(1, int(round(document.height())))
+        annotation_count = len(self.canvas.collect_annotations())
+        annotation_label = "annotation" if annotation_count == 1 else "annotations"
+        self.statusBar().showMessage(
+            f"Drawing area copied ({width}×{height}, {annotation_count} {annotation_label})",
+            3500,
+        )
 
     def _build_canvas_clipboard_mime_data(self) -> QMimeData:
         """
