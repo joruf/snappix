@@ -85,6 +85,62 @@ def _install_escape_shortcut(widget: QWidget, callback: Callable[[], None]) -> Q
     return shortcut
 
 
+def draw_cursor_edge_guides(painter: QPainter, bounds: QRect, point: QPoint) -> None:
+    """
+    Draws fading guide lines from the cursor to the four edges of ``bounds``.
+
+    Args:
+        painter: Active painter.
+        bounds: Overlay rectangle in local coordinates.
+        point: Cursor position in local coordinates.
+
+    Returns:
+        None
+    """
+
+    if not bounds.contains(point):
+        return
+
+    fade_color = QColor(255, 255, 255, 170)
+    transparent = QColor(255, 255, 255, 0)
+
+    left_gradient = QLinearGradient(point.x(), point.y(), bounds.left(), point.y())
+    left_gradient.setColorAt(0.0, fade_color)
+    left_gradient.setColorAt(1.0, transparent)
+    left_pen = QPen()
+    left_pen.setWidthF(1.2)
+    left_pen.setBrush(left_gradient)
+    painter.setPen(left_pen)
+    painter.drawLine(point.x(), point.y(), bounds.left(), point.y())
+
+    right_gradient = QLinearGradient(point.x(), point.y(), bounds.right(), point.y())
+    right_gradient.setColorAt(0.0, fade_color)
+    right_gradient.setColorAt(1.0, transparent)
+    right_pen = QPen()
+    right_pen.setWidthF(1.2)
+    right_pen.setBrush(right_gradient)
+    painter.setPen(right_pen)
+    painter.drawLine(point.x(), point.y(), bounds.right(), point.y())
+
+    top_gradient = QLinearGradient(point.x(), point.y(), point.x(), bounds.top())
+    top_gradient.setColorAt(0.0, fade_color)
+    top_gradient.setColorAt(1.0, transparent)
+    top_pen = QPen()
+    top_pen.setWidthF(1.2)
+    top_pen.setBrush(top_gradient)
+    painter.setPen(top_pen)
+    painter.drawLine(point.x(), point.y(), point.x(), bounds.top())
+
+    bottom_gradient = QLinearGradient(point.x(), point.y(), point.x(), bounds.bottom())
+    bottom_gradient.setColorAt(0.0, fade_color)
+    bottom_gradient.setColorAt(1.0, transparent)
+    bottom_pen = QPen()
+    bottom_pen.setWidthF(1.2)
+    bottom_pen.setBrush(bottom_gradient)
+    painter.setPen(bottom_pen)
+    painter.drawLine(point.x(), point.y(), point.x(), bounds.bottom())
+
+
 @dataclass(slots=True)
 class CaptureRequest:
     """
@@ -386,6 +442,7 @@ class RegionCaptureOverlay(QWidget):
         self._virtual_geometry = virtual_geometry
         self._start_point = QPoint()
         self._current_point = QPoint()
+        self._cursor_point = QPoint(-1, -1)
         self._dragging = False
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
@@ -394,11 +451,27 @@ class RegionCaptureOverlay(QWidget):
         )
         self.setGeometry(self._virtual_geometry)
         self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._escape_shortcut = _install_escape_shortcut(self, self._cancel_capture)
+
+    def showEvent(self, event) -> None:
+        """
+        Seeds the cursor guide position when the overlay becomes visible.
+
+        Args:
+            event: Qt show event.
+
+        Returns:
+            None
+        """
+
+        self._cursor_point = self.mapFromGlobal(QCursor.pos())
+        super().showEvent(event)
 
     def paintEvent(self, _) -> None:
         """
-        Paints the screenshot background and selection rectangle.
+        Paints the screenshot background, cursor guides, and selection rectangle.
 
         Returns:
             None
@@ -407,6 +480,8 @@ class RegionCaptureOverlay(QWidget):
         painter = QPainter(self)
         painter.drawPixmap(0, 0, self._screenshot)
         painter.fillRect(self.rect(), QColor(0, 0, 0, 60))
+        if self.rect().contains(self._cursor_point):
+            draw_cursor_edge_guides(painter, self.rect(), self._cursor_point)
         if self._dragging:
             selection = QRect(self._start_point, self._current_point).normalized()
             if selection.width() > 0 and selection.height() > 0:
@@ -440,12 +515,13 @@ class RegionCaptureOverlay(QWidget):
             return
         self._start_point = event.position().toPoint()
         self._current_point = self._start_point
+        self._cursor_point = self._current_point
         self._dragging = True
         self.update()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """
-        Updates drag rectangle while moving.
+        Updates cursor guides and drag rectangle while moving.
 
         Args:
             event: Mouse event.
@@ -454,9 +530,9 @@ class RegionCaptureOverlay(QWidget):
             None
         """
 
-        if not self._dragging:
-            return
-        self._current_point = event.position().toPoint()
+        self._cursor_point = event.position().toPoint()
+        if self._dragging:
+            self._current_point = self._cursor_point
         self.update()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
@@ -1032,7 +1108,7 @@ class ColorPickerOverlay(QWidget):
         painter.fillRect(self.rect(), QColor(0, 0, 0, 20))
         if not self.rect().contains(self._hover_point):
             return
-        self._draw_crossfade_guides(painter, self._hover_point)
+        draw_cursor_edge_guides(painter, self.rect(), self._hover_point)
         color = self._color_at(self._hover_point)
         if color is None:
             return
@@ -1057,57 +1133,6 @@ class ColorPickerOverlay(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
             color.name().upper(),
         )
-
-    def _draw_crossfade_guides(self, painter: QPainter, point: QPoint) -> None:
-        """
-        Draws fading guide lines from cursor to all overlay edges.
-
-        Args:
-            painter: Active overlay painter.
-            point: Cursor position in local overlay coordinates.
-
-        Returns:
-            None
-        """
-
-        fade_color = QColor(255, 255, 255, 170)
-        transparent = QColor(255, 255, 255, 0)
-
-        left_gradient = QLinearGradient(point.x(), point.y(), 0, point.y())
-        left_gradient.setColorAt(0.0, fade_color)
-        left_gradient.setColorAt(1.0, transparent)
-        left_pen = QPen()
-        left_pen.setWidthF(1.2)
-        left_pen.setBrush(left_gradient)
-        painter.setPen(left_pen)
-        painter.drawLine(point.x(), point.y(), 0, point.y())
-
-        right_gradient = QLinearGradient(point.x(), point.y(), self.width(), point.y())
-        right_gradient.setColorAt(0.0, fade_color)
-        right_gradient.setColorAt(1.0, transparent)
-        right_pen = QPen()
-        right_pen.setWidthF(1.2)
-        right_pen.setBrush(right_gradient)
-        painter.setPen(right_pen)
-        painter.drawLine(point.x(), point.y(), self.width(), point.y())
-
-        top_gradient = QLinearGradient(point.x(), point.y(), point.x(), 0)
-        top_gradient.setColorAt(0.0, fade_color)
-        top_gradient.setColorAt(1.0, transparent)
-        top_pen = QPen()
-        top_pen.setWidthF(1.2)
-        top_pen.setBrush(top_gradient)
-        painter.setPen(top_pen)
-        painter.drawLine(point.x(), point.y(), point.x(), 0)
-
-        bottom_gradient = QLinearGradient(point.x(), point.y(), point.x(), self.height())
-        bottom_gradient.setColorAt(0.0, fade_color)
-        bottom_gradient.setColorAt(1.0, transparent)
-        bottom_pen = QPen()
-        bottom_pen.setWidthF(1.2)
-        bottom_pen.setBrush(bottom_gradient)
-        painter.setPen(bottom_pen)
-        painter.drawLine(point.x(), point.y(), point.x(), self.height())
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """
