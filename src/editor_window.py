@@ -46,10 +46,8 @@ from PySide6.QtWidgets import (
     QColorDialog,
     QDialog,
     QDialogButtonBox,
-    QFrame,
     QFileDialog,
     QDoubleSpinBox,
-    QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -63,6 +61,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -90,7 +89,6 @@ from src.annotation_items import (
 )
 from src.annotation_shapes import TEXT_STYLE_BOX, TEXT_STYLE_BUBBLE, TEXT_STYLE_PLAIN
 from src.editor_canvas import EditorCanvas, Tool
-from src.flow_layout import FlowLayoutWidget, sort_widgets_by_area_descending
 from src.models import AnnotationModel, ProjectModel
 from src.storage import (
     base64_png_to_pixmap,
@@ -316,7 +314,6 @@ class EditorWindow(QMainWindow):
         self._pending_history_label: str | None = None
         self._syncing_history_list = False
         self._syncing_layer_panel = False
-        self._toolbar_groups: list[QWidget] = []
         self._palette_buttons: list[QPushButton] = []
         self._active_tool = Tool.SELECT
         self._locked_tool: str | None = None
@@ -324,8 +321,6 @@ class EditorWindow(QMainWindow):
         self._tool_button_order: list[str] = []
         self._tool_button_labels: dict[str, str] = {}
         self._tool_button_to_key: dict[QToolButton, str] = {}
-        self._tool_button_fixed_width = 116
-        self._tools_buttons_columns = 4
         self._current_stroke_color = QColor(231, 76, 60, 255)
         self._current_fill_color = QColor(231, 76, 60, 80)
         self._current_text_color = QColor(44, 62, 80, 255)
@@ -352,8 +347,8 @@ class EditorWindow(QMainWindow):
         self.canvas.crop_applied.connect(self._on_crop_applied)
 
         self._toolbar_widget = self._build_toolbar()
-        root.addWidget(self._toolbar_widget)
-        root.addWidget(self.canvas)
+        root.addWidget(self._toolbar_widget, 0)
+        root.addWidget(self.canvas, 1)
 
         self._selection_info_label = QLabel("")
         self._selection_info_label.setObjectName("editorSelectionInfo")
@@ -373,7 +368,7 @@ class EditorWindow(QMainWindow):
 
     def _build_toolbar(self) -> QWidget:
         """
-        Creates the slim top tool panel.
+        Creates the compact tool strip and tabbed property panels.
 
         Returns:
             QWidget: Toolbar container widget.
@@ -381,17 +376,10 @@ class EditorWindow(QMainWindow):
 
         bar = QWidget(self)
         bar.setObjectName("editorToolbar")
+        bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         root_layout = QVBoxLayout(bar)
-        root_layout.setContentsMargins(4, 2, 4, 2)
-        root_layout.setSpacing(3)
-
-        self._toolbar_groups_container = FlowLayoutWidget(
-            bar,
-            horizontal_spacing=6,
-            vertical_spacing=3,
-        )
-        self._toolbar_groups_layout = self._toolbar_groups_container.flow_layout
-        root_layout.addWidget(self._toolbar_groups_container)
+        root_layout.setContentsMargins(4, 1, 4, 1)
+        root_layout.setSpacing(1)
 
         palette_colors = [
             QColor("#e74c3c"),
@@ -406,32 +394,16 @@ class EditorWindow(QMainWindow):
             QColor("#000000"),
         ]
 
-        tools_group, tools_content = self._create_toolbar_group("Tools")
-        tools_vertical_layout = QVBoxLayout()
-        tools_vertical_layout.setContentsMargins(0, 0, 0, 0)
-        tools_vertical_layout.setSpacing(2)
-        tools_content.addLayout(tools_vertical_layout)
-
-        self._tools_buttons_container = QWidget(tools_group)
-        self._tools_buttons_container.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Maximum,
-        )
-        button_spacing = 4
-        tools_grid_width = (
-            self._tools_buttons_columns * self._tool_button_fixed_width
-            + (self._tools_buttons_columns - 1) * button_spacing
-        )
-        self._tools_buttons_container.setFixedWidth(tools_grid_width)
-        self._tools_buttons_layout = QGridLayout(self._tools_buttons_container)
-        self._tools_buttons_layout.setContentsMargins(0, 0, 0, 0)
-        self._tools_buttons_layout.setHorizontalSpacing(button_spacing)
-        self._tools_buttons_layout.setVerticalSpacing(button_spacing)
-        tools_vertical_layout.addWidget(self._tools_buttons_container)
+        strip = QWidget(bar)
+        strip.setObjectName("editorToolStrip")
+        strip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        strip_layout = QHBoxLayout(strip)
+        strip_layout.setContentsMargins(2, 0, 2, 0)
+        strip_layout.setSpacing(3)
+        strip_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         self._tool_buttons: dict[str, QToolButton] = {}
-        for index, (tool_key, label) in enumerate(
-            [
+        for tool_key, label in [
             (Tool.SELECT, "Select"),
             (Tool.RECT, "Rectangle"),
             (Tool.ELLIPSE, "Circle"),
@@ -443,15 +415,15 @@ class EditorWindow(QMainWindow):
             (Tool.STEP, "Step"),
             (Tool.OCR, "OCR"),
             (Tool.CROP, "Crop"),
-            ]
-        ):
+        ]:
             button = QToolButton()
             button.setText(label)
             button.setCheckable(True)
             button.setIcon(self._build_tool_icon(tool_key))
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            button.setFixedWidth(self._tool_button_fixed_width)
-            self._configure_compact_toolbar_height(button, 26)
+            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setFixedSize(26, 24)
+            button.setToolTip(label)
+            self._configure_compact_toolbar_height(button, 24)
             button.clicked.connect(
                 lambda _checked=False, t=tool_key: self._on_tool_button_clicked(t)
             )
@@ -460,29 +432,155 @@ class EditorWindow(QMainWindow):
             self._tool_button_order.append(tool_key)
             self._tool_button_labels[tool_key] = label
             self._tool_button_to_key[button] = tool_key
-            row = index // self._tools_buttons_columns
-            column = index % self._tools_buttons_columns
-            self._tools_buttons_layout.addWidget(button, row, column)
+            strip_layout.addWidget(button)
         self._tool_buttons[Tool.SELECT].setChecked(True)
 
-        tools_actions_row = QHBoxLayout()
-        tools_actions_row.setContentsMargins(0, 0, 0, 0)
-        tools_actions_row.setSpacing(3)
+        strip_layout.addSpacing(8)
+        self.history_undo_button = QPushButton("Undo")
+        self.history_undo_button.clicked.connect(self.undo)
+        self._configure_compact_toolbar_height(self.history_undo_button)
+        strip_layout.addWidget(self.history_undo_button)
+        self.history_redo_button = QPushButton("Redo")
+        self.history_redo_button.clicked.connect(self.redo)
+        self._configure_compact_toolbar_height(self.history_redo_button)
+        strip_layout.addWidget(self.history_redo_button)
+        self.history_list_combo = QComboBox()
+        self.history_list_combo.setMinimumWidth(160)
+        self.history_list_combo.currentIndexChanged.connect(self._on_history_entry_selected)
+        self._configure_compact_toolbar_height(self.history_list_combo)
+        strip_layout.addWidget(self.history_list_combo)
+        self.history_status_label = QLabel("1/1")
+        self._configure_compact_toolbar_height(self.history_status_label, 22)
+        strip_layout.addWidget(self.history_status_label)
+
+        strip_layout.addStretch(1)
+
+        self.zoom_out_button = QPushButton("-")
+        self.zoom_out_button.clicked.connect(self.canvas.zoom_out)
+        self._configure_compact_action_button(self.zoom_out_button)
+        self._configure_compact_toolbar_height(self.zoom_out_button)
+        strip_layout.addWidget(self.zoom_out_button)
+
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setMinimumWidth(42)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._configure_compact_toolbar_height(self.zoom_label, 22)
+        strip_layout.addWidget(self.zoom_label)
+
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(10, 400)
+        self.zoom_slider.setValue(100)
+        self.zoom_slider.setFixedWidth(100)
+        self.zoom_slider.setToolTip("Zoom: left smaller, right larger")
+        self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
+        self._configure_compact_toolbar_height(self.zoom_slider, 22)
+        strip_layout.addWidget(self.zoom_slider)
+
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.clicked.connect(self.canvas.zoom_in)
+        self._configure_compact_action_button(self.zoom_in_button)
+        self._configure_compact_toolbar_height(self.zoom_in_button)
+        strip_layout.addWidget(self.zoom_in_button)
+
+        self.zoom_reset_button = QPushButton("Reset")
+        self.zoom_reset_button.clicked.connect(self.canvas.reset_zoom)
+        self._configure_compact_action_button(self.zoom_reset_button)
+        self._configure_compact_toolbar_height(self.zoom_reset_button)
+        strip_layout.addWidget(self.zoom_reset_button)
+
+        root_layout.addWidget(strip)
+
+        self._property_tabs = QTabWidget(bar)
+        self._property_tabs.setObjectName("editorPropertyTabs")
+        self._property_tabs.setDocumentMode(True)
+        self._property_tabs.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
+        )
+        self._PROPERTY_TAB_STYLE = 0
+        self._PROPERTY_TAB_TEXT = 1
+        self._PROPERTY_TAB_ARRANGE = 2
+        self._PROPERTY_TAB_EXPORT = 3
+
+        style_tab = QWidget()
+        style_layout = QHBoxLayout(style_tab)
+        style_layout.setContentsMargins(4, 0, 4, 0)
+        style_layout.setSpacing(3)
+        style_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+
+        self.stroke_button = QPushButton("Border")
+        self.stroke_button.setFixedWidth(64)
+        self.stroke_button.clicked.connect(self._choose_stroke_color)
+        self._configure_compact_toolbar_height(self.stroke_button)
+        style_layout.addWidget(self.stroke_button)
+        for color in palette_colors:
+            style_layout.addWidget(self._create_palette_button(color, "stroke"))
+        self.stroke_alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self.stroke_alpha_slider.setRange(0, 100)
+        self.stroke_alpha_slider.setValue(100)
+        self.stroke_alpha_slider.setFixedWidth(56)
+        self.stroke_alpha_slider.setToolTip("Border opacity")
+        self.stroke_alpha_slider.valueChanged.connect(self._stroke_alpha_changed)
+        self._configure_compact_toolbar_height(self.stroke_alpha_slider, 22)
+        style_layout.addWidget(self.stroke_alpha_slider)
+        self.stroke_alpha_label = QLabel("100%")
+        self._configure_compact_toolbar_height(self.stroke_alpha_label, 22)
+        style_layout.addWidget(self.stroke_alpha_label)
+
+        style_layout.addSpacing(6)
+        self.fill_button = QPushButton("Fill")
+        self.fill_button.setFixedWidth(52)
+        self.fill_button.clicked.connect(self._choose_fill_color)
+        self._configure_compact_toolbar_height(self.fill_button)
+        style_layout.addWidget(self.fill_button)
+        for color in palette_colors:
+            style_layout.addWidget(self._create_palette_button(color, "fill"))
+        self.fill_alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self.fill_alpha_slider.setRange(0, 100)
+        self.fill_alpha_slider.setValue(31)
+        self.fill_alpha_slider.setFixedWidth(56)
+        self.fill_alpha_slider.setToolTip("Fill opacity")
+        self.fill_alpha_slider.valueChanged.connect(self._fill_alpha_changed)
+        self._configure_compact_toolbar_height(self.fill_alpha_slider, 22)
+        style_layout.addWidget(self.fill_alpha_slider)
+        self.fill_alpha_label = QLabel("31%")
+        self._configure_compact_toolbar_height(self.fill_alpha_label, 22)
+        style_layout.addWidget(self.fill_alpha_label)
+
+        style_layout.addSpacing(6)
+        self.text_color_button = QPushButton("Text")
+        self.text_color_button.setFixedWidth(52)
+        self.text_color_button.clicked.connect(self._choose_text_color)
+        self._configure_compact_toolbar_height(self.text_color_button)
+        style_layout.addWidget(self.text_color_button)
+        for color in palette_colors:
+            style_layout.addWidget(self._create_palette_button(color, "text"))
+        self.text_alpha_slider = QSlider(Qt.Orientation.Horizontal)
+        self.text_alpha_slider.setRange(0, 100)
+        self.text_alpha_slider.setValue(100)
+        self.text_alpha_slider.setFixedWidth(56)
+        self.text_alpha_slider.setToolTip("Text opacity")
+        self.text_alpha_slider.valueChanged.connect(self._text_alpha_changed)
+        self._configure_compact_toolbar_height(self.text_alpha_slider, 22)
+        style_layout.addWidget(self.text_alpha_slider)
+        self.text_alpha_label = QLabel("100%")
+        self._configure_compact_toolbar_height(self.text_alpha_label, 22)
+        style_layout.addWidget(self.text_alpha_label)
+
+        style_layout.addSpacing(6)
         self.apply_crop_button = QPushButton("Apply Crop")
         self.apply_crop_button.setEnabled(False)
         self.apply_crop_button.clicked.connect(self.canvas.apply_pending_crop)
         self._configure_compact_toolbar_height(self.apply_crop_button)
-        tools_actions_row.addWidget(self.apply_crop_button)
-
-        tools_actions_row.addWidget(QLabel("Border"))
+        style_layout.addWidget(self.apply_crop_button)
+        style_layout.addWidget(self._create_toolbar_label("Width"))
         self.stroke_size_spin = QSpinBox()
         self.stroke_size_spin.setRange(1, 32)
         self.stroke_size_spin.setValue(3)
         self.stroke_size_spin.valueChanged.connect(self._stroke_width_changed)
         self._configure_compact_toolbar_height(self.stroke_size_spin)
-        tools_actions_row.addWidget(self.stroke_size_spin)
-
-        tools_actions_row.addWidget(QLabel("Line"))
+        style_layout.addWidget(self.stroke_size_spin)
+        style_layout.addWidget(self._create_toolbar_label("Line"))
         self.stroke_style_combo = QComboBox()
         self.stroke_style_combo.addItem("Solid", STROKE_STYLE_SOLID)
         self.stroke_style_combo.addItem("Dash", STROKE_STYLE_DASH)
@@ -490,114 +588,29 @@ class EditorWindow(QMainWindow):
         self.stroke_style_combo.addItem("Dash dot", STROKE_STYLE_DASH_DOT)
         self.stroke_style_combo.currentIndexChanged.connect(self._stroke_style_changed)
         self._configure_compact_toolbar_height(self.stroke_style_combo)
-        tools_actions_row.addWidget(self.stroke_style_combo)
-
-        tools_actions_row.addWidget(QLabel("Blur px"))
+        style_layout.addWidget(self.stroke_style_combo)
+        style_layout.addWidget(self._create_toolbar_label("Blur"))
         self.blur_block_spin = QSpinBox()
         self.blur_block_spin.setRange(4, 64)
         self.blur_block_spin.setValue(self.canvas.blur_block_size())
         self.blur_block_spin.valueChanged.connect(self._blur_block_size_changed)
         self._configure_compact_toolbar_height(self.blur_block_spin)
-        tools_actions_row.addWidget(self.blur_block_spin)
-        tools_vertical_layout.addLayout(tools_actions_row)
-        self._finalize_compact_tools_group(tools_group)
+        style_layout.addWidget(self.blur_block_spin)
+        style_layout.addStretch(1)
+        self._property_tabs.addTab(style_tab, "Style")
 
-        colors_group, colors_content = self._create_toolbar_group("Colors")
-        colors_layout = QVBoxLayout()
-        colors_layout.setContentsMargins(0, 0, 0, 0)
-        colors_layout.setSpacing(2)
-        colors_content.addLayout(colors_layout)
-
-        stroke_row = QHBoxLayout()
-        stroke_row.setContentsMargins(0, 0, 0, 0)
-        stroke_row.setSpacing(3)
-        self.stroke_button = QPushButton("Border")
-        self.stroke_button.setFixedWidth(110)
-        self.stroke_button.clicked.connect(self._choose_stroke_color)
-        self._configure_compact_toolbar_height(self.stroke_button)
-        stroke_row.addWidget(self.stroke_button)
-        for color in palette_colors:
-            stroke_row.addWidget(self._create_palette_button(color, "stroke"))
-        stroke_row.addWidget(QLabel("Opacity"))
-        self.stroke_alpha_slider = QSlider(Qt.Orientation.Horizontal)
-        self.stroke_alpha_slider.setRange(0, 100)
-        self.stroke_alpha_slider.setValue(100)
-        self.stroke_alpha_slider.setFixedWidth(90)
-        self.stroke_alpha_slider.valueChanged.connect(self._stroke_alpha_changed)
-        self._configure_compact_toolbar_height(self.stroke_alpha_slider, 22)
-        stroke_row.addWidget(self.stroke_alpha_slider)
-        self.stroke_alpha_label = QLabel("100%")
-        self._configure_compact_toolbar_height(self.stroke_alpha_label, 22)
-        stroke_row.addWidget(self.stroke_alpha_label)
-        stroke_row.addStretch(1)
-        colors_layout.addLayout(stroke_row)
-
-        fill_row = QHBoxLayout()
-        fill_row.setContentsMargins(0, 0, 0, 0)
-        fill_row.setSpacing(3)
-        self.fill_button = QPushButton("Background")
-        self.fill_button.setFixedWidth(110)
-        self.fill_button.clicked.connect(self._choose_fill_color)
-        self._configure_compact_toolbar_height(self.fill_button)
-        fill_row.addWidget(self.fill_button)
-        for color in palette_colors:
-            fill_row.addWidget(self._create_palette_button(color, "fill"))
-        fill_row.addWidget(QLabel("Opacity"))
-        self.fill_alpha_slider = QSlider(Qt.Orientation.Horizontal)
-        self.fill_alpha_slider.setRange(0, 100)
-        self.fill_alpha_slider.setValue(31)
-        self.fill_alpha_slider.setFixedWidth(90)
-        self.fill_alpha_slider.valueChanged.connect(self._fill_alpha_changed)
-        self._configure_compact_toolbar_height(self.fill_alpha_slider, 22)
-        fill_row.addWidget(self.fill_alpha_slider)
-        self.fill_alpha_label = QLabel("31%")
-        self._configure_compact_toolbar_height(self.fill_alpha_label, 22)
-        fill_row.addWidget(self.fill_alpha_label)
-        fill_row.addStretch(1)
-        colors_layout.addLayout(fill_row)
-
-        text_row = QHBoxLayout()
-        text_row.setContentsMargins(0, 0, 0, 0)
-        text_row.setSpacing(3)
-        self.text_color_button = QPushButton("Text")
-        self.text_color_button.setFixedWidth(110)
-        self.text_color_button.clicked.connect(self._choose_text_color)
-        self._configure_compact_toolbar_height(self.text_color_button)
-        text_row.addWidget(self.text_color_button)
-        for color in palette_colors:
-            text_row.addWidget(self._create_palette_button(color, "text"))
-        text_row.addWidget(QLabel("Opacity"))
-        self.text_alpha_slider = QSlider(Qt.Orientation.Horizontal)
-        self.text_alpha_slider.setRange(0, 100)
-        self.text_alpha_slider.setValue(100)
-        self.text_alpha_slider.setFixedWidth(90)
-        self.text_alpha_slider.valueChanged.connect(self._text_alpha_changed)
-        self._configure_compact_toolbar_height(self.text_alpha_slider, 22)
-        text_row.addWidget(self.text_alpha_slider)
-        self.text_alpha_label = QLabel("100%")
-        self._configure_compact_toolbar_height(self.text_alpha_label, 22)
-        text_row.addWidget(self.text_alpha_label)
-        text_row.addStretch(1)
-        colors_layout.addLayout(text_row)
-        self._toolbar_groups.append(colors_group)
-
-        text_group, text_content = self._create_toolbar_group("Text Style")
-        text_rows = QVBoxLayout()
-        text_rows.setContentsMargins(0, 0, 0, 0)
-        text_rows.setSpacing(2)
-        text_content.addLayout(text_rows)
-
-        font_row = QHBoxLayout()
-        font_row.setContentsMargins(0, 0, 0, 0)
-        font_row.setSpacing(3)
-        font_row.addWidget(QLabel("Font"))
+        text_tab = QWidget()
+        text_layout = QHBoxLayout(text_tab)
+        text_layout.setContentsMargins(4, 0, 4, 0)
+        text_layout.setSpacing(3)
+        text_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        text_layout.addWidget(self._create_toolbar_label("Font"))
         self.font_family_combo = QComboBox()
         self.font_family_combo.addItems(sorted(QFontDatabase.families()))
         self.font_family_combo.currentTextChanged.connect(self._font_family_changed)
-        self._configure_compact_combo(self.font_family_combo, 128)
-        font_row.addWidget(self.font_family_combo)
-
-        font_row.addWidget(QLabel("Size"))
+        self._configure_compact_combo(self.font_family_combo, 120)
+        text_layout.addWidget(self.font_family_combo)
+        text_layout.addWidget(self._create_toolbar_label("Size"))
         self.font_size_combo = QComboBox()
         self.font_size_combo.addItems(
             [
@@ -625,313 +638,244 @@ class EditorWindow(QMainWindow):
         self.font_size_combo.setCurrentText("16")
         self.font_size_combo.currentTextChanged.connect(self._font_size_changed)
         self._configure_compact_combo(self.font_size_combo, 46)
-        font_row.addWidget(self.font_size_combo)
-        text_rows.addLayout(font_row)
-
-        style_row = QHBoxLayout()
-        style_row.setContentsMargins(0, 0, 0, 0)
-        style_row.setSpacing(3)
-        style_row.addWidget(QLabel("Style"))
+        text_layout.addWidget(self.font_size_combo)
+        text_layout.addWidget(self._create_toolbar_label("Style"))
         self.text_style_combo = QComboBox()
         self.text_style_combo.addItem("Plain", TEXT_STYLE_PLAIN)
         self.text_style_combo.addItem("Box", TEXT_STYLE_BOX)
         self.text_style_combo.addItem("Bubble", TEXT_STYLE_BUBBLE)
         self.text_style_combo.currentIndexChanged.connect(self._text_style_changed)
         self._configure_compact_combo(self.text_style_combo, 78)
-        style_row.addWidget(self.text_style_combo)
-
+        text_layout.addWidget(self.text_style_combo)
         self.text_bold_button = QToolButton()
         self.text_bold_button.setText("B")
         self.text_bold_button.setCheckable(True)
         self.text_bold_button.clicked.connect(self._text_bold_toggled)
         self._configure_compact_icon_button(self.text_bold_button)
-        style_row.addWidget(self.text_bold_button)
-
+        text_layout.addWidget(self.text_bold_button)
         self.text_italic_button = QToolButton()
         self.text_italic_button.setText("I")
         self.text_italic_button.setCheckable(True)
         self.text_italic_button.clicked.connect(self._text_italic_toggled)
         self._configure_compact_icon_button(self.text_italic_button)
-        style_row.addWidget(self.text_italic_button)
-
+        text_layout.addWidget(self.text_italic_button)
         self.text_underline_button = QToolButton()
         self.text_underline_button.setText("U")
         self.text_underline_button.setCheckable(True)
         self.text_underline_button.clicked.connect(self._text_underline_toggled)
         self._configure_compact_icon_button(self.text_underline_button)
-        style_row.addWidget(self.text_underline_button)
-        text_rows.addLayout(style_row)
-
-        spacing_row = QHBoxLayout()
-        spacing_row.setContentsMargins(0, 0, 0, 0)
-        spacing_row.setSpacing(3)
-        spacing_row.addWidget(QLabel("Letter"))
+        text_layout.addWidget(self.text_underline_button)
+        text_layout.addWidget(self._create_toolbar_label("Letter"))
         self.text_letter_spacing_spin = QDoubleSpinBox()
         self.text_letter_spacing_spin.setDecimals(1)
         self.text_letter_spacing_spin.setSingleStep(0.2)
         self.text_letter_spacing_spin.setRange(-4.0, 20.0)
         self.text_letter_spacing_spin.setValue(self._text_letter_spacing)
         self.text_letter_spacing_spin.valueChanged.connect(self._text_letter_spacing_changed)
-        self._configure_compact_combo(self.text_letter_spacing_spin, 64)
+        self._configure_compact_combo(self.text_letter_spacing_spin, 56)
         self.text_letter_spacing_spin.setEnabled(False)
-        spacing_row.addWidget(self.text_letter_spacing_spin)
-        spacing_row.addWidget(QLabel("Line"))
+        text_layout.addWidget(self.text_letter_spacing_spin)
+        text_layout.addWidget(self._create_toolbar_label("Line"))
         self.text_line_spacing_spin = QDoubleSpinBox()
         self.text_line_spacing_spin.setDecimals(2)
         self.text_line_spacing_spin.setSingleStep(0.05)
         self.text_line_spacing_spin.setRange(0.7, 3.0)
         self.text_line_spacing_spin.setValue(self._text_line_spacing)
         self.text_line_spacing_spin.valueChanged.connect(self._text_line_spacing_changed)
-        self._configure_compact_combo(self.text_line_spacing_spin, 64)
+        self._configure_compact_combo(self.text_line_spacing_spin, 56)
         self.text_line_spacing_spin.setEnabled(False)
-        spacing_row.addWidget(self.text_line_spacing_spin)
-        text_rows.addLayout(spacing_row)
-
-        box_row = QHBoxLayout()
-        box_row.setContentsMargins(0, 0, 0, 0)
-        box_row.setSpacing(3)
-        box_row.addWidget(QLabel("Padding"))
+        text_layout.addWidget(self.text_line_spacing_spin)
+        text_layout.addWidget(self._create_toolbar_label("Pad"))
         self.text_padding_spin = QDoubleSpinBox()
         self.text_padding_spin.setDecimals(1)
         self.text_padding_spin.setSingleStep(1.0)
         self.text_padding_spin.setRange(0.0, 80.0)
         self.text_padding_spin.setValue(self._text_box_padding)
         self.text_padding_spin.valueChanged.connect(self._text_padding_changed)
-        self._configure_compact_combo(self.text_padding_spin, 64)
+        self._configure_compact_combo(self.text_padding_spin, 56)
         self.text_padding_spin.setEnabled(False)
-        box_row.addWidget(self.text_padding_spin)
-        box_row.addWidget(QLabel("Radius"))
+        text_layout.addWidget(self.text_padding_spin)
+        text_layout.addWidget(self._create_toolbar_label("Radius"))
         self.text_radius_spin = QDoubleSpinBox()
         self.text_radius_spin.setDecimals(1)
         self.text_radius_spin.setSingleStep(1.0)
         self.text_radius_spin.setRange(0.0, 80.0)
         self.text_radius_spin.setValue(self._text_corner_radius)
         self.text_radius_spin.valueChanged.connect(self._text_radius_changed)
-        self._configure_compact_combo(self.text_radius_spin, 64)
+        self._configure_compact_combo(self.text_radius_spin, 56)
         self.text_radius_spin.setEnabled(False)
-        box_row.addWidget(self.text_radius_spin)
-        text_rows.addLayout(box_row)
-        self._toolbar_groups.append(text_group)
+        text_layout.addWidget(self.text_radius_spin)
+        text_layout.addStretch(1)
+        self._property_tabs.addTab(text_tab, "Text")
 
-        align_group, align_content = self._create_toolbar_group("Align & Grid")
-        align_row = QHBoxLayout()
-        align_row.setContentsMargins(0, 0, 0, 0)
-        align_row.setSpacing(3)
-        align_content.addLayout(align_row)
+        arrange_tab = QWidget()
+        arrange_layout = QHBoxLayout(arrange_tab)
+        arrange_layout.setContentsMargins(4, 0, 4, 0)
+        arrange_layout.setSpacing(3)
+        arrange_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.snap_to_grid_button = QToolButton()
         self.snap_to_grid_button.setText("Snap")
         self.snap_to_grid_button.setCheckable(True)
         self.snap_to_grid_button.clicked.connect(self._snap_toggled)
         self._configure_compact_toolbar_height(self.snap_to_grid_button)
-        align_row.addWidget(self.snap_to_grid_button)
-
+        arrange_layout.addWidget(self.snap_to_grid_button)
         self.grid_visible_button = QToolButton()
         self.grid_visible_button.setText("Grid")
         self.grid_visible_button.setCheckable(True)
         self.grid_visible_button.clicked.connect(self._grid_toggled)
         self._configure_compact_toolbar_height(self.grid_visible_button)
-        align_row.addWidget(self.grid_visible_button)
-
-        align_row.addWidget(QLabel("Size"))
+        arrange_layout.addWidget(self.grid_visible_button)
+        arrange_layout.addWidget(self._create_toolbar_label("Size"))
         self.grid_size_combo = QComboBox()
         self.grid_size_combo.addItems(["8", "12", "16", "20", "24", "32", "40", "48"])
         self.grid_size_combo.setCurrentText("16")
         self.grid_size_combo.currentTextChanged.connect(self._grid_size_changed)
         self._configure_compact_combo(self.grid_size_combo, 52)
         self._configure_compact_toolbar_height(self.grid_size_combo)
-        align_row.addWidget(self.grid_size_combo)
-        self._toolbar_groups.append(align_group)
-
-        history_group, history_content = self._create_toolbar_group("History")
-        history_row = QHBoxLayout()
-        history_row.setContentsMargins(0, 0, 0, 0)
-        history_row.setSpacing(3)
-        history_content.addLayout(history_row)
-        self.history_undo_button = QPushButton("Undo")
-        self.history_undo_button.clicked.connect(self.undo)
-        self._configure_compact_toolbar_height(self.history_undo_button)
-        history_row.addWidget(self.history_undo_button)
-        self.history_redo_button = QPushButton("Redo")
-        self.history_redo_button.clicked.connect(self.redo)
-        self._configure_compact_toolbar_height(self.history_redo_button)
-        history_row.addWidget(self.history_redo_button)
-        self.history_list_combo = QComboBox()
-        self.history_list_combo.setMinimumWidth(160)
-        self.history_list_combo.currentIndexChanged.connect(self._on_history_entry_selected)
-        self._configure_compact_toolbar_height(self.history_list_combo)
-        history_row.addWidget(self.history_list_combo)
-        self.history_status_label = QLabel("1/1")
-        self._configure_compact_toolbar_height(self.history_status_label, 22)
-        history_row.addWidget(self.history_status_label)
-        self._toolbar_groups.append(history_group)
-
-        layers_group, layers_content = self._create_toolbar_group("Layers & Inspector")
-        layers_rows = QVBoxLayout()
-        layers_rows.setContentsMargins(0, 0, 0, 0)
-        layers_rows.setSpacing(2)
-        layers_content.addLayout(layers_rows)
-
-        layers_select_row = QHBoxLayout()
-        layers_select_row.setContentsMargins(0, 0, 0, 0)
-        layers_select_row.setSpacing(3)
-        layers_select_row.addWidget(QLabel("Layer"))
+        arrange_layout.addWidget(self.grid_size_combo)
+        arrange_layout.addSpacing(6)
+        arrange_layout.addWidget(self._create_toolbar_label("Layer"))
         self.layer_combo = QComboBox()
-        self.layer_combo.setMinimumWidth(190)
+        self.layer_combo.setMinimumWidth(150)
         self.layer_combo.currentIndexChanged.connect(self._on_layer_combo_changed)
         self._configure_compact_toolbar_height(self.layer_combo)
-        layers_select_row.addWidget(self.layer_combo)
+        arrange_layout.addWidget(self.layer_combo)
         self.layer_visible_check = QCheckBox("Visible")
         self.layer_visible_check.toggled.connect(self._toggle_selected_layer_visibility)
         self._configure_compact_toolbar_height(self.layer_visible_check, 22)
-        layers_select_row.addWidget(self.layer_visible_check)
+        arrange_layout.addWidget(self.layer_visible_check)
         self.layer_lock_check = QCheckBox("Lock")
         self.layer_lock_check.toggled.connect(self._toggle_selected_layer_lock)
         self._configure_compact_toolbar_height(self.layer_lock_check, 22)
-        layers_select_row.addWidget(self.layer_lock_check)
-        layers_rows.addLayout(layers_select_row)
-
-        layers_order_row = QHBoxLayout()
-        layers_order_row.setContentsMargins(0, 0, 0, 0)
-        layers_order_row.setSpacing(3)
+        arrange_layout.addWidget(self.layer_lock_check)
         self.layer_up_button = QPushButton("Up")
         self.layer_up_button.clicked.connect(self._move_selected_layer_up)
         self._configure_compact_toolbar_height(self.layer_up_button)
-        layers_order_row.addWidget(self.layer_up_button)
+        arrange_layout.addWidget(self.layer_up_button)
         self.layer_down_button = QPushButton("Down")
         self.layer_down_button.clicked.connect(self._move_selected_layer_down)
         self._configure_compact_toolbar_height(self.layer_down_button)
-        layers_order_row.addWidget(self.layer_down_button)
-        layers_order_row.addStretch(1)
-        layers_rows.addLayout(layers_order_row)
-
-        geometry_row = QHBoxLayout()
-        geometry_row.setContentsMargins(0, 0, 0, 0)
-        geometry_row.setSpacing(3)
-        geometry_row.addWidget(QLabel("X"))
+        arrange_layout.addWidget(self.layer_down_button)
+        arrange_layout.addSpacing(6)
+        arrange_layout.addWidget(self._create_toolbar_label("X"))
         self.geometry_x_spin = QSpinBox()
         self.geometry_x_spin.setRange(-10000, 100000)
-        self._configure_compact_combo(self.geometry_x_spin, 70)
-        geometry_row.addWidget(self.geometry_x_spin)
-        geometry_row.addWidget(QLabel("Y"))
+        self._configure_compact_combo(self.geometry_x_spin, 64)
+        arrange_layout.addWidget(self.geometry_x_spin)
+        arrange_layout.addWidget(self._create_toolbar_label("Y"))
         self.geometry_y_spin = QSpinBox()
         self.geometry_y_spin.setRange(-10000, 100000)
-        self._configure_compact_combo(self.geometry_y_spin, 70)
-        geometry_row.addWidget(self.geometry_y_spin)
-        geometry_row.addWidget(QLabel("W"))
+        self._configure_compact_combo(self.geometry_y_spin, 64)
+        arrange_layout.addWidget(self.geometry_y_spin)
+        arrange_layout.addWidget(self._create_toolbar_label("W"))
         self.geometry_w_spin = QSpinBox()
         self.geometry_w_spin.setRange(2, 100000)
-        self._configure_compact_combo(self.geometry_w_spin, 70)
-        geometry_row.addWidget(self.geometry_w_spin)
-        geometry_row.addWidget(QLabel("H"))
+        self._configure_compact_combo(self.geometry_w_spin, 64)
+        arrange_layout.addWidget(self.geometry_w_spin)
+        arrange_layout.addWidget(self._create_toolbar_label("H"))
         self.geometry_h_spin = QSpinBox()
         self.geometry_h_spin.setRange(2, 100000)
-        self._configure_compact_combo(self.geometry_h_spin, 70)
-        geometry_row.addWidget(self.geometry_h_spin)
+        self._configure_compact_combo(self.geometry_h_spin, 64)
+        arrange_layout.addWidget(self.geometry_h_spin)
         self.geometry_apply_button = QPushButton("Apply")
         self.geometry_apply_button.clicked.connect(self._apply_selected_geometry)
         self._configure_compact_toolbar_height(self.geometry_apply_button)
-        geometry_row.addWidget(self.geometry_apply_button)
-        layers_rows.addLayout(geometry_row)
-        self._toolbar_groups.append(layers_group)
+        arrange_layout.addWidget(self.geometry_apply_button)
+        arrange_layout.addStretch(1)
+        self._property_tabs.addTab(arrange_tab, "Arrange")
 
-        export_group, export_content = self._create_toolbar_group("Export")
-        export_row = QHBoxLayout()
-        export_row.setContentsMargins(0, 0, 0, 0)
-        export_row.setSpacing(3)
-        export_content.addLayout(export_row)
-        export_row.addWidget(QLabel("Preset"))
+        export_tab = QWidget()
+        export_layout = QHBoxLayout(export_tab)
+        export_layout.setContentsMargins(4, 0, 4, 0)
+        export_layout.setSpacing(3)
+        export_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        export_layout.addWidget(self._create_toolbar_label("Preset"))
         self.export_preset_combo = QComboBox()
         for preset_key, preset_values in self._export_presets.items():
             self.export_preset_combo.addItem(preset_values[0], preset_key)
         self.export_preset_combo.currentIndexChanged.connect(self._on_export_preset_index_changed)
         self._configure_compact_combo(self.export_preset_combo, 110)
-        export_row.addWidget(self.export_preset_combo)
-        export_row.addWidget(QLabel("Batch"))
+        export_layout.addWidget(self.export_preset_combo)
+        export_layout.addWidget(self._create_toolbar_label("Batch"))
         self.batch_profile_combo = QComboBox()
         self.batch_profile_combo.currentIndexChanged.connect(
             self._on_batch_profile_index_changed
         )
         self._configure_compact_combo(self.batch_profile_combo, 130)
-        export_row.addWidget(self.batch_profile_combo)
+        export_layout.addWidget(self.batch_profile_combo)
         self.manage_batch_profiles_button = QPushButton("Manage")
         self.manage_batch_profiles_button.clicked.connect(self.manage_batch_profiles)
         self._configure_compact_toolbar_height(self.manage_batch_profiles_button)
-        export_row.addWidget(self.manage_batch_profiles_button)
+        export_layout.addWidget(self.manage_batch_profiles_button)
         self.export_batch_button = QPushButton("Batch Export")
         self.export_batch_button.clicked.connect(self.export_batch_with_dialog)
         self._configure_compact_toolbar_height(self.export_batch_button)
-        export_row.addWidget(self.export_batch_button)
-        self._toolbar_groups.append(export_group)
+        export_layout.addWidget(self.export_batch_button)
+        export_layout.addStretch(1)
+        self._property_tabs.addTab(export_tab, "Export")
+        self._fit_property_tabs_height()
 
-        zoom_group, zoom_content = self._create_toolbar_group("Zoom")
-        zoom_row = QHBoxLayout()
-        zoom_row.setContentsMargins(0, 0, 0, 0)
-        zoom_row.setSpacing(3)
-        zoom_content.addLayout(zoom_row)
-        self.zoom_label = QLabel("100%")
-        self._configure_compact_toolbar_height(self.zoom_label, 22)
-        zoom_row.addWidget(self.zoom_label)
-
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(10, 400)
-        self.zoom_slider.setValue(100)
-        self.zoom_slider.setFixedWidth(120)
-        self.zoom_slider.setToolTip("Zoom: left smaller, right larger")
-        self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
-        self._configure_compact_toolbar_height(self.zoom_slider, 22)
-        zoom_row.addWidget(self.zoom_slider)
-
-        self.zoom_in_button = QPushButton("+")
-        self.zoom_in_button.clicked.connect(self.canvas.zoom_in)
-        self._configure_compact_action_button(self.zoom_in_button)
-        self._configure_compact_toolbar_height(self.zoom_in_button)
-        zoom_row.addWidget(self.zoom_in_button)
-        self.zoom_out_button = QPushButton("-")
-        self.zoom_out_button.clicked.connect(self.canvas.zoom_out)
-        self._configure_compact_action_button(self.zoom_out_button)
-        self._configure_compact_toolbar_height(self.zoom_out_button)
-        zoom_row.addWidget(self.zoom_out_button)
-        self.zoom_reset_button = QPushButton("Reset")
-        self.zoom_reset_button.clicked.connect(self.canvas.reset_zoom)
-        self._configure_compact_action_button(self.zoom_reset_button)
-        self._configure_compact_toolbar_height(self.zoom_reset_button)
-        zoom_row.addWidget(self.zoom_reset_button)
-        self._toolbar_groups.append(zoom_group)
-        self._toolbar_groups.append(tools_group)
-        self._reflow_toolbar_groups()
+        root_layout.addWidget(self._property_tabs)
         self._update_color_button_preview(self.stroke_button, QColor("#e74c3c"))
         self._update_color_button_preview(self.fill_button, QColor(231, 76, 60, 80))
         self._update_color_button_preview(self.text_color_button, QColor("#2c3e50"))
         self._apply_toolbar_tooltips()
         return bar
 
-    def _reflow_toolbar_groups(self) -> None:
+    def _fit_property_tabs_height(self) -> None:
         """
-        Populates toolbar groups and applies float-style wrapping for the current width.
+        Constrains property tabs to the height required by tab bar and content.
 
         Returns:
             None
         """
 
-        if not hasattr(self, "_toolbar_groups_layout"):
+        if not hasattr(self, "_property_tabs"):
             return
-        if not self._toolbar_groups:
-            self._toolbar_groups_layout.clear()
-            return
+        tab_bar_height = max(18, self._property_tabs.tabBar().sizeHint().height())
+        content_height = 24
+        for index in range(self._property_tabs.count()):
+            page = self._property_tabs.widget(index)
+            if page is None:
+                continue
+            content_height = max(content_height, page.sizeHint().height())
+        # Border and pane chrome around the active page.
+        self._property_tabs.setFixedHeight(tab_bar_height + content_height + 2)
 
-        sorted_groups = sort_widgets_by_area_descending(self._toolbar_groups)
-        self._toolbar_groups_container.set_flow_widgets(sorted_groups)
-
-    def _update_toolbar_flow_layout(self) -> None:
+    def _focus_property_tab_for_context(
+        self,
+        tool: str | None = None,
+        selection_type: str | None = None,
+    ) -> None:
         """
-        Reflows toolbar containers after the editor width changed.
+        Switches the property tab based on active tool or selection.
+
+        Args:
+            tool: Active tool identifier.
+            selection_type: Selected annotation type when available.
 
         Returns:
             None
         """
 
-        if hasattr(self, "_toolbar_groups_container"):
-            self._toolbar_groups_container.update_flow_geometry()
+        if not hasattr(self, "_property_tabs"):
+            return
+        resolved_type = str(selection_type or "").strip().lower()
+        resolved_tool = str(tool or self._active_tool)
+        if resolved_type == "text" or resolved_tool == Tool.TEXT:
+            self._property_tabs.setCurrentIndex(self._PROPERTY_TAB_TEXT)
+            return
+        if resolved_tool in {
+            Tool.RECT,
+            Tool.ELLIPSE,
+            Tool.LINE,
+            Tool.ARROW,
+            Tool.FILL_BG,
+            Tool.BLUR,
+            Tool.STEP,
+            Tool.CROP,
+        } or resolved_type in {"rect", "ellipse", "line", "arrow", "step", "image"}:
+            self._property_tabs.setCurrentIndex(self._PROPERTY_TAB_STYLE)
 
     def _build_tool_icon(self, tool: str) -> QIcon:
         """
@@ -1030,69 +974,6 @@ class EditorWindow(QMainWindow):
         painter.end()
         return QIcon(pixmap)
 
-    def _create_toolbar_group(self, title: str) -> tuple[QFrame, QVBoxLayout]:
-        """
-        Creates a framed toolbar group with a compact side title label.
-
-        Args:
-            title: Visible group caption.
-
-        Returns:
-            tuple[QFrame, QVBoxLayout]: Group widget and content layout.
-        """
-
-        frame = QFrame(self)
-        frame.setFrameShape(QFrame.Shape.StyledPanel)
-        frame.setProperty("toolbarGroup", True)
-        frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-
-        group_layout = QHBoxLayout(frame)
-        group_layout.setContentsMargins(4, 2, 4, 2)
-        group_layout.setSpacing(4)
-
-        title_label = QLabel(title)
-        title_label.setObjectName("mutedLabel")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        title_label.setFixedWidth(max(48, title_label.fontMetrics().horizontalAdvance(title) + 6))
-        group_layout.addWidget(title_label)
-
-        content_host = QWidget()
-        content_host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        content_layout = QVBoxLayout(content_host)
-        content_layout.setContentsMargins(0, 0, 0, 0)
-        content_layout.setSpacing(2)
-        group_layout.addWidget(content_host, 1)
-        return frame, content_layout
-
-    def _finalize_compact_tools_group(self, tools_group: QFrame) -> None:
-        """
-        Sizes the Tools toolbar group to its content width only.
-
-        Args:
-            tools_group: Tools group frame widget.
-
-        Returns:
-            None
-        """
-
-        tools_group.setSizePolicy(
-            QSizePolicy.Policy.Fixed,
-            QSizePolicy.Policy.Maximum,
-        )
-        group_layout = tools_group.layout()
-        if isinstance(group_layout, QHBoxLayout):
-            group_layout.setStretch(0, 0)
-            if group_layout.count() >= 2:
-                group_layout.setStretch(1, 0)
-                content_host = group_layout.itemAt(1).widget()
-                if content_host is not None:
-                    content_host.setSizePolicy(
-                        QSizePolicy.Policy.Fixed,
-                        QSizePolicy.Policy.Maximum,
-                    )
-        tools_group.adjustSize()
-        tools_group.setFixedWidth(tools_group.sizeHint().width())
-
     def _configure_compact_toolbar_height(self, widget: QWidget, height: int = 24) -> None:
         """
         Applies a fixed compact height to one toolbar control.
@@ -1108,12 +989,29 @@ class EditorWindow(QMainWindow):
         widget.setFixedHeight(height)
         widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
 
-    def _configure_compact_combo(self, combo: QComboBox, width: int) -> None:
+    def _create_toolbar_label(self, text: str) -> QLabel:
         """
-        Applies a fixed compact width to one toolbar combo box.
+        Creates a compact label sized to the toolbar control row height.
 
         Args:
-            combo: Target combo box.
+            text: Visible label caption.
+
+        Returns:
+            QLabel: Compact toolbar label.
+        """
+
+        label = QLabel(text)
+        label.setObjectName("toolbarFieldLabel")
+        label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        self._configure_compact_toolbar_height(label, 22)
+        return label
+
+    def _configure_compact_combo(self, combo: QWidget, width: int) -> None:
+        """
+        Applies a fixed compact width to one toolbar combo or spin box.
+
+        Args:
+            combo: Target combo or spin box.
             width: Fixed width in pixels.
 
         Returns:
@@ -1225,9 +1123,9 @@ class EditorWindow(QMainWindow):
         self.snap_to_grid_button.setToolTip("Snap drawing and movement to grid.")
         self.grid_visible_button.setToolTip("Show or hide the alignment grid.")
         self.grid_size_combo.setToolTip("Choose grid spacing in pixels.")
-        self.zoom_slider.setToolTip("Adjust zoom level.")
-        self.zoom_in_button.setToolTip("Zoom in.")
-        self.zoom_out_button.setToolTip("Zoom out.")
+        self.zoom_slider.setToolTip("Adjust zoom level. Shortcut: Shift+Mouse Wheel.")
+        self.zoom_in_button.setToolTip("Zoom in. Shortcut: Ctrl++ or Shift+Mouse Wheel.")
+        self.zoom_out_button.setToolTip("Zoom out. Shortcut: Ctrl+- or Shift+Mouse Wheel.")
         self.zoom_reset_button.setToolTip("Reset zoom to fit.")
         self.history_undo_button.setToolTip("Undo the last change.")
         self.history_redo_button.setToolTip("Redo the last undone change.")
@@ -1427,6 +1325,36 @@ class EditorWindow(QMainWindow):
         self._theme_action_group.addAction(self.theme_light_action)
         theme_menu.addAction(self.theme_light_action)
 
+        view_menu.addSeparator()
+        zoom_in_action = QAction("Zoom In", self)
+        zoom_in_action.setShortcuts(
+            [
+                QKeySequence.StandardKey.ZoomIn,
+                QKeySequence("Ctrl++"),
+                QKeySequence("Ctrl+="),
+            ]
+        )
+        zoom_in_action.setToolTip("Zoom in on the canvas.")
+        zoom_in_action.triggered.connect(self.canvas.zoom_in)
+        view_menu.addAction(zoom_in_action)
+
+        zoom_out_action = QAction("Zoom Out", self)
+        zoom_out_action.setShortcuts(
+            [
+                QKeySequence.StandardKey.ZoomOut,
+                QKeySequence("Ctrl+-"),
+            ]
+        )
+        zoom_out_action.setToolTip("Zoom out on the canvas.")
+        zoom_out_action.triggered.connect(self.canvas.zoom_out)
+        view_menu.addAction(zoom_out_action)
+
+        zoom_reset_action = QAction("Reset Zoom", self)
+        zoom_reset_action.setShortcut(QKeySequence("Ctrl+0"))
+        zoom_reset_action.setToolTip("Reset zoom to fit the document.")
+        zoom_reset_action.triggered.connect(self.canvas.reset_zoom)
+        view_menu.addAction(zoom_reset_action)
+
         settings_action = QAction("Settings...", self)
         settings_action.setToolTip("Configure hotkeys and capture behavior.")
         settings_action.triggered.connect(self.settings_requested.emit)
@@ -1464,6 +1392,7 @@ class EditorWindow(QMainWindow):
         for key, button in self._tool_buttons.items():
             button.setChecked(key == tool)
         self.canvas.set_tool(tool)
+        self._focus_property_tab_for_context(tool=tool)
         self.statusBar().showMessage(f"Tool: {tool}")
 
     def eventFilter(self, watched, event) -> bool:
@@ -2263,6 +2192,10 @@ class EditorWindow(QMainWindow):
         Returns:
             None
         """
+
+        selection_type = str(payload.get("type", "") or "").strip().lower()
+        if selection_type:
+            self._focus_property_tab_for_context(selection_type=selection_type)
 
         stroke_width = payload.get("stroke_width")
         if isinstance(stroke_width, (float, int)):
@@ -4096,7 +4029,12 @@ class EditorWindow(QMainWindow):
             "Ctrl+Shift+C: Copy drawing area (for another tab)\n"
             "Ctrl+V: Paste text/image/image file/image URL\n"
             "Ctrl+Shift+V: Paste drawing area from another tab\n"
-            "Ctrl + Mouse Wheel: Zoom\n"
+            "Ctrl++ / Ctrl+=: Zoom in\n"
+            "Ctrl+-: Zoom out\n"
+            "Ctrl+0: Reset zoom\n"
+            "Shift+Mouse Wheel: Zoom on canvas\n"
+            "Mouse Wheel / side wheel: Scroll canvas\n"
+            "Ctrl+Shift++ / Ctrl+Shift+-: Scale selection\n"
             "Arrow keys: Nudge selected layer by 1 px\n"
             "Shift+Arrow keys: Nudge selected layer by 10 px\n"
             "Enter: Apply crop selection\n"
@@ -4129,7 +4067,12 @@ class EditorWindow(QMainWindow):
             "Ctrl+Shift+C  - Copy drawing area (cross-tab)\n"
             "Ctrl+V  - Paste text/image/image file/image URL\n"
             "Ctrl+Shift+V  - Paste drawing area (cross-tab)\n"
-            "Ctrl+Mouse Wheel  - Zoom in/out\n"
+            "Ctrl++ / Ctrl+=  - Zoom in\n"
+            "Ctrl+-  - Zoom out\n"
+            "Ctrl+0  - Reset zoom\n"
+            "Shift+Mouse Wheel  - Zoom on canvas\n"
+            "Mouse Wheel / side wheel  - Scroll canvas\n"
+            "Ctrl+Shift++ / Ctrl+Shift+-  - Scale selection\n"
             "Arrow keys  - Nudge selection by 1 px\n"
             "Shift+Arrow keys  - Nudge selection by 10 px\n"
             "Enter  - Apply crop\n"
@@ -4148,34 +4091,6 @@ class EditorWindow(QMainWindow):
             self.setWindowTitle(f"{APP_NAME} Editor")
             return
         self.setWindowTitle(f"{APP_NAME} Editor - {self._current_project_path}")
-
-    def resizeEvent(self, event) -> None:
-        """
-        Reflows toolbar groups when the editor window is resized.
-
-        Args:
-            event: Qt resize event.
-
-        Returns:
-            None
-        """
-
-        super().resizeEvent(event)
-        self._update_toolbar_flow_layout()
-
-    def showEvent(self, event) -> None:
-        """
-        Reflows toolbar containers once the editor becomes visible.
-
-        Args:
-            event: Qt show event.
-
-        Returns:
-            None
-        """
-
-        super().showEvent(event)
-        self._update_toolbar_flow_layout()
 
     def timerEvent(self, event) -> None:
         """

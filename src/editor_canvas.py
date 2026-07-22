@@ -1296,7 +1296,7 @@ class EditorCanvas(QGraphicsView):
 
     def wheelEvent(self, event) -> None:
         """
-        Applies Ctrl+mousewheel zoom behavior.
+        Zooms with Shift+wheel; otherwise keeps default scroll/pan behavior.
 
         Args:
             event: Wheel event.
@@ -1305,10 +1305,13 @@ class EditorCanvas(QGraphicsView):
             None
         """
 
-        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-            if event.angleDelta().y() > 0:
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            delta = event.angleDelta().y()
+            if delta == 0:
+                delta = event.angleDelta().x()
+            if delta > 0:
                 self.zoom_in()
-            else:
+            elif delta < 0:
                 self.zoom_out()
             event.accept()
             return
@@ -1912,17 +1915,40 @@ class EditorCanvas(QGraphicsView):
             self.paste_from_clipboard()
             return
         if (
-            event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            event.modifiers()
+            == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
             and event.key() in {Qt.Key.Key_Plus, Qt.Key.Key_Equal}
         ):
             if self.resize_selected_items(1.1):
                 return
         if (
-            event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            event.modifiers()
+            == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
             and event.key() in {Qt.Key.Key_Minus, Qt.Key.Key_Underscore}
         ):
             if self.resize_selected_items(0.9):
                 return
+        if (
+            event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            and event.key() in {Qt.Key.Key_Plus, Qt.Key.Key_Equal}
+        ):
+            self.zoom_in()
+            return
+        if (
+            event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            and event.key() in {Qt.Key.Key_Minus, Qt.Key.Key_Underscore}
+        ):
+            self.zoom_out()
+            return
+        if (
+            event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            and not (event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            and event.key() == Qt.Key.Key_0
+        ):
+            self.reset_zoom()
+            return
         if event.modifiers() in {
             Qt.KeyboardModifier.NoModifier,
             Qt.KeyboardModifier.ShiftModifier,
