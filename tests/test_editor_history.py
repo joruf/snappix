@@ -130,3 +130,39 @@ class TestEditorHistory(unittest.TestCase):
         self.assertNotIn("🔒", window._tool_buttons[Tool.RECT].text())  # pylint: disable=protected-access
         window.close()
 
+    def test_flatten_and_erase_create_history_entries(self) -> None:
+        """
+        Ensures flatten and pixel erase push undo history states.
+        """
+
+        from src.pixel_selection import rect_selection_path
+        from PySide6.QtCore import QRectF
+
+        window = EditorWindow(_solid_pixmap(120, 90))
+        window.canvas.load_annotations(
+            [
+                AnnotationModel(
+                    annotation_type="rect",
+                    x=8.0,
+                    y=8.0,
+                    width=20.0,
+                    height=15.0,
+                    stroke_rgba=[255, 0, 0, 255],
+                    fill_rgba=[255, 0, 0, 80],
+                    stroke_width=2.0,
+                )
+            ]
+        )
+        before_count = len(window._history)  # pylint: disable=protected-access
+        window.canvas.flatten_annotations()
+        self.assertGreater(len(window._history), before_count)  # pylint: disable=protected-access
+        self.assertEqual(window._history_labels[-1], "Flatten annotations")  # pylint: disable=protected-access
+
+        window.canvas.set_pixel_selection_path(rect_selection_path(QRectF(2, 2, 10, 10)))
+        window.canvas.set_erase_mode("transparent")
+        mid_count = len(window._history)  # pylint: disable=protected-access
+        window.canvas.erase_pixel_selection()
+        self.assertGreater(len(window._history), mid_count)  # pylint: disable=protected-access
+        self.assertEqual(window._history_labels[-1], "Erase selection")  # pylint: disable=protected-access
+        window.close()
+

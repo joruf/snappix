@@ -224,6 +224,7 @@ class TestEditorCanvasTools(unittest.TestCase):
         canvas._run_ocr_on_region(QRectF(10.0, 10.0, 40.0, 30.0))  # pylint: disable=protected-access
 
         clipboard.setText.assert_called_once_with("Detected text")
+        self.assertEqual(canvas.last_ocr_copied_text(), "Detected text")
 
     @patch("src.editor_canvas.has_tesseract", return_value=False)
     @patch("src.editor_canvas.extract_text_from_png_bytes")

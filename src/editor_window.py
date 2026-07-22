@@ -68,11 +68,9 @@ from PySide6.QtWidgets import (
 )
 
 from src.constants import (
-    ABOUT_AUTHOR,
-    ABOUT_GITHUB,
-    ABOUT_WEBSITE,
     APP_FILE_EXTENSION,
     APP_NAME,
+    build_about_dialog_html,
 )
 from src.config import (
     EXPORT_PRESET_DOCS,
@@ -88,7 +86,12 @@ from src.annotation_items import (
     STROKE_STYLE_SOLID,
 )
 from src.annotation_shapes import TEXT_STYLE_BOX, TEXT_STYLE_BUBBLE, TEXT_STYLE_PLAIN
-from src.editor_canvas import EditorCanvas, Tool
+from src.editor_canvas import (
+    ERASE_MODE_FILL,
+    ERASE_MODE_TRANSPARENT,
+    EditorCanvas,
+    Tool,
+)
 from src.models import AnnotationModel, ProjectModel
 from src.storage import (
     base64_png_to_pixmap,
@@ -102,9 +105,11 @@ from src.theme import (
     THEME_LIGHT,
     color_preview_button_stylesheet,
     get_editor_accent_colors,
+    get_theme_colors,
     normalize_theme_name,
     palette_button_stylesheet,
 )
+from src.ocr import format_ocr_copied_status
 from src.shortcuts import (
     build_shortcuts_reference_text,
     format_shortcut_for_display,
@@ -112,6 +117,8 @@ from src.shortcuts import (
     resolved_shortcut_text,
     sequences_for_action,
 )
+from src.tool_reference import format_tool_tooltip
+from src.tool_reference_dialog import ToolReferenceDialog
 
 
 _SELECTION_TYPE_LABELS: dict[str, str] = {
@@ -355,6 +362,7 @@ class EditorWindow(QMainWindow):
         self.canvas.selection_style_changed.connect(self._on_selection_style_changed)
         self.canvas.crop_selection_changed.connect(self._on_crop_state_changed)
         self.canvas.crop_applied.connect(self._on_crop_applied)
+        self.canvas.status_message.connect(self.statusBar().showMessage)
 
         self._toolbar_widget = self._build_toolbar()
         root.addWidget(self._toolbar_widget, 0)
@@ -415,6 +423,12 @@ class EditorWindow(QMainWindow):
         self._tool_buttons: dict[str, QToolButton] = {}
         for tool_key, label in [
             (Tool.SELECT, "Select"),
+            (Tool.SELECT_RECT, "Sel Rect"),
+            (Tool.SELECT_ELLIPSE, "Sel Ellipse"),
+            (Tool.SELECT_PATH, "Lasso"),
+            (Tool.MAGIC_WAND, "Magic Wand"),
+            (Tool.BRUSH, "Brush"),
+            (Tool.BUCKET, "Fill"),
             (Tool.RECT, "Rectangle"),
             (Tool.ELLIPSE, "Circle"),
             (Tool.LINE, "Line"),
@@ -445,6 +459,15 @@ class EditorWindow(QMainWindow):
             self._tool_button_to_key[button] = tool_key
             strip_layout.addWidget(button)
         self._tool_buttons[Tool.SELECT].setChecked(True)
+
+        strip_layout.addSpacing(4)
+        self.tools_help_button = QToolButton()
+        self.tools_help_button.setText("?")
+        self.tools_help_button.setToolTip("Open the tools reference table.")
+        self.tools_help_button.setFixedSize(32, 28)
+        self._configure_compact_toolbar_height(self.tools_help_button, 28)
+        self.tools_help_button.clicked.connect(self.show_tools_reference)
+        strip_layout.addWidget(self.tools_help_button)
 
         strip_layout.addSpacing(8)
         self.history_undo_button = QPushButton("Undo")
@@ -587,7 +610,7 @@ class EditorWindow(QMainWindow):
         style_layout.addWidget(self.apply_crop_button)
         style_layout.addWidget(self._create_toolbar_label("Width"))
         self.stroke_size_spin = QSpinBox()
-        self.stroke_size_spin.setRange(1, 32)
+        self.stroke_size_spin.setRange(1, 64)
         self.stroke_size_spin.setValue(3)
         self.stroke_size_spin.valueChanged.connect(self._stroke_width_changed)
         self._configure_compact_toolbar_height(self.stroke_size_spin)
@@ -608,6 +631,33 @@ class EditorWindow(QMainWindow):
         self.blur_block_spin.valueChanged.connect(self._blur_block_size_changed)
         self._configure_compact_toolbar_height(self.blur_block_spin)
         style_layout.addWidget(self.blur_block_spin)
+        style_layout.addWidget(self._create_toolbar_label("Magic Wand"))
+        self.wand_tolerance_spin = QSpinBox()
+        self.wand_tolerance_spin.setRange(0, 255)
+        self.wand_tolerance_spin.setValue(self.canvas.wand_tolerance())
+        self.wand_tolerance_spin.setToolTip("Magic Wand color tolerance")
+        self.wand_tolerance_spin.valueChanged.connect(self._wand_tolerance_changed)
+        self._configure_compact_toolbar_height(self.wand_tolerance_spin)
+        style_layout.addWidget(self.wand_tolerance_spin)
+        self.wand_contiguous_button = QToolButton()
+        self.wand_contiguous_button.setText("Contiguous")
+        self.wand_contiguous_button.setCheckable(True)
+        self.wand_contiguous_button.setChecked(self.canvas.wand_contiguous())
+        self.wand_contiguous_button.setToolTip(
+            "When checked, Magic Wand selects only connected matching pixels."
+        )
+        self.wand_contiguous_button.toggled.connect(self._wand_contiguous_changed)
+        self._configure_compact_toolbar_height(self.wand_contiguous_button)
+        style_layout.addWidget(self.wand_contiguous_button)
+        self.erase_mode_combo = QComboBox()
+        self.erase_mode_combo.addItem("Erase: Transparent", ERASE_MODE_TRANSPARENT)
+        self.erase_mode_combo.addItem("Erase: Fill color", ERASE_MODE_FILL)
+        self.erase_mode_combo.setToolTip(
+            "Delete key clears the pixel selection to transparent or fill color."
+        )
+        self.erase_mode_combo.currentIndexChanged.connect(self._erase_mode_changed)
+        self._configure_compact_toolbar_height(self.erase_mode_combo)
+        style_layout.addWidget(self.erase_mode_combo)
         style_layout.addStretch(1)
         self._property_tabs.addTab(style_tab, "Style")
 
@@ -886,6 +936,12 @@ class EditorWindow(QMainWindow):
             Tool.BLUR,
             Tool.STEP,
             Tool.CROP,
+            Tool.SELECT_RECT,
+            Tool.SELECT_ELLIPSE,
+            Tool.SELECT_PATH,
+            Tool.MAGIC_WAND,
+            Tool.BRUSH,
+            Tool.BUCKET,
         } or resolved_type in {"rect", "ellipse", "line", "arrow", "step", "image"}:
             self._property_tabs.setCurrentIndex(self._PROPERTY_TAB_STYLE)
 
@@ -955,6 +1011,64 @@ class EditorWindow(QMainWindow):
             painter.drawRect(QRectF(2.5, 9.0, 13.0, 6.0))
             painter.drawLine(5, 8, 9, 4)
             painter.drawLine(9, 4, 12, 7)
+        elif tool == Tool.SELECT_RECT:
+            painter.setPen(QPen(QColor("#f5f5f5"), 1.4, Qt.PenStyle.DashLine))
+            painter.setBrush(QBrush(QColor(52, 152, 219, 60)))
+            painter.drawRect(QRectF(3.0, 4.0, 12.0, 10.0))
+        elif tool == Tool.SELECT_ELLIPSE:
+            painter.setPen(QPen(QColor("#f5f5f5"), 1.4, Qt.PenStyle.DashLine))
+            painter.setBrush(QBrush(QColor(52, 152, 219, 60)))
+            painter.drawEllipse(QRectF(3.0, 4.0, 12.0, 10.0))
+        elif tool == Tool.SELECT_PATH:
+            painter.setPen(QPen(QColor("#f5f5f5"), 1.4, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPolyline(
+                QPolygonF(
+                    [
+                        QPointF(3.0, 12.0),
+                        QPointF(6.0, 5.0),
+                        QPointF(11.0, 8.0),
+                        QPointF(15.0, 4.0),
+                    ]
+                )
+            )
+        elif tool == Tool.MAGIC_WAND:
+            wand_pen = QPen(QColor("#f5d76e"), 1.8)
+            wand_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(wand_pen)
+            painter.drawLine(QPointF(4.5, 15.0), QPointF(11.5, 7.0))
+            star_center = QPointF(12.5, 5.0)
+            star_points = QPolygonF(
+                [
+                    QPointF(star_center.x(), star_center.y() - 3.6),
+                    QPointF(star_center.x() + 1.0, star_center.y() - 1.0),
+                    QPointF(star_center.x() + 3.6, star_center.y()),
+                    QPointF(star_center.x() + 1.0, star_center.y() + 1.0),
+                    QPointF(star_center.x(), star_center.y() + 3.6),
+                    QPointF(star_center.x() - 1.0, star_center.y() + 1.0),
+                    QPointF(star_center.x() - 3.6, star_center.y()),
+                    QPointF(star_center.x() - 1.0, star_center.y() - 1.0),
+                ]
+            )
+            painter.setPen(QPen(QColor("#f7e27a"), 1.0))
+            painter.setBrush(QBrush(QColor("#f1c40f")))
+            painter.drawPolygon(star_points)
+            spark_pen = QPen(QColor("#fff6c2"), 1.2)
+            spark_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(spark_pen)
+            painter.drawLine(QPointF(15.2, 2.2), QPointF(16.4, 1.0))
+            painter.drawLine(QPointF(15.8, 4.8), QPointF(17.0, 4.8))
+            painter.drawLine(QPointF(13.8, 1.4), QPointF(13.8, 0.2))
+        elif tool == Tool.BRUSH:
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(74, 163, 255, 180)))
+            painter.drawEllipse(QRectF(4.0, 3.0, 5.0, 5.0))
+            painter.drawLine(6, 8, 13, 15)
+        elif tool == Tool.BUCKET:
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(74, 163, 255, 120)))
+            painter.drawRect(QRectF(4.0, 7.0, 9.0, 7.0))
+            painter.drawLine(7, 7, 10, 3)
         elif tool == Tool.BLUR:
             painter.setPen(QPen(QColor("#c39bd3"), 1.6))
             painter.setBrush(QBrush(QColor(155, 89, 182, 120)))
@@ -1110,6 +1224,19 @@ class EditorWindow(QMainWindow):
         self._palette_buttons.append(button)
         return button
 
+    def _tool_tooltip_text(self, tool: str) -> str:
+        """
+        Returns the English tooltip for one drawing tool button.
+
+        Args:
+            tool: Tool identifier.
+
+        Returns:
+            str: Descriptive tooltip text.
+        """
+
+        return format_tool_tooltip(tool)
+
     def _apply_toolbar_tooltips(self) -> None:
         """
         Adds English tooltip text to all toolbar controls.
@@ -1118,26 +1245,26 @@ class EditorWindow(QMainWindow):
             None
         """
 
-        tooltips = {
-            Tool.SELECT: "Select and move annotations. Shift/Ctrl+click to multi-select.",
-            Tool.RECT: "Draw one rectangle. Double-click to lock tool.",
-            Tool.ELLIPSE: "Draw one ellipse. Double-click to lock tool.",
-            Tool.LINE: "Draw one line. Double-click to lock tool.",
-            Tool.ARROW: "Draw one arrow. Double-click to lock tool.",
-            Tool.TEXT: "Insert one text item. Double-click to lock tool.",
-            Tool.FILL_BG: "Fill one area. Double-click to lock tool.",
-            Tool.BLUR: "Blur one area for redaction. Double-click to lock tool.",
-            Tool.STEP: "Insert numbered step badges for tutorials.",
-            Tool.OCR: "Select a region and copy recognized text to clipboard.",
-            Tool.CROP: "Create a crop selection area.",
-        }
         for tool_key, button in self._tool_buttons.items():
-            button.setToolTip(tooltips.get(tool_key, "Use this tool."))
+            button.setToolTip(self._tool_tooltip_text(tool_key))
 
         self.apply_crop_button.setToolTip("Apply current crop selection.")
-        self.stroke_size_spin.setToolTip("Set border line width.")
+        self.stroke_size_spin.setToolTip(
+            "Stroke / brush thickness in pixels (also used by Rectangle, Line, and Brush)."
+        )
         self.stroke_style_combo.setToolTip("Select line style for lines and arrows.")
         self.blur_block_spin.setToolTip("Set blur pixel block size for redaction.")
+        self.wand_tolerance_spin.setToolTip(
+            "Magic Wand color tolerance (0–255). Higher values select a wider color range."
+        )
+        self.wand_contiguous_button.setToolTip(
+            "When checked, the Magic Wand selects only connected matching pixels. "
+            "When unchecked, all matching colors in the image are selected."
+        )
+        self.erase_mode_combo.setToolTip(
+            "Delete key erase mode for pixel selections: "
+            "transparent (checkerboard) or current fill color."
+        )
         self.text_style_combo.setToolTip("Select plain text, text box, or speech bubble.")
         self.stroke_button.setToolTip("Open border color picker.")
         self.fill_button.setToolTip("Open background color picker.")
@@ -1282,6 +1409,16 @@ class EditorWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        flatten_action = QAction("Flatten Annotations", self)
+        flatten_action.setToolTip(
+            "Burn all annotations into the screenshot as one fixed image."
+        )
+        flatten_action.triggered.connect(self.canvas.flatten_annotations)
+        edit_menu.addAction(flatten_action)
+        self._register_shortcut_action("flatten", flatten_action)
+
+        edit_menu.addSeparator()
+
         bring_forward_action = QAction("Bring Forward", self)
         bring_forward_action.setToolTip("Move selection one layer up.")
         bring_forward_action.triggered.connect(self.canvas.bring_selected_forward)
@@ -1396,10 +1533,32 @@ class EditorWindow(QMainWindow):
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
 
+        tools_reference_action = QAction("Tools...", self)
+        tools_reference_action.setToolTip(
+            "Show a table of toolbar icons and what each tool does."
+        )
+        tools_reference_action.triggered.connect(self.show_tools_reference)
+        help_menu.addAction(tools_reference_action)
+
         manual_action = QAction("Manual", self)
         manual_action.setToolTip("Show a short manual and the current keyboard shortcuts.")
         manual_action.triggered.connect(self.show_manual)
         help_menu.addAction(manual_action)
+
+        for action_id, tool_key in [
+            ("tool_select_rect", Tool.SELECT_RECT),
+            ("tool_select_ellipse", Tool.SELECT_ELLIPSE),
+            ("tool_select_path", Tool.SELECT_PATH),
+            ("tool_magic_wand", Tool.MAGIC_WAND),
+            ("tool_brush", Tool.BRUSH),
+            ("tool_bucket", Tool.BUCKET),
+        ]:
+            tool_action = QAction(self)
+            tool_action.triggered.connect(
+                lambda _checked=False, selected=tool_key: self._on_tool_button_clicked(selected)
+            )
+            self.addAction(tool_action)
+            self._register_shortcut_action(action_id, tool_action)
 
         self.apply_editor_shortcuts({})
         self._update_undo_redo_actions()
@@ -1498,6 +1657,8 @@ class EditorWindow(QMainWindow):
             Tool.TEXT,
             Tool.FILL_BG,
             Tool.BLUR,
+            Tool.BRUSH,
+            Tool.BUCKET,
         }
 
     def _on_tool_button_clicked(self, tool: str) -> None:
@@ -1577,13 +1738,13 @@ class EditorWindow(QMainWindow):
 
         for tool_key in self._tool_button_order:
             button = self._tool_buttons[tool_key]
-            base_label = self._tool_button_labels[tool_key]
             locked = tool_key == self._locked_tool
             button.setIcon(self._build_tool_icon(tool_key, locked=locked))
+            base_tip = self._tool_tooltip_text(tool_key)
             if locked:
-                button.setToolTip(f"{base_label} (locked – double-click to unlock)")
+                button.setToolTip(f"{base_tip} Currently locked – double-click to unlock.")
             else:
-                button.setToolTip(base_label)
+                button.setToolTip(base_tip)
 
     def _set_next_history_label(self, label: str) -> None:
         """
@@ -1817,6 +1978,47 @@ class EditorWindow(QMainWindow):
         """
 
         self.canvas.set_blur_block_size(value)
+
+    def _wand_tolerance_changed(self, value: int) -> None:
+        """
+        Updates magic wand color tolerance.
+
+        Args:
+            value: Channel tolerance (0-255).
+
+        Returns:
+            None
+        """
+
+        self.canvas.set_wand_tolerance(value)
+
+    def _wand_contiguous_changed(self, checked: bool) -> None:
+        """
+        Updates magic wand contiguous matching mode.
+
+        Args:
+            checked: True for connected pixels only.
+
+        Returns:
+            None
+        """
+
+        self.canvas.set_wand_contiguous(checked)
+
+    def _erase_mode_changed(self, _index: int) -> None:
+        """
+        Updates Delete-key erase mode for pixel selections.
+
+        Args:
+            _index: Combo box index.
+
+        Returns:
+            None
+        """
+
+        mode = self.erase_mode_combo.currentData()
+        if isinstance(mode, str):
+            self.canvas.set_erase_mode(mode)
 
     def _stroke_style_changed(self, _index: int) -> None:
         """
@@ -2206,14 +2408,16 @@ class EditorWindow(QMainWindow):
         """
 
         message_by_action = {
-            "Copy OCR text": "OCR text copied to clipboard.",
+            "Copy OCR text": format_ocr_copied_status(self.canvas.last_ocr_copied_text()),
             "OCR found no text": "OCR completed, but no text was found.",
             "OCR unavailable: install tesseract-ocr": "OCR unavailable. Please install tesseract-ocr.",
         }
         message = message_by_action.get(action_label)
         if message is None:
             return
-        self.statusBar().showMessage(message, 4500)
+        # Keep OCR success messages longer so the copied text remains readable.
+        timeout_ms = 8000 if action_label == "Copy OCR text" else 4500
+        self.statusBar().showMessage(message, timeout_ms)
 
     def _apply_one_shot_tool_completion(self, action_label: str) -> None:
         """
@@ -2240,6 +2444,8 @@ class EditorWindow(QMainWindow):
             Tool.BLUR: "Blur region",
             Tool.STEP: "Insert step",
             Tool.OCR: "Copy OCR text",
+            Tool.BRUSH: "Brush stroke",
+            Tool.BUCKET: "Fill selection",
         }
         expected = expected_action_by_tool.get(self._one_shot_tool)
         if expected is None:
@@ -4157,21 +4363,30 @@ class EditorWindow(QMainWindow):
 
     def show_about(self) -> None:
         """
-        Displays About dialog information.
+        Displays About dialog information with clickable website links.
 
         Returns:
             None
         """
 
-        QMessageBox.information(
-            self,
-            f"About {APP_NAME}",
-            f"{APP_NAME}\n"
-            f"Author: {ABOUT_AUTHOR}\n"
-            f"Website: {ABOUT_WEBSITE}\n"
-            f"GitHub: {ABOUT_GITHUB}\n\n"
-            "Capture screenshots, annotate visuals, blur sensitive data, run OCR, and export fast.",
-        )
+        box = QMessageBox(self)
+        box.setWindowTitle(f"About {APP_NAME}")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(build_about_dialog_html())
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        # QMessageBox labels do not open links unless explicitly enabled.
+        colors = get_theme_colors()
+        for label in box.findChildren(QLabel):
+            label.setTextInteractionFlags(
+                Qt.TextInteractionFlag.TextBrowserInteraction
+            )
+            label.setOpenExternalLinks(True)
+            label.setStyleSheet(
+                f"QLabel {{ color: {colors.text}; }}"
+                f"QLabel a {{ color: {colors.link}; text-decoration: underline; }}"
+            )
+        box.exec()
 
     def show_manual(self) -> None:
         """
@@ -4188,8 +4403,20 @@ class EditorWindow(QMainWindow):
             "1) Use the capture panel to create a screenshot.\n"
             "2) Annotate with tools in the top bar.\n"
             "3) Save project, export image, or print from File menu.\n\n"
+            "Open Help → Tools for icon explanations.\n\n"
             + build_shortcuts_reference_text(self._editor_shortcut_overrides),
         )
+
+    def show_tools_reference(self) -> None:
+        """
+        Displays the tools reference table with icons and explanations.
+
+        Returns:
+            None
+        """
+
+        dialog = ToolReferenceDialog(self, self._build_tool_icon)
+        dialog.exec()
 
     def _update_window_title(self) -> None:
         """

@@ -38,6 +38,7 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPainterPath,
+    QPainterPathStroker,
     QPen,
     QPixmap,
     QTransform,
@@ -91,6 +92,21 @@ from src.crop_item import CropSelectionItem
 from src.image_effects import pixelate_qimage_region
 from src.models import AnnotationModel
 from src.ocr import extract_text_from_png_bytes
+from src.pixel_selection import (
+    build_selection_overlay_pixmap,
+    build_wand_mask_image,
+    document_point_to_image,
+    ellipse_selection_path,
+    mask_has_selection,
+    paint_mask_on_image,
+    paint_path_on_image,
+    path_from_mask_bounds,
+    polygon_selection_path,
+    rasterize_path_to_mask,
+    rect_selection_path,
+    region_from_mask,
+    unite_masks,
+)
 from src.platform import has_tesseract
 from src.scroll_capture import pixmap_to_png_bytes
 from src.theme import (
@@ -163,6 +179,16 @@ class Tool:
     BLUR = "blur"
     STEP = "step"
     OCR = "ocr"
+    SELECT_RECT = "select_rect"
+    SELECT_ELLIPSE = "select_ellipse"
+    SELECT_PATH = "select_path"
+    MAGIC_WAND = "magic_wand"
+    BRUSH = "brush"
+    BUCKET = "bucket"
+
+
+ERASE_MODE_TRANSPARENT = "transparent"
+ERASE_MODE_FILL = "fill"
 
 
 class EditorCanvas(QGraphicsView):
@@ -175,6 +201,7 @@ class EditorCanvas(QGraphicsView):
     selection_style_changed = Signal(dict)
     crop_selection_changed = Signal(bool)
     crop_applied = Signal()
+    status_message = Signal(str)
 
     def __init__(self) -> None:
         """
@@ -263,6 +290,20 @@ class EditorCanvas(QGraphicsView):
         self._alignment_guides: list[QLineF] = []
         self._alignment_labels: list[tuple[str, QPointF]] = []
         self._blank_document = False
+        self._pixel_selection_path = QPainterPath()
+        self._pixel_selection_mask: QImage | None = None
+        self._pixel_selection_item: QGraphicsPixmapItem | None = None
+        self._pixel_selection_outline: QGraphicsPathItem | None = None
+        self._path_selection_points: list[QPointF] = []
+        self._path_preview_item: QGraphicsPathItem | None = None
+        self._path_selection_add = False
+        self._erase_mode = ERASE_MODE_TRANSPARENT
+        self._wand_tolerance = 32
+        self._wand_contiguous = True
+        self._brush_painting = False
+        self._brush_last_pos: QPointF | None = None
+        self._brush_stroke_dirty = False
+        self._last_ocr_copied_text = ""
 
         self._background_item = QGraphicsPixmapItem()
         self._background_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
@@ -326,11 +367,27 @@ class EditorCanvas(QGraphicsView):
         self.setBackgroundBrush(QBrush(workspace_color))
         self._workspace_item.setBrush(workspace_color)
         self._workspace_item.setPen(QPen(Qt.PenStyle.NoPen))
-        self._document_matte_item.setBrush(QColor(_DOCUMENT_MATTE_COLOR))
+        self._document_matte_item.setBrush(self._checkerboard_brush())
         self._document_matte_item.setPen(QPen(border_color, 1.0))
         self._document_shadow_item.setBrush(shadow_color)
         self._document_shadow_item.setPen(QPen(Qt.PenStyle.NoPen))
         self.viewport().update()
+
+    def _checkerboard_brush(self) -> QBrush:
+        """
+        Builds a subtle checkerboard brush for transparent document areas.
+
+        Returns:
+            QBrush: Tiled checkerboard brush.
+        """
+
+        tile = QPixmap(16, 16)
+        tile.fill(QColor("#ffffff"))
+        painter = QPainter(tile)
+        painter.fillRect(0, 0, 8, 8, QColor("#d0d0d0"))
+        painter.fillRect(8, 8, 8, 8, QColor("#d0d0d0"))
+        painter.end()
+        return QBrush(tile)
 
     def _workspace_chrome_items(self) -> frozenset[QGraphicsItem]:
         """
@@ -366,6 +423,12 @@ class EditorCanvas(QGraphicsView):
             blocked.add(self._resize_overlay_item)
         if self._copy_feedback_item is not None:
             blocked.add(self._copy_feedback_item)
+        if self._pixel_selection_item is not None:
+            blocked.add(self._pixel_selection_item)
+        if self._pixel_selection_outline is not None:
+            blocked.add(self._pixel_selection_outline)
+        if self._path_preview_item is not None:
+            blocked.add(self._path_preview_item)
         return frozenset(blocked)
 
     def _compute_workspace_margin(self, width: float, height: float) -> float:
@@ -1025,7 +1088,16 @@ class EditorCanvas(QGraphicsView):
             super().mousePressEvent(event)
             return
 
-        if self._try_toggle_item_selection(event):
+        if self._tool in {
+            Tool.SELECT_RECT,
+            Tool.SELECT_ELLIPSE,
+            Tool.SELECT_PATH,
+            Tool.MAGIC_WAND,
+            Tool.BRUSH,
+            Tool.BUCKET,
+        }:
+            pass
+        elif self._try_toggle_item_selection(event):
             return
 
         scene_pos = self.mapToScene(event.position().toPoint())
@@ -1093,6 +1165,38 @@ class EditorCanvas(QGraphicsView):
             self._preview_item = self._create_preview_item(scene_pos)
             if self._preview_item is not None:
                 self._scene.addItem(self._preview_item)
+            return
+        if self._tool in {Tool.SELECT_RECT, Tool.SELECT_ELLIPSE}:
+            self._clear_resize_overlay()
+            self._preview_item = self._create_preview_item(scene_pos)
+            if self._preview_item is not None:
+                self._scene.addItem(self._preview_item)
+            return
+        if self._tool == Tool.SELECT_PATH:
+            self._clear_resize_overlay()
+            add_mode = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self._path_selection_add = add_mode
+            if not self._path_selection_points:
+                self._path_selection_points = [scene_pos]
+            else:
+                self._path_selection_points.append(scene_pos)
+            self._update_path_preview()
+            return
+        if self._tool == Tool.MAGIC_WAND:
+            self._clear_resize_overlay()
+            add_mode = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self._apply_wand_at(scene_pos, add=add_mode)
+            return
+        if self._tool == Tool.BUCKET:
+            self._clear_resize_overlay()
+            self.fill_pixel_selection()
+            return
+        if self._tool == Tool.BRUSH:
+            self._clear_resize_overlay()
+            self._brush_painting = True
+            self._brush_last_pos = scene_pos
+            self._brush_stroke_dirty = False
+            self._paint_brush_segment(scene_pos, scene_pos)
             return
         if self._tool == Tool.FILL_BG:
             self._clear_resize_overlay()
@@ -1221,6 +1325,15 @@ class EditorCanvas(QGraphicsView):
             current = self.mapToScene(event.position().toPoint())
             self._update_preview_item(self._start_scene_pos, current)
             return
+        if self._tool == Tool.SELECT_PATH and self._path_selection_points:
+            current = self.mapToScene(event.position().toPoint())
+            self._update_path_preview(current)
+            return
+        if self._tool == Tool.BRUSH and self._brush_painting and self._brush_last_pos is not None:
+            current = self.mapToScene(event.position().toPoint())
+            self._paint_brush_segment(self._brush_last_pos, current)
+            self._brush_last_pos = current
+            return
         if (
             self._tool == Tool.SELECT
             and event.buttons() & Qt.MouseButton.LeftButton
@@ -1259,6 +1372,17 @@ class EditorCanvas(QGraphicsView):
                     self._update_crop_shade()
                     self.crop_selection_changed.emit(True)
                 return
+            if self._tool in {Tool.SELECT_RECT, Tool.SELECT_ELLIPSE}:
+                select_rect = self._preview_item.boundingRect().translated(self._preview_item.pos())
+                self._scene.removeItem(self._preview_item)
+                self._preview_item = None
+                add_mode = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                if self._tool == Tool.SELECT_ELLIPSE:
+                    path = ellipse_selection_path(select_rect)
+                else:
+                    path = rect_selection_path(select_rect)
+                self.set_pixel_selection_path(path, add=add_mode)
+                return
             if self._tool == Tool.FILL_BG:
                 fill_rect = self._preview_item.boundingRect().translated(self._preview_item.pos())
                 self._scene.removeItem(self._preview_item)
@@ -1288,6 +1412,13 @@ class EditorCanvas(QGraphicsView):
             }
             self._emit_content_changed(draw_names.get(self._tool, "Draw annotation"))
             return
+        if event.button() == Qt.MouseButton.LeftButton and self._tool == Tool.BRUSH:
+            if self._brush_painting and self._brush_stroke_dirty:
+                self._emit_content_changed("Brush stroke")
+            self._brush_painting = False
+            self._brush_last_pos = None
+            self._brush_stroke_dirty = False
+            return
         super().mouseReleaseEvent(event)
         if event.button() == Qt.MouseButton.LeftButton and self._tool == Tool.SELECT:
             self._snap_selected_items_with_alignment()
@@ -1299,6 +1430,28 @@ class EditorCanvas(QGraphicsView):
                 return
         self._sync_resize_overlay_with_target()
         self._refresh_selection_info()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        """
+        Closes an in-progress lasso path selection on double-click.
+
+        Args:
+            event: Mouse double-click event.
+
+        Returns:
+            None
+        """
+
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._tool == Tool.SELECT_PATH
+            and len(self._path_selection_points) >= 3
+        ):
+            # Double-click also generates a press that already appended the last point.
+            self._close_path_selection(add=self._path_selection_add)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def wheelEvent(self, event) -> None:
         """
@@ -1515,6 +1668,18 @@ class EditorCanvas(QGraphicsView):
             item.setPen(ocr_pen)
             item.setBrush(QColor(46, 204, 113, 70))
             return item
+        if self._tool == Tool.SELECT_RECT:
+            select_pen = QPen(QColor(255, 255, 255, 220), 1.5, Qt.PenStyle.DashLine)
+            item = QGraphicsRectItem(QRectF(start, start))
+            item.setPen(select_pen)
+            item.setBrush(QColor(52, 152, 219, 50))
+            return item
+        if self._tool == Tool.SELECT_ELLIPSE:
+            select_pen = QPen(QColor(255, 255, 255, 220), 1.5, Qt.PenStyle.DashLine)
+            item = QGraphicsEllipseItem(QRectF(start, start))
+            item.setPen(select_pen)
+            item.setBrush(QColor(52, 152, 219, 50))
+            return item
         return QGraphicsRectItem(QRectF(start, start))
 
     def _update_preview_item(self, start: QPointF, current: QPointF) -> None:
@@ -1701,10 +1866,535 @@ class EditorCanvas(QGraphicsView):
                 continue
             self._scene.removeItem(item)
         self._crop_item = None
-        self._remove_crop_shade_item()
-        self._clear_resize_overlay()
+        self._crop_shade_item = None
+        self._resize_overlay_item = None
+        self._resize_overlay_target = None
+        self._pixel_selection_item = None
+        self._pixel_selection_outline = None
+        self._path_preview_item = None
+        self._pixel_selection_path = QPainterPath()
+        self._pixel_selection_mask = None
+        self._path_selection_points.clear()
         self.clear_copy_feedback()
         self.crop_selection_changed.emit(False)
+
+    def has_pixel_selection(self) -> bool:
+        """
+        Returns whether a pixel selection mask is active.
+
+        Returns:
+            bool: True when a non-empty selection exists.
+        """
+
+        if self._pixel_selection_mask is not None:
+            return mask_has_selection(self._pixel_selection_mask)
+        return not self._pixel_selection_path.isEmpty()
+
+    def clear_pixel_selection(self) -> None:
+        """
+        Clears the active pixel selection mask and overlay.
+
+        Returns:
+            None
+        """
+
+        self._pixel_selection_path = QPainterPath()
+        self._pixel_selection_mask = None
+        self._path_selection_points.clear()
+        self._remove_path_preview_item()
+        self._remove_pixel_selection_overlay()
+        self.viewport().update()
+
+    def pixel_selection_path(self) -> QPainterPath:
+        """
+        Returns a copy of the active pixel selection path.
+
+        Returns:
+            QPainterPath: Current selection path.
+        """
+
+        return QPainterPath(self._pixel_selection_path)
+
+    def set_erase_mode(self, mode: str) -> None:
+        """
+        Sets whether Delete erases to transparent or fill color.
+
+        Args:
+            mode: ``transparent`` or ``fill``.
+
+        Returns:
+            None
+        """
+
+        if mode == ERASE_MODE_FILL:
+            self._erase_mode = ERASE_MODE_FILL
+        else:
+            self._erase_mode = ERASE_MODE_TRANSPARENT
+
+    def erase_mode(self) -> str:
+        """
+        Returns the active erase mode.
+
+        Returns:
+            str: Erase mode identifier.
+        """
+
+        return self._erase_mode
+
+    def set_wand_tolerance(self, tolerance: int) -> None:
+        """
+        Sets magic wand color tolerance.
+
+        Args:
+            tolerance: Allowed channel delta (0-255).
+
+        Returns:
+            None
+        """
+
+        self._wand_tolerance = max(0, min(255, int(tolerance)))
+
+    def wand_tolerance(self) -> int:
+        """
+        Returns the magic wand tolerance.
+
+        Returns:
+            int: Tolerance value.
+        """
+
+        return self._wand_tolerance
+
+    def set_wand_contiguous(self, contiguous: bool) -> None:
+        """
+        Sets whether wand selection is contiguous flood-fill.
+
+        Args:
+            contiguous: True for connected pixels only.
+
+        Returns:
+            None
+        """
+
+        self._wand_contiguous = bool(contiguous)
+
+    def wand_contiguous(self) -> bool:
+        """
+        Returns whether wand uses contiguous matching.
+
+        Returns:
+            bool: Contiguous mode flag.
+        """
+
+        return self._wand_contiguous
+
+    def set_pixel_selection_path(self, path: QPainterPath, *, add: bool = False) -> None:
+        """
+        Replaces or unions the pixel selection path.
+
+        Args:
+            path: New selection path in document coordinates.
+            add: True to union with the existing selection.
+
+        Returns:
+            None
+        """
+
+        if path.isEmpty():
+            if not add:
+                self.clear_pixel_selection()
+            return
+        document = self.document_rect()
+        width = max(1, int(document.width()))
+        height = max(1, int(document.height()))
+        local_path = QPainterPath(path)
+        origin = document.topLeft()
+        if origin.x() != 0.0 or origin.y() != 0.0:
+            local_path.translate(-origin.x(), -origin.y())
+        mask = rasterize_path_to_mask(local_path, width, height)
+        self.set_pixel_selection_mask(mask, add=add)
+
+    def set_pixel_selection_mask(self, mask: QImage, *, add: bool = False) -> None:
+        """
+        Replaces or unions the pixel selection mask.
+
+        Args:
+            mask: Selection mask in document pixel coordinates.
+            add: True to union with the existing selection.
+
+        Returns:
+            None
+        """
+
+        if mask.isNull() or not mask_has_selection(mask):
+            if not add:
+                self.clear_pixel_selection()
+            return
+        if add and self._pixel_selection_mask is not None and mask_has_selection(self._pixel_selection_mask):
+            combined = unite_masks(self._pixel_selection_mask, mask)
+        else:
+            combined = mask.copy()
+        self._pixel_selection_mask = combined
+        self._pixel_selection_path = path_from_mask_bounds(combined)
+        origin = self.document_rect().topLeft()
+        if origin.x() != 0.0 or origin.y() != 0.0:
+            self._pixel_selection_path.translate(origin)
+        self._update_pixel_selection_overlay()
+
+    def flatten_annotations(self) -> None:
+        """
+        Burns all annotations into the screenshot and clears editable items.
+
+        Returns:
+            None
+        """
+
+        composited = self.export_composited_pixmap()
+        if composited.isNull():
+            return
+        self._set_screenshot_without_view_reset(composited, reset_base_content=True)
+        self.clear_annotations()
+        self.clear_pixel_selection()
+        self._blank_document = False
+        self._emit_content_changed("Flatten annotations")
+
+    def erase_pixel_selection(self) -> bool:
+        """
+        Erases the screenshot inside the active pixel selection.
+
+        Returns:
+            bool: True when pixels were modified.
+        """
+
+        if not self.has_pixel_selection():
+            return False
+        screenshot = self.screenshot()
+        if screenshot.isNull():
+            return False
+        image = screenshot.toImage()
+        mask = self._active_selection_mask(image.width(), image.height())
+        if mask is None:
+            return False
+        if self._erase_mode == ERASE_MODE_FILL:
+            image = paint_mask_on_image(image, mask, QColor(self._style.fill_color))
+        else:
+            image = paint_mask_on_image(
+                image,
+                mask,
+                QColor(0, 0, 0, 0),
+                erase_transparent=True,
+            )
+        self._background_item.setPixmap(QPixmap.fromImage(image))
+        self._emit_content_changed("Erase selection")
+        return True
+
+    def fill_pixel_selection(self) -> bool:
+        """
+        Fills the active pixel selection with the current fill color.
+
+        Returns:
+            bool: True when pixels were modified.
+        """
+
+        if not self.has_pixel_selection():
+            self.status_message.emit("Select an area first, then use Fill.")
+            return False
+        screenshot = self.screenshot()
+        if screenshot.isNull():
+            return False
+        image = screenshot.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        mask = self._active_selection_mask(image.width(), image.height())
+        if mask is None or not mask_has_selection(mask):
+            self.status_message.emit("Select an area first, then use Fill.")
+            return False
+        fill = QColor(self._style.fill_color)
+        image = paint_mask_on_image(image, mask, fill)
+        self._background_item.setPixmap(QPixmap.fromImage(image))
+        self._emit_content_changed("Fill selection")
+        message = (
+            f"Filled selection with Fill color "
+            f"(RGBA {fill.red()},{fill.green()},{fill.blue()},{fill.alpha()})."
+        )
+        if fill.alpha() < 80:
+            message += " Raise Fill opacity in the toolbar if it looks too faint."
+        self.status_message.emit(message)
+        return True
+
+    def _active_selection_mask(self, width: int, height: int) -> QImage | None:
+        """
+        Returns the current selection as an image-space mask.
+
+        Args:
+            width: Expected mask width.
+            height: Expected mask height.
+
+        Returns:
+            QImage | None: Selection mask, or None when empty.
+        """
+
+        if self._pixel_selection_mask is not None and mask_has_selection(self._pixel_selection_mask):
+            mask = self._pixel_selection_mask
+            if mask.width() == width and mask.height() == height:
+                return mask
+            scaled = QImage(width, height, QImage.Format.Format_ARGB32)
+            scaled.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(scaled)
+            painter.drawImage(0, 0, mask)
+            painter.end()
+            return scaled
+        if self._pixel_selection_path.isEmpty():
+            return None
+        local_path = QPainterPath(self._pixel_selection_path)
+        origin = self.document_rect().topLeft()
+        if origin.x() != 0.0 or origin.y() != 0.0:
+            local_path.translate(-origin.x(), -origin.y())
+        return rasterize_path_to_mask(local_path, width, height)
+
+    def _paint_brush_segment(self, start: QPointF, end: QPointF) -> None:
+        """
+        Paints one freehand brush segment onto the screenshot.
+
+        Uses the Border color and Width as brush size. When a pixel selection
+        is active, painting is clipped to that selection.
+
+        Args:
+            start: Segment start in document coordinates.
+            end: Segment end in document coordinates.
+
+        Returns:
+            None
+        """
+
+        screenshot = self.screenshot()
+        if screenshot.isNull():
+            return
+        image = screenshot.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+
+        origin = self.document_rect().topLeft()
+        ratio = max(1.0, float(screenshot.devicePixelRatio()))
+
+        def to_image_point(point: QPointF) -> QPointF:
+            return QPointF(
+                (point.x() - origin.x()) * ratio,
+                (point.y() - origin.y()) * ratio,
+            )
+
+        start_px = to_image_point(start)
+        end_px = to_image_point(end)
+        brush_width = max(1.0, float(self._style.stroke_width) * ratio)
+        radius = brush_width / 2.0
+        color = QColor(self._style.stroke_color)
+
+        painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self.has_pixel_selection():
+            mask = self._active_selection_mask(image.width(), image.height())
+            if mask is not None and mask_has_selection(mask):
+                painter.setClipRegion(region_from_mask(mask))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(color)
+        # Always stamp endpoints so clicks and short moves leave visible paint.
+        painter.drawEllipse(start_px, radius, radius)
+        painter.drawEllipse(end_px, radius, radius)
+        if start_px != end_px:
+            pen = QPen(color, brush_width)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawLine(start_px, end_px)
+        painter.end()
+
+        self._background_item.setPixmap(QPixmap.fromImage(image))
+        self._brush_stroke_dirty = True
+
+    def _apply_wand_at(self, scene_pos: QPointF, *, add: bool) -> None:
+        """
+        Builds a magic-wand selection from a document click.
+
+        Args:
+            scene_pos: Click position in scene coordinates.
+            add: True to add to the existing selection.
+
+        Returns:
+            None
+        """
+
+        screenshot = self.screenshot()
+        if screenshot.isNull():
+            return
+        origin = self.document_rect().topLeft()
+        ratio = max(1.0, float(screenshot.devicePixelRatio()))
+        image = screenshot.toImage()
+        image_x = int((scene_pos.x() - origin.x()) * ratio)
+        image_y = int((scene_pos.y() - origin.y()) * ratio)
+        mask = build_wand_mask_image(
+            image,
+            image_x,
+            image_y,
+            self._wand_tolerance,
+            contiguous=self._wand_contiguous,
+        )
+        if not mask_has_selection(mask):
+            self.status_message.emit("Magic Wand found no matching pixels.")
+            return
+        # Keep mask in document/logical pixel space for overlay and painting.
+        if abs(ratio - 1.0) > 0.001:
+            logical_size = screenshot.size()
+            mask = mask.scaled(
+                logical_size,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+        count_text = mask.text("selection_count")
+        self.set_pixel_selection_mask(mask, add=add)
+        if count_text.isdigit():
+            self.status_message.emit(f"Magic Wand selected {count_text} pixels.")
+        else:
+            self.status_message.emit("Magic Wand selection ready.")
+
+    def _ensure_pixel_selection_overlay(self) -> None:
+        """
+        Creates dimmed outside-mask and marching-ants outline items.
+
+        Returns:
+            None
+        """
+
+        if self._pixel_selection_item is None:
+            self._pixel_selection_item = QGraphicsPixmapItem()
+            self._pixel_selection_item.setZValue(880)
+            self._pixel_selection_item.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+                False,
+            )
+            self._pixel_selection_item.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                False,
+            )
+            self._scene.addItem(self._pixel_selection_item)
+        if self._pixel_selection_outline is None:
+            self._pixel_selection_outline = QGraphicsPathItem()
+            self._pixel_selection_outline.setZValue(881)
+            ants = QPen(QColor(255, 255, 255, 230), 1.2, Qt.PenStyle.DashLine)
+            ants.setCosmetic(True)
+            ants.setDashPattern([4.0, 3.0])
+            self._pixel_selection_outline.setPen(ants)
+            self._pixel_selection_outline.setBrush(Qt.BrushStyle.NoBrush)
+            self._pixel_selection_outline.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+                False,
+            )
+            self._pixel_selection_outline.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                False,
+            )
+            self._scene.addItem(self._pixel_selection_outline)
+
+    def _remove_pixel_selection_overlay(self) -> None:
+        """
+        Removes pixel selection overlay items from the scene.
+
+        Returns:
+            None
+        """
+
+        if self._pixel_selection_item is not None:
+            if self._pixel_selection_item.scene() is self._scene:
+                self._scene.removeItem(self._pixel_selection_item)
+            self._pixel_selection_item = None
+        if self._pixel_selection_outline is not None:
+            if self._pixel_selection_outline.scene() is self._scene:
+                self._scene.removeItem(self._pixel_selection_outline)
+            self._pixel_selection_outline = None
+
+    def _update_pixel_selection_overlay(self) -> None:
+        """
+        Refreshes the dimmed outside mask for the active selection.
+
+        Returns:
+            None
+        """
+
+        if not self.has_pixel_selection():
+            self._remove_pixel_selection_overlay()
+            return
+        document = self.document_rect()
+        mask = self._active_selection_mask(int(document.width()), int(document.height()))
+        if mask is None or not mask_has_selection(mask):
+            self._remove_pixel_selection_overlay()
+            return
+        self._ensure_pixel_selection_overlay()
+        assert self._pixel_selection_item is not None
+        assert self._pixel_selection_outline is not None
+        overlay = build_selection_overlay_pixmap(mask)
+        self._pixel_selection_item.setPixmap(overlay)
+        self._pixel_selection_item.setPos(document.topLeft())
+        self._pixel_selection_outline.setPath(self._pixel_selection_path)
+
+    def _remove_path_preview_item(self) -> None:
+        """
+        Removes the in-progress lasso preview item.
+
+        Returns:
+            None
+        """
+
+        if self._path_preview_item is None:
+            return
+        self._scene.removeItem(self._path_preview_item)
+        self._path_preview_item = None
+
+    def _update_path_preview(self, cursor: QPointF | None = None) -> None:
+        """
+        Updates the lasso rubber-band preview.
+
+        Args:
+            cursor: Optional live cursor point.
+
+        Returns:
+            None
+        """
+
+        if not self._path_selection_points:
+            self._remove_path_preview_item()
+            return
+        path = QPainterPath()
+        path.moveTo(self._path_selection_points[0])
+        for point in self._path_selection_points[1:]:
+            path.lineTo(point)
+        if cursor is not None:
+            path.lineTo(cursor)
+        if self._path_preview_item is None:
+            self._path_preview_item = QGraphicsPathItem()
+            self._path_preview_item.setZValue(882)
+            pen = QPen(QColor(52, 152, 219, 230), 1.5, Qt.PenStyle.DashLine)
+            pen.setCosmetic(True)
+            self._path_preview_item.setPen(pen)
+            self._path_preview_item.setBrush(QColor(52, 152, 219, 40))
+            self._path_preview_item.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+                False,
+            )
+            self._scene.addItem(self._path_preview_item)
+        self._path_preview_item.setPath(path)
+
+    def _close_path_selection(self, *, add: bool) -> None:
+        """
+        Finalizes the lasso polygon into a pixel selection.
+
+        Args:
+            add: True to union with the existing selection.
+
+        Returns:
+            None
+        """
+
+        path = polygon_selection_path(self._path_selection_points)
+        self._path_selection_points.clear()
+        self._remove_path_preview_item()
+        if path.isEmpty():
+            return
+        self.set_pixel_selection_path(path, add=add)
 
     def collect_annotations(self) -> list[AnnotationModel]:
         """
@@ -1804,6 +2494,18 @@ class EditorCanvas(QGraphicsView):
         if self._copy_feedback_item is not None:
             copy_feedback_was_visible = self._copy_feedback_item.isVisible()
             self._copy_feedback_item.setVisible(False)
+        pixel_shade_was_visible = False
+        pixel_outline_was_visible = False
+        if self._pixel_selection_item is not None:
+            pixel_shade_was_visible = self._pixel_selection_item.isVisible()
+            self._pixel_selection_item.setVisible(False)
+        if self._pixel_selection_outline is not None:
+            pixel_outline_was_visible = self._pixel_selection_outline.isVisible()
+            self._pixel_selection_outline.setVisible(False)
+        path_preview_was_visible = False
+        if self._path_preview_item is not None:
+            path_preview_was_visible = self._path_preview_item.isVisible()
+            self._path_preview_item.setVisible(False)
         image = QImage(rect.size(), QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.transparent)
         painter = QPainter(image)
@@ -1813,6 +2515,12 @@ class EditorCanvas(QGraphicsView):
             self._resize_overlay_item.setVisible(resize_overlay_was_visible)
         if self._copy_feedback_item is not None:
             self._copy_feedback_item.setVisible(copy_feedback_was_visible)
+        if self._pixel_selection_item is not None:
+            self._pixel_selection_item.setVisible(pixel_shade_was_visible)
+        if self._pixel_selection_outline is not None:
+            self._pixel_selection_outline.setVisible(pixel_outline_was_visible)
+        if self._path_preview_item is not None:
+            self._path_preview_item.setVisible(path_preview_was_visible)
         return QPixmap.fromImage(image)
 
     def flash_copy_feedback(self, target_rect: QRectF | None = None) -> None:
@@ -2042,12 +2750,23 @@ class EditorCanvas(QGraphicsView):
         if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter} and self.has_pending_crop():
             self.apply_pending_crop()
             return
-        if event.key() == Qt.Key.Key_Escape and self.has_pending_crop():
-            self.cancel_crop()
-            return
+        if event.key() == Qt.Key.Key_Escape:
+            if self.has_pending_crop():
+                self.cancel_crop()
+                return
+            if self._path_selection_points:
+                self._path_selection_points.clear()
+                self._remove_path_preview_item()
+                return
+            if self.has_pixel_selection():
+                self.clear_pixel_selection()
+                return
         if event.key() == Qt.Key.Key_Delete:
             if self.has_pending_crop() and self._crop_item is not None and self._crop_item.isSelected():
                 self.cancel_crop()
+                return
+            if self.has_pixel_selection():
+                self.erase_pixel_selection()
                 return
             removed = False
             for item in list(self._scene.selectedItems()):
@@ -2567,10 +3286,22 @@ class EditorCanvas(QGraphicsView):
             return
         text = extract_text_from_png_bytes(pixmap_to_png_bytes(cropped))
         if not text:
+            self._last_ocr_copied_text = ""
             self._emit_content_changed("OCR found no text")
             return
         QGuiApplication.clipboard().setText(text)
+        self._last_ocr_copied_text = text
         self._emit_content_changed("Copy OCR text")
+
+    def last_ocr_copied_text(self) -> str:
+        """
+        Returns the text from the most recent successful OCR copy.
+
+        Returns:
+            str: Last copied OCR text, or an empty string.
+        """
+
+        return self._last_ocr_copied_text
 
     def _try_paste_image_url(self, url: str, scene_pos: QPointF) -> bool:
         """

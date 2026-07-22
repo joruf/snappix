@@ -74,6 +74,13 @@ EDITOR_SHORTCUT_DEFINITIONS: tuple[ShortcutDefinition, ...] = (
         "View",
         "Ctrl+Shift+-",
     ),
+    ShortcutDefinition("flatten", "Flatten annotations", "Edit", "Ctrl+Shift+F"),
+    ShortcutDefinition("tool_select_rect", "Pixel select rectangle", "Tools", "M"),
+    ShortcutDefinition("tool_select_ellipse", "Pixel select ellipse", "Tools", "Shift+M"),
+    ShortcutDefinition("tool_select_path", "Pixel select lasso", "Tools", "L"),
+    ShortcutDefinition("tool_magic_wand", "Magic Wand", "Tools", "W"),
+    ShortcutDefinition("tool_brush", "Brush", "Tools", "B"),
+    ShortcutDefinition("tool_bucket", "Fill selection", "Tools", "G"),
 )
 
 _EDITOR_SHORTCUT_BY_ID = {
@@ -272,7 +279,10 @@ def build_shortcuts_reference_text(overrides: dict[str, str] | None = None) -> s
             "  Arrow keys: Nudge selection by 1 px",
             "  Shift+Arrow keys: Nudge selection by 10 px",
             "  Enter: Apply crop selection",
-            "  Esc: Cancel crop selection or capture overlays",
+            "  Esc: Cancel crop, clear pixel selection, or capture overlays",
+            "  Delete: Erase pixel selection (or delete annotations)",
+            "  Lasso: click points, double-click to close path",
+            "  Shift+selection tools / Magic Wand: Add to pixel selection",
             "",
             "Change bindings under Settings → Editor Shortcuts.",
         ]

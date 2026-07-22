@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from src.ocr import extract_text_from_png_bytes
+from src.ocr import extract_text_from_png_bytes, format_ocr_copied_status
 
 
 class TestOcr(unittest.TestCase):
@@ -66,3 +66,18 @@ class TestOcr(unittest.TestCase):
 
         mock_run.side_effect = subprocess.SubprocessError("failed")
         self.assertEqual(extract_text_from_png_bytes(b"fake-png"), "")
+
+    def test_format_ocr_copied_status_includes_text_preview(self) -> None:
+        """
+        Ensures the footer message includes a compact OCR text preview.
+        """
+
+        self.assertEqual(
+            format_ocr_copied_status("Hello\n  world"),
+            "OCR copied: Hello world",
+        )
+        long_text = "a" * 250
+        formatted = format_ocr_copied_status(long_text, max_length=40)
+        self.assertTrue(formatted.startswith("OCR copied: "))
+        self.assertLessEqual(len(formatted) - len("OCR copied: "), 40)
+        self.assertTrue(formatted.endswith("…"))
