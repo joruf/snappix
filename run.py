@@ -256,7 +256,7 @@ def _autostart_exec_command() -> str:
         str: Command string for desktop entry.
     """
 
-    script_path = _project_root() / "start_snapagent_desktop.py"
+    script_path = _project_root() / "run.py"
     return f"python3 \"{script_path}\""
 
 
@@ -530,6 +530,15 @@ class AppController:
         self.config: AppConfig = self.config_manager.load()
         if self.autostart_manager.is_enabled():
             self.config.autostart_enabled = True
+            try:
+                # Refresh legacy/broken autostart entries to current Exec command.
+                self.autostart_manager.enable(
+                    _autostart_exec_command(),
+                    APP_NAME,
+                    str(_icon_path()),
+                )
+            except OSError:
+                pass
         self.capture_panel.set_autostart_checked(self.config.autostart_enabled)
 
         from src.global_hotkeys import GlobalHotkeyManager, HotkeyBridge
