@@ -31,6 +31,7 @@ class ShortcutDefinition:
 
 EDITOR_SHORTCUT_DEFINITIONS: tuple[ShortcutDefinition, ...] = (
     ShortcutDefinition("new_canvas", "New canvas", "File", "Ctrl+N"),
+    ShortcutDefinition("new_tab", "New empty tab", "File", "Ctrl+T"),
     ShortcutDefinition("open_project", "Open project", "File", "Ctrl+O"),
     ShortcutDefinition("save_project", "Save project", "File", "Ctrl+S"),
     ShortcutDefinition("save_project_as", "Save project as", "File", "Ctrl+Shift+S"),
@@ -86,6 +87,17 @@ EDITOR_SHORTCUT_DEFINITIONS: tuple[ShortcutDefinition, ...] = (
 _EDITOR_SHORTCUT_BY_ID = {
     definition.action_id: definition for definition in EDITOR_SHORTCUT_DEFINITIONS
 }
+
+# Owned by the editor host window so embedded tab QMainWindows do not create
+# ambiguous Ctrl+N / Ctrl+T / Ctrl+W / Ctrl+O bindings.
+HOST_OWNED_SHORTCUT_IDS = frozenset(
+    {
+        "new_canvas",
+        "new_tab",
+        "open_project",
+        "close_tab",
+    }
+)
 
 
 def editor_shortcut_ids() -> frozenset[str]:

@@ -581,6 +581,10 @@ class AppController:
             lambda: self.create_new_canvas_tab(self.editor_host),
         )
         empty_actions.addWidget(new_canvas_button)
+        new_tab_button = QPushButton("New Tab")
+        new_tab_button.setToolTip("Open a new empty editor tab (Ctrl+T).")
+        new_tab_button.clicked.connect(self.create_empty_editor_tab)
+        empty_actions.addWidget(new_tab_button)
         open_project_button = QPushButton("Open Project")
         open_project_button.setToolTip("Open an existing project file (Ctrl+O).")
         open_project_button.clicked.connect(self._open_project_from_editor_host)
@@ -591,26 +595,8 @@ class AppController:
         self.editor_stack.addWidget(self.editor_tabs)
         self.editor_host.setCentralWidget(self.editor_stack)
         self._sync_editor_host_view()
-        self._new_canvas_shortcut = QShortcut(
-            QKeySequence("Ctrl+N"),
-            self.editor_host,
-        )
-        self._new_canvas_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-        self._new_canvas_shortcut.activated.connect(
-            lambda: self.create_new_canvas_tab(self.editor_host),
-        )
-        self._open_project_shortcut = QShortcut(
-            QKeySequence("Ctrl+O"),
-            self.editor_host,
-        )
-        self._open_project_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-        self._open_project_shortcut.activated.connect(self._open_project_from_editor_host)
-        self._close_tab_shortcut = QShortcut(
-            QKeySequence("Ctrl+W"),
-            self.editor_host,
-        )
-        self._close_tab_shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
-        self._close_tab_shortcut.activated.connect(self._close_current_editor_tab)
+        self._host_shortcuts: dict[str, object] = {}
+        self._install_host_editor_shortcuts()
         self.editor_host.close_requested.connect(self._on_editor_host_close)
         self._QFileDialog = QFileDialog
 
@@ -740,6 +726,7 @@ class AppController:
         self.config = dialog.build_config()
         self.config_manager.save(self.config)
         self._apply_hotkeys()
+        self._install_host_editor_shortcuts()
         for editor in list(self.editors):
             editor.set_auto_crop_on_shrink(self.config.auto_crop_on_shrink)
             editor.apply_editor_shortcuts(self.config.editor_shortcuts)
@@ -1094,6 +1081,7 @@ class AppController:
         editor.new_canvas_requested.connect(
             lambda: self.create_new_canvas_tab(editor),
         )
+        editor.new_tab_requested.connect(self.create_empty_editor_tab)
         editor.setWindowIcon(self._editor_icon)
         editor.set_minimize_to_tray_on_close(False)
         editor.setParent(self.editor_tabs)
@@ -1368,6 +1356,47 @@ class AppController:
 
         self._show_editor_host()
 
+    def _install_host_editor_shortcuts(self) -> None:
+        """
+        Installs tab/host File shortcuts on the editor window (application-wide).
+
+        Returns:
+            None
+        """
+
+        from PySide6.QtCore import Qt
+        from PySide6.QtGui import QKeySequence, QShortcut
+
+        from src.shortcuts import sequences_for_action
+
+        overrides = self.config.editor_shortcuts
+        bindings = {
+            "new_canvas": (
+                lambda: self.create_new_canvas_tab(self.editor_host),
+            ),
+            "new_tab": (self.create_empty_editor_tab,),
+            "open_project": (self._open_project_from_editor_host,),
+            "close_tab": (self._close_current_editor_tab,),
+        }
+        if not hasattr(self, "_host_shortcuts"):
+            self._host_shortcuts = {}
+
+        for action_id, callbacks in bindings.items():
+            sequences = sequences_for_action(action_id, overrides)
+            shortcut = self._host_shortcuts.get(action_id)
+            if shortcut is None:
+                shortcut = QShortcut(self.editor_host)
+                shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+                for callback in callbacks:
+                    shortcut.activated.connect(callback)
+                self._host_shortcuts[action_id] = shortcut
+            if sequences:
+                shortcut.setKeys(sequences)
+                shortcut.setEnabled(True)
+            else:
+                shortcut.setKeys([])
+                shortcut.setEnabled(False)
+
     def create_new_canvas_tab(self, parent=None) -> None:
         """
         Prompts for canvas size and opens one blank editor tab.
@@ -1394,6 +1423,27 @@ class AppController:
         width, height = selected_size
         pixmap = self._build_blank_canvas_pixmap(width, height)
         editor = self._create_editor_tab(pixmap, f"New Canvas {width}×{height}")
+        editor.canvas.set_blank_document(True)
+
+    def create_empty_editor_tab(self) -> None:
+        """
+        Opens one empty editor tab using the default canvas size.
+
+        Returns:
+            None
+        """
+
+        from src.canvas_size import DEFAULT_CANVAS_HEIGHT, DEFAULT_CANVAS_WIDTH
+
+        pixmap = self._build_blank_canvas_pixmap(
+            DEFAULT_CANVAS_WIDTH,
+            DEFAULT_CANVAS_HEIGHT,
+        )
+        tab_number = self.editor_tabs.count() + 1
+        editor = self._create_editor_tab(
+            pixmap,
+            f"Tab {tab_number}",
+        )
         editor.canvas.set_blank_document(True)
 
     def _build_blank_canvas_pixmap(self, width: int, height: int):

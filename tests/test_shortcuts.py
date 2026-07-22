@@ -43,6 +43,10 @@ class TestEditorShortcuts(unittest.TestCase):
         """
 
         self.assertEqual(resolved_shortcut_text("copy", {}), "Ctrl+C")
+        self.assertEqual(resolved_shortcut_text("new_tab", {}), "Ctrl+T")
+        from src.shortcuts import HOST_OWNED_SHORTCUT_IDS
+
+        self.assertIn("new_tab", HOST_OWNED_SHORTCUT_IDS)
         self.assertEqual(resolved_shortcut_text("copy", {"copy": "F5"}), "F5")
         self.assertEqual(resolved_shortcut_text("copy", {"copy": ""}), "")
         sequences = sequences_for_action("redo", {})

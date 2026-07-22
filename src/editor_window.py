@@ -115,6 +115,7 @@ from src.theme import (
 )
 from src.ocr import format_ocr_copied_status
 from src.shortcuts import (
+    HOST_OWNED_SHORTCUT_IDS,
     build_shortcuts_reference_text,
     format_shortcut_for_display,
     normalize_editor_shortcuts,
@@ -276,6 +277,7 @@ class EditorWindow(QMainWindow):
     batch_export_last_directory_changed = Signal(str)
     settings_requested = Signal()
     new_canvas_requested = Signal()
+    new_tab_requested = Signal()
     export_preset_changed = Signal(str)
 
     def __init__(self, screenshot: QPixmap) -> None:
@@ -1290,6 +1292,12 @@ class EditorWindow(QMainWindow):
         file_menu.addAction(new_canvas_action)
         self._register_shortcut_action("new_canvas", new_canvas_action)
 
+        new_tab_action = QAction("New Tab", self)
+        new_tab_action.setToolTip("Open a new empty editor tab.")
+        new_tab_action.triggered.connect(self.new_tab_requested.emit)
+        file_menu.addAction(new_tab_action)
+        self._register_shortcut_action("new_tab", new_tab_action)
+
         file_menu.addSeparator()
 
         open_action = QAction("Open Project...", self)
@@ -1546,8 +1554,6 @@ class EditorWindow(QMainWindow):
 
         self._editor_shortcut_overrides = normalize_editor_shortcuts(overrides)
         for action_id, action in self._shortcut_actions.items():
-            sequences = sequences_for_action(action_id, self._editor_shortcut_overrides)
-            action.setShortcuts(sequences)
             binding = format_shortcut_for_display(
                 resolved_shortcut_text(action_id, self._editor_shortcut_overrides)
             )
@@ -1556,6 +1562,12 @@ class EditorWindow(QMainWindow):
                 action.setToolTip(f"{tip} Shortcut: {binding}.")
             else:
                 action.setToolTip(tip)
+            if action_id in HOST_OWNED_SHORTCUT_IDS:
+                # Host QShortcuts own these keys; keep menu actions clickable only.
+                action.setShortcuts([])
+                continue
+            sequences = sequences_for_action(action_id, self._editor_shortcut_overrides)
+            action.setShortcuts(sequences)
 
     def _setup_pixel_tool_option_menus(self) -> None:
         """
