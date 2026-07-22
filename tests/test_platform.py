@@ -213,15 +213,15 @@ class TestLinuxWindowIdentity(unittest.TestCase):
         widget = MagicMock()
         apply_linux_window_identity(
             widget,
-            desktop_file_name="snapagent-editor",
-            wm_instance="snapagent-editor",
-            wm_class="snapagent-editor",
+            desktop_file_name="snappix-editor",
+            wm_instance="snappix-editor",
+            wm_class="snappix-editor",
         )
-        mock_set_desktop_file_name.assert_called_once_with("snapagent-editor")
+        mock_set_desktop_file_name.assert_called_once_with("snappix-editor")
         mock_apply_x11_wm_class.assert_called_once_with(
             widget,
-            "snapagent-editor",
-            "snapagent-editor",
+            "snappix-editor",
+            "snappix-editor",
         )
 
     @patch("src.platform._resolve_x11_display_ptr", return_value=(None, False))
@@ -238,7 +238,7 @@ class TestLinuxWindowIdentity(unittest.TestCase):
         widget = MagicMock()
         widget.windowHandle.return_value = MagicMock()
         widget.windowHandle.return_value.winId.return_value = 42
-        self.assertFalse(apply_x11_wm_class(widget, "snapagent", "snapagent"))
+        self.assertFalse(apply_x11_wm_class(widget, "snappix", "snappix"))
 
     @patch("PySide6.QtGui.QGuiApplication.platformName", return_value="wayland")
     def test_apply_x11_wm_class_skips_non_x11_sessions(
@@ -249,7 +249,7 @@ class TestLinuxWindowIdentity(unittest.TestCase):
         Ensures WM_CLASS updates are skipped outside X11/XCB sessions.
         """
 
-        self.assertFalse(apply_x11_wm_class(MagicMock(), "snapagent", "snapagent"))
+        self.assertFalse(apply_x11_wm_class(MagicMock(), "snappix", "snappix"))
 
     @patch("src.platform.raise_x11_window", return_value=True)
     @patch("PySide6.QtGui.QGuiApplication.platformName", return_value="xcb")

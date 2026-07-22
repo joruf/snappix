@@ -39,7 +39,7 @@ def _session_root_dir() -> Path:
         Path: Session recovery directory.
     """
 
-    return Path(tempfile.gettempdir()) / "snapagent-session"
+    return Path(tempfile.gettempdir()) / "snappix-session"
 
 
 def session_manifest_path() -> Path:
@@ -61,7 +61,7 @@ def legacy_recovery_snapshot_path() -> Path:
         Path: Legacy recovery snapshot path.
     """
 
-    return Path(tempfile.gettempdir()) / f"snapagent-autosave{APP_FILE_EXTENSION}"
+    return Path(tempfile.gettempdir()) / f"snappix-autosave{APP_FILE_EXTENSION}"
 
 
 def create_tab_recovery_path() -> str:

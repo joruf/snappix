@@ -21,7 +21,7 @@ _current_theme = DEFAULT_THEME
 @dataclass(frozen=True, slots=True)
 class ThemeColors:
     """
-    Defines color tokens used by SnapAgent UI chrome.
+    Defines color tokens used by Snappix UI chrome.
 
     Attributes:
         window_bg: Main window background.
@@ -237,7 +237,7 @@ def build_editor_accent_stylesheet(theme_name: str | None = None) -> str:
 
 def build_application_stylesheet(theme_name: str | None = None) -> str:
     """
-    Builds the global Qt Style Sheet for SnapAgent.
+    Builds the global Qt Style Sheet for Snappix.
 
     Args:
         theme_name: Optional theme identifier; uses current theme when omitted.

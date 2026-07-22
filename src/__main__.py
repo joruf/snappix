@@ -1,5 +1,5 @@
 """
-Package execution entry point for SnapAgent.
+Package execution entry point for Snappix.
 """
 
 from __future__ import annotations

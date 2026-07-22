@@ -1,4 +1,4 @@
 """
-Unit test package for SnapAgent.
+Unit test package for Snappix.
 """
 

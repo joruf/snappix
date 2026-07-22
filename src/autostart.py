@@ -54,7 +54,7 @@ class AutostartManager:
             f"Exec={exec_command}\n"
             f"Icon={icon_path}\n"
             "Terminal=false\n"
-            "StartupWMClass=snapagent\n"
+            "StartupWMClass=snappix\n"
             "X-GNOME-Autostart-enabled=true\n"
         )
         self.desktop_path.write_text(content, encoding="utf-8")

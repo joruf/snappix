@@ -40,7 +40,7 @@ def map_installer_line_to_status(line: str) -> str | None:
     if "installing dependencies" in lowered:
         return "Installing Python packages (PySide6, Pillow, requests)..."
     if "done." in lowered:
-        return "Installation complete. Starting SnapAgent..."
+        return "Installation complete. Starting Snappix..."
     if "error" in lowered or "warning" in lowered:
         return normalized
     return None
@@ -95,11 +95,11 @@ def run_installer_with_progress_gui() -> int:
     """
 
     if not INSTALLER_SCRIPT.exists():
-        messagebox.showerror("SnapAgent", "Installer script not found at install_dependencies.py")
+        messagebox.showerror("Snappix", "Installer script not found at install_dependencies.py")
         return 1
 
     root = tk.Tk()
-    root.title("SnapAgent - First-time Setup")
+    root.title("Snappix - First-time Setup")
     root.resizable(False, False)
     root.attributes("-topmost", True)
 
@@ -109,7 +109,7 @@ def run_installer_with_progress_gui() -> int:
     ttk.Label(
         frame,
         text=(
-            "SnapAgent is installing required dependencies.\n"
+            "Snappix is installing required dependencies.\n"
             "Please wait — this may take a few minutes."
         ),
         justify="center",
@@ -181,7 +181,7 @@ def run_installer_with_progress_gui() -> int:
 
     if exit_code != 0:
         messagebox.showerror(
-            "SnapAgent",
+            "Snappix",
             "Dependency installation failed.\n"
             "Check terminal output or run: python3 install_dependencies.py",
         )

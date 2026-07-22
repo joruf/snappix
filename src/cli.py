@@ -1,5 +1,5 @@
 """
-Command-line interface for SnapAgent.
+Command-line interface for Snappix.
 """
 
 from __future__ import annotations
@@ -20,15 +20,15 @@ from src.storage import base64_png_to_pixmap, load_project
 
 def build_cli_parser() -> argparse.ArgumentParser:
     """
-    Builds the SnapAgent command-line parser.
+    Builds the Snappix command-line parser.
 
     Returns:
         argparse.ArgumentParser: Configured parser.
     """
 
     parser = argparse.ArgumentParser(
-        prog="snapagent",
-        description="SnapAgent command line interface",
+        prog="snappix",
+        description="Snappix command line interface",
     )
     subparsers = parser.add_subparsers(dest="command")
 
@@ -113,7 +113,7 @@ def run_cli(
     app = QApplication.instance()
     created_app = False
     if app is None:
-        app = QApplication(["snapagent-cli"])
+        app = QApplication(["snappix-cli"])
         created_app = True
     app.setQuitOnLastWindowClosed(False)
 

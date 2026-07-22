@@ -144,7 +144,7 @@ class TestStorage(unittest.TestCase):
         """
 
         model = ProjectModel(
-            format_name="snapagent-project",
+            format_name="snappix-project",
             format_version=2,
             canvas_width=5,
             canvas_height=7,

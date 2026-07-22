@@ -1,4 +1,4 @@
 """
-SnapAgent package.
+Snappix package.
 """
 

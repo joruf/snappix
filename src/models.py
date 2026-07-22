@@ -1,5 +1,5 @@
 """
-Data models for SnapAgent projects.
+Data models for Snappix projects.
 """
 
 from __future__ import annotations
@@ -109,7 +109,7 @@ class AnnotationModel:
 @dataclass(slots=True)
 class ProjectModel:
     """
-    Defines the persisted SnapAgent project document.
+    Defines the persisted Snappix project document.
 
     Attributes:
         format_name: Static format identifier for validation.

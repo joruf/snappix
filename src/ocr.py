@@ -26,7 +26,7 @@ def extract_text_from_png_bytes(png_bytes: bytes, language: str = "eng") -> str:
     if not has_tesseract() or not png_bytes:
         return ""
 
-    with tempfile.TemporaryDirectory(prefix="snapagent-ocr-") as temp_dir:
+    with tempfile.TemporaryDirectory(prefix="snappix-ocr-") as temp_dir:
         input_path = Path(temp_dir) / "input.png"
         output_base = Path(temp_dir) / "output"
         input_path.write_bytes(png_bytes)

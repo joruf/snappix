@@ -1,5 +1,5 @@
 """
-Main screenshot editing window for SnapAgent.
+Main screenshot editing window for Snappix.
 """
 
 from __future__ import annotations
@@ -221,7 +221,7 @@ def format_selection_info(payload: dict[str, Any]) -> str:
 
 class EditorWindow(QMainWindow):
     """
-    Hosts the SnapAgent screenshot editor UI.
+    Hosts the Snappix screenshot editor UI.
     """
 
     close_requested = Signal()
@@ -1031,7 +1031,7 @@ class EditorWindow(QMainWindow):
 
         open_action = QAction("Open Project...", self)
         open_action.setShortcut(QKeySequence.StandardKey.Open)
-        open_action.setToolTip("Open an existing SnapAgent project.")
+        open_action.setToolTip("Open an existing Snappix project.")
         open_action.triggered.connect(self.open_project)
         file_menu.addAction(open_action)
 
@@ -2204,7 +2204,7 @@ class EditorWindow(QMainWindow):
 
     def save_project_as(self) -> None:
         """
-        Saves current screenshot project to a SnapAgent file.
+        Saves current screenshot project to a Snappix file.
 
         Returns:
             None
@@ -2249,7 +2249,7 @@ class EditorWindow(QMainWindow):
 
     def open_project(self) -> None:
         """
-        Loads a SnapAgent project from disk.
+        Loads a Snappix project from disk.
 
         Returns:
             None
@@ -2308,7 +2308,7 @@ class EditorWindow(QMainWindow):
             str: Recovery snapshot path.
         """
 
-        return f"{tempfile.gettempdir()}/snapagent-autosave{APP_FILE_EXTENSION}"
+        return f"{tempfile.gettempdir()}/snappix-autosave{APP_FILE_EXTENSION}"
 
     @classmethod
     def has_recovery_snapshot(cls) -> bool:

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SnapAgent application entry point.
+Snappix application entry point.
 """
 
 from __future__ import annotations
@@ -87,7 +87,7 @@ def _icon_path() -> Path:
         Path: Icon file path.
     """
 
-    return _project_root() / "assets" / "snapagent.svg"
+    return _project_root() / "assets" / "snappix.svg"
 
 
 def _editor_icon_path() -> Path:
@@ -98,7 +98,7 @@ def _editor_icon_path() -> Path:
         Path: Editor icon file path.
     """
 
-    return _project_root() / "assets" / "snapagent-red.svg"
+    return _project_root() / "assets" / "snappix-red.svg"
 
 
 def _build_capture_icon():
@@ -111,7 +111,7 @@ def _build_capture_icon():
 
     from PySide6.QtGui import QIcon
 
-    return QIcon.fromTheme("snapagent", QIcon(str(_icon_path())))
+    return QIcon.fromTheme("snappix", QIcon(str(_icon_path())))
 
 
 def _build_editor_icon():
@@ -124,7 +124,7 @@ def _build_editor_icon():
 
     from PySide6.QtGui import QIcon
 
-    return QIcon.fromTheme("snapagent-editor", QIcon(str(_editor_icon_path())))
+    return QIcon.fromTheme("snappix-editor", QIcon(str(_editor_icon_path())))
 
 
 def _refresh_icon_theme_cache(hicolor_dir: Path) -> None:
@@ -164,8 +164,8 @@ def _install_application_icons() -> None:
         Path.home() / ".local" / "share" / "icons" / "hicolor" / "scalable" / "apps"
     )
     icon_root.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(_icon_path(), icon_root / "snapagent.svg")
-    shutil.copy2(_editor_icon_path(), icon_root / "snapagent-editor.svg")
+    shutil.copy2(_icon_path(), icon_root / "snappix.svg")
+    shutil.copy2(_editor_icon_path(), icon_root / "snappix-editor.svg")
     _refresh_icon_theme_cache(icon_root.parent.parent)
 
 
@@ -197,7 +197,7 @@ def _reexec_into_venv_if_available(project_root: Path) -> None:
         None
     """
 
-    if os.environ.get("SNAPAGENT_REEXECUTED") == "1":
+    if os.environ.get("SNAPPIX_REEXECUTED") == "1":
         return
 
     venv_python = _resolve_venv_python(project_root)
@@ -207,7 +207,7 @@ def _reexec_into_venv_if_available(project_root: Path) -> None:
         return
 
     env = dict(os.environ)
-    env["SNAPAGENT_REEXECUTED"] = "1"
+    env["SNAPPIX_REEXECUTED"] = "1"
     os.execve(
         str(venv_python),
         [str(venv_python), str(project_root / "run.py"), *sys.argv[1:]],
@@ -234,11 +234,11 @@ def _ensure_qt_runtime() -> int:
 
         venv_python = _resolve_venv_python(_project_root())
         if not venv_python.exists():
-            print("SnapAgent setup failed: .venv interpreter missing after installation.")
+            print("Snappix setup failed: .venv interpreter missing after installation.")
             return 1
 
         env = dict(os.environ)
-        env["SNAPAGENT_REEXECUTED"] = "1"
+        env["SNAPPIX_REEXECUTED"] = "1"
         os.execve(
             str(venv_python),
             [str(venv_python), str(_project_root() / "run.py"), *sys.argv[1:]],
@@ -311,7 +311,7 @@ def _desktop_shortcut_content() -> str:
         f"Icon={_icon_path()}\n"
         "Terminal=false\n"
         "Categories=Graphics;Utility;\n"
-        "StartupWMClass=snapagent\n"
+        "StartupWMClass=snappix\n"
         "StartupNotify=true\n"
     )
 
@@ -327,7 +327,7 @@ def _install_desktop_shortcut() -> bool:
     try:
         desktop_dir = _user_desktop_dir()
         desktop_dir.mkdir(parents=True, exist_ok=True)
-        shortcut_path = desktop_dir / "SnapAgent.desktop"
+        shortcut_path = desktop_dir / "Snappix.desktop"
         shortcut_path.write_text(_desktop_shortcut_content(), encoding="utf-8")
         mode = shortcut_path.stat().st_mode
         shortcut_path.chmod(mode | 0o111)
@@ -366,7 +366,7 @@ def _maybe_prompt_desktop_shortcut() -> None:
     answer = QMessageBox.question(
         None,
         "Desktop Shortcut",
-        "Would you like to create a desktop shortcut for SnapAgent?",
+        "Would you like to create a desktop shortcut for Snappix?",
         QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         QMessageBox.StandardButton.Yes,
     )
@@ -390,8 +390,8 @@ def _ensure_desktop_launcher() -> None:
 
     _install_application_icons()
     launcher_dir = Path.home() / ".local" / "share" / "applications"
-    launcher_path = launcher_dir / "snapagent.desktop"
-    editor_launcher_path = launcher_dir / "snapagent-editor.desktop"
+    launcher_path = launcher_dir / "snappix.desktop"
+    editor_launcher_path = launcher_dir / "snappix-editor.desktop"
     launcher_dir.mkdir(parents=True, exist_ok=True)
     content = (
         "[Desktop Entry]\n"
@@ -399,10 +399,10 @@ def _ensure_desktop_launcher() -> None:
         f"Name={APP_NAME}\n"
         "Comment=Screenshot and annotation tool\n"
         f"Exec={_autostart_exec_command()}\n"
-        "Icon=snapagent\n"
+        "Icon=snappix\n"
         "Terminal=false\n"
         "Categories=Graphics;Utility;\n"
-        "StartupWMClass=snapagent\n"
+        "StartupWMClass=snappix\n"
     )
     launcher_path.write_text(content, encoding="utf-8")
     editor_content = (
@@ -411,10 +411,10 @@ def _ensure_desktop_launcher() -> None:
         f"Name={APP_NAME} Editor\n"
         "Comment=Screenshot editor window identity\n"
         f"Exec={_autostart_exec_command()}\n"
-        "Icon=snapagent-editor\n"
+        "Icon=snappix-editor\n"
         "Terminal=false\n"
         "Categories=Graphics;Utility;\n"
-        "StartupWMClass=snapagent-editor\n"
+        "StartupWMClass=snappix-editor\n"
         "NoDisplay=true\n"
     )
     editor_launcher_path.write_text(editor_content, encoding="utf-8")
@@ -429,9 +429,9 @@ def _acquire_single_instance_lock() -> bool:
     """
 
     global _INSTANCE_LOCK_HANDLE
-    lock_dir = Path.home() / ".cache" / "snapagent"
+    lock_dir = Path.home() / ".cache" / "snappix"
     lock_dir.mkdir(parents=True, exist_ok=True)
-    lock_path = lock_dir / "snapagent.lock"
+    lock_path = lock_dir / "snappix.lock"
     handle = lock_path.open("w", encoding="utf-8")
     try:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -493,9 +493,9 @@ class AppController:
 
                 apply_linux_window_identity(
                     self,
-                    desktop_file_name="snapagent-editor",
-                    wm_instance="snapagent-editor",
-                    wm_class="snapagent-editor",
+                    desktop_file_name="snappix-editor",
+                    wm_instance="snappix-editor",
+                    wm_class="snappix-editor",
                 )
                 super().showEvent(event)
 
@@ -522,10 +522,10 @@ class AppController:
         self.capture_panel.editor_requested.connect(self.open_editor_from_capture)
         self.editors: list[EditorWindow] = []
 
-        config_dir = Path.home() / ".config" / "snapagent"
+        config_dir = Path.home() / ".config" / "snappix"
         self.config_manager = ConfigManager(config_dir / "config.json")
         self.autostart_manager = AutostartManager(
-            Path.home() / ".config" / "autostart" / "snapagent.desktop"
+            Path.home() / ".config" / "autostart" / "snappix.desktop"
         )
         self.config: AppConfig = self.config_manager.load()
         if self.autostart_manager.is_enabled():
@@ -565,7 +565,7 @@ class AppController:
         empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         empty_layout.addWidget(empty_title)
         empty_text = QLabel(
-            "Create a new canvas or open an existing SnapAgent project."
+            "Create a new canvas or open an existing Snappix project."
         )
         empty_text.setObjectName("editorEmptyText")
         empty_text.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -616,7 +616,7 @@ class AppController:
         if self._tray_available:
             self.tray_icon.setToolTip(APP_NAME)
             tray_menu = QMenu()
-            show_action = QAction("Show SnapAgent", tray_menu)
+            show_action = QAction("Show Snappix", tray_menu)
             show_action.triggered.connect(self._show_from_tray)
             tray_menu.addAction(show_action)
             tray_menu.addSeparator()
@@ -657,7 +657,7 @@ class AppController:
             about_action = QAction("About", tray_menu)
             about_action.triggered.connect(self.show_about_dialog)
             tray_menu.addAction(about_action)
-            quit_action = QAction("Quit SnapAgent", tray_menu)
+            quit_action = QAction("Quit Snappix", tray_menu)
             quit_action.triggered.connect(self.quit_application)
             tray_menu.addAction(quit_action)
             self.tray_icon.setContextMenu(tray_menu)
@@ -751,7 +751,7 @@ class AppController:
         if configured:
             target = Path(configured).expanduser()
         else:
-            target = Path.home() / "Pictures" / "SnapAgent"
+            target = Path.home() / "Pictures" / "Snappix"
         target.mkdir(parents=True, exist_ok=True)
         return target
 
@@ -766,7 +766,7 @@ class AppController:
             Path | None: Saved file path or None on failure.
         """
 
-        filename = datetime.now().strftime("snapagent_%Y-%m-%d_%H-%M-%S.png")
+        filename = datetime.now().strftime("snappix_%Y-%m-%d_%H-%M-%S.png")
         target_path = self._capture_save_directory() / filename
         if not pixmap.save(str(target_path), "PNG"):
             return None
@@ -931,9 +931,9 @@ class AppController:
         if self.capture_panel.isVisible():
             apply_linux_window_identity(
                 self.capture_panel,
-                desktop_file_name="snapagent",
-                wm_instance="snapagent",
-                wm_class="snapagent",
+                desktop_file_name="snappix",
+                wm_instance="snappix",
+                wm_class="snappix",
             )
 
     def _apply_editor_taskbar_identity(self) -> None:
@@ -950,9 +950,9 @@ class AppController:
         self.app.setWindowIcon(self._editor_icon)
         apply_linux_window_identity(
             self.editor_host,
-            desktop_file_name="snapagent-editor",
-            wm_instance="snapagent-editor",
-            wm_class="snapagent-editor",
+            desktop_file_name="snappix-editor",
+            wm_instance="snappix-editor",
+            wm_class="snappix-editor",
         )
 
     def show(self) -> None:
@@ -1569,7 +1569,7 @@ class AppController:
 
     def quit_application(self) -> None:
         """
-        Completely exits SnapAgent.
+        Completely exits Snappix.
 
         Returns:
             None
@@ -1611,7 +1611,7 @@ class AppController:
 
 def main() -> int:
     """
-    Launches the SnapAgent desktop application.
+    Launches the Snappix desktop application.
 
     Returns:
         int: Process exit code.
@@ -1643,14 +1643,14 @@ def _launch_gui(startup_project_path: str = "") -> int:
     """
 
     if not _acquire_single_instance_lock():
-        print("SnapAgent is already running.")
+        print("Snappix is already running.")
         return 0
     _ensure_desktop_launcher()
 
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication
 
-    QGuiApplication.setDesktopFileName("snapagent")
+    QGuiApplication.setDesktopFileName("snappix")
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)

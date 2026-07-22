@@ -1,10 +1,10 @@
-# SnapAgent Technical Documentation
+# Snappix Technical Documentation
 
-This document describes the SnapAgent architecture, module responsibilities, data formats, and extension points for developers.
+This document describes the Snappix architecture, module responsibilities, data formats, and extension points for developers.
 
 ## Overview
 
-SnapAgent is a Linux desktop application written in Python 3.11+ with PySide6 (Qt 6). It follows a controller-driven architecture:
+Snappix is a Linux desktop application written in Python 3.11+ with PySide6 (Qt 6). It follows a controller-driven architecture:
 
 ```text
 run.py (AppController)
@@ -16,7 +16,7 @@ run.py (AppController)
 └── Theme engine (src/theme.py)
 ```
 
-The application enforces a single running instance via a file lock in `~/.cache/snapagent/snapagent.lock`.
+The application enforces a single running instance via a file lock in `~/.cache/snappix/snappix.lock`.
 
 ## Entry Points
 
@@ -104,7 +104,7 @@ On Wayland, window capture is not supported reliably; the app shows an informati
 
 ### Post-capture actions
 
-Configured in `~/.config/snapagent/config.json`:
+Configured in `~/.config/snappix/config.json`:
 
 | Value | Behavior |
 |-------|----------|
@@ -112,7 +112,7 @@ Configured in `~/.config/snapagent/config.json`:
 | `clipboard` | Copy pixmap to clipboard |
 | `save` | Save PNG to configured or default folder |
 
-Default save folder: `~/Pictures/SnapAgent/`
+Default save folder: `~/Pictures/Snappix/`
 
 ## Editor Architecture
 
@@ -199,11 +199,11 @@ Container: ZIP with `ZIP_DEFLATED`
 
 Legacy plain JSON/`.lshot` files can still be loaded.
 
-Auto-recovery snapshot: `{tempdir}/snapagent-autosave.sfp` every 30 seconds.
+Auto-recovery snapshot: `{tempdir}/snappix-autosave.sfp` every 30 seconds.
 
 ## Configuration
 
-Path: `~/.config/snapagent/config.json`
+Path: `~/.config/snappix/config.json`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
@@ -300,8 +300,8 @@ Coverage includes config, storage, annotations, crop handles, canvas resize, edi
 
 | Script | Output |
 |--------|--------|
-| `packaging/build_deb.sh` | `dist/snapagent_{version}_{arch}.deb` |
-| `packaging/build_appimage.sh` | `dist/SnapAgent-{version}-x86_64.AppImage` |
+| `packaging/build_deb.sh` | `dist/snappix_{version}_{arch}.deb` |
+| `packaging/build_appimage.sh` | `dist/Snappix-{version}-x86_64.AppImage` |
 
 ## Dependencies
 

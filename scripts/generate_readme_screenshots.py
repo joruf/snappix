@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generates README screenshots for SnapAgent UI components.
+Generates README screenshots for Snappix UI components.
 """
 
 from __future__ import annotations
@@ -129,11 +129,11 @@ def _build_mock_desktop() -> QPixmap:
     painter.drawText(
         QRect(browser_rect.x() + 14, browser_rect.y() + 8, browser_rect.width() - 28, 24),
         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
-        "docs.snapagent.local — Getting Started",
+        "docs.snappix.local — Getting Started",
     )
     painter.setPen(QColor("#475569"))
     painter.drawText(browser_rect.adjusted(24, 52, -24, -24), Qt.AlignmentFlag.AlignTop, "\n".join([
-        "SnapAgent Documentation",
+        "Snappix Documentation",
         "",
         "Capture screenshots quickly and annotate them with arrows,",
         "step numbers, blur regions, and text callouts.",
@@ -151,7 +151,7 @@ def _build_mock_desktop() -> QPixmap:
     painter.drawText(
         terminal_rect.adjusted(12, 12, -12, -12),
         Qt.AlignmentFlag.AlignTop,
-        "$ python3 run.py\nSnapAgent ready.\n$ python3 run.py capture --mode region",
+        "$ python3 run.py\nSnappix ready.\n$ python3 run.py capture --mode region",
     )
 
     files_rect = QRect(920, 380, 300, 300)
@@ -194,7 +194,7 @@ def _build_editor_sample_screenshot() -> QPixmap:
     painter.fillRect(header_rect, QColor("#ffffff"))
     painter.setPen(QColor("#0f172a"))
     painter.setFont(QFont("Sans Serif", 18, QFont.Weight.Bold))
-    painter.drawText(28, 46, "SnapAgent — Capture Workflow")
+    painter.drawText(28, 46, "Snappix — Capture Workflow")
     painter.setPen(QColor("#64748b"))
     painter.setFont(QFont("Sans Serif", 11))
     painter.drawText(28, 68, "Annotate screenshots with professional tools")
@@ -302,14 +302,14 @@ def _sample_annotations() -> list[AnnotationModel]:
 
 def _capture_icon() -> QIcon:
     """
-    Loads the SnapAgent capture icon when available.
+    Loads the Snappix capture icon when available.
 
     Returns:
         QIcon: Capture icon.
     """
 
-    icon_path = PROJECT_ROOT / "assets" / "snapagent-red.svg"
-    return QIcon.fromTheme("snapagent", QIcon(str(icon_path)))
+    icon_path = PROJECT_ROOT / "assets" / "snappix-red.svg"
+    return QIcon.fromTheme("snappix", QIcon(str(icon_path)))
 
 
 def generate_capture_panel(app: QApplication) -> Path:
@@ -413,7 +413,7 @@ def generate_tray_menu(app: QApplication) -> Path:
 
     _apply_theme(app)
     menu = QMenu()
-    menu.addAction("Show SnapAgent")
+    menu.addAction("Show Snappix")
     menu.addSeparator()
     menu.addAction("Capture Area")
     menu.addAction("Capture Window Under Cursor")
@@ -437,7 +437,7 @@ def generate_tray_menu(app: QApplication) -> Path:
     menu.addAction("Settings...")
     menu.addSeparator()
     menu.addAction("About")
-    menu.addAction("Quit SnapAgent")
+    menu.addAction("Quit Snappix")
     menu.setStyleSheet(build_application_stylesheet(THEME_DARK))
     menu.adjustSize()
     pixmap = QPixmap(menu.size())
@@ -465,7 +465,7 @@ def generate_first_time_setup(app: QApplication) -> Path:
     layout.setSpacing(12)
 
     title = QLabel(
-        "SnapAgent is installing required dependencies.\n"
+        "Snappix is installing required dependencies.\n"
         "Please wait — this may take a few minutes."
     )
     title.setAlignment(Qt.AlignmentFlag.AlignCenter)

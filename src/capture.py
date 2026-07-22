@@ -274,9 +274,9 @@ class CapturePanel(QWidget):
 
         apply_linux_window_identity(
             self,
-            desktop_file_name="snapagent",
-            wm_instance="snapagent",
-            wm_class="snapagent",
+            desktop_file_name="snappix",
+            wm_instance="snappix",
+            wm_class="snappix",
         )
         super().showEvent(event)
 

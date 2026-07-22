@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Install SnapAgent dependencies in a local virtual environment.
+Install Snappix dependencies in a local virtual environment.
 """
 
 from __future__ import annotations
@@ -107,10 +107,10 @@ def install_system_dependencies(project_dir: Path) -> int:
     packages_for_hint = SYSTEM_PACKAGE_MAP.get(package_manager or "", [])
     if os.geteuid() != 0 and not sys.stdin.isatty():
         if which("pkexec") is None:
-            print("SnapAgent installer error: pkexec is required for automatic system package install in GUI mode.")
+            print("Snappix installer error: pkexec is required for automatic system package install in GUI mode.")
             print("Please install policykit-1 and retry.")
             return 1
-        print("SnapAgent installer: requesting administrator rights via pkexec...")
+        print("Snappix installer: requesting administrator rights via pkexec...")
         return run_command(
             [
                 "pkexec",
@@ -122,12 +122,12 @@ def install_system_dependencies(project_dir: Path) -> int:
         )
 
     if package_manager is None:
-        print("SnapAgent installer warning: no supported package manager found.")
+        print("Snappix installer warning: no supported package manager found.")
         print("Please install xcb cursor runtime manually for your distro.")
         return 0
 
     packages = SYSTEM_PACKAGE_MAP[package_manager]
-    print(f"SnapAgent installer: installing system dependencies via {package_manager}...")
+    print(f"Snappix installer: installing system dependencies via {package_manager}...")
 
     commands: list[list[str]]
     if package_manager == "apt-get":
@@ -145,17 +145,17 @@ def install_system_dependencies(project_dir: Path) -> int:
     for command in commands:
         privileged = with_privilege(command)
         if privileged is None:
-            print("SnapAgent installer error: root/sudo permissions are required for system packages.")
+            print("Snappix installer error: root/sudo permissions are required for system packages.")
             print(f"Please install manually: {' '.join(command)}")
             return 1
         command_code = run_command(privileged, project_dir)
         if command_code != 0:
-            print("SnapAgent installer error: failed to install system packages.")
+            print("Snappix installer error: failed to install system packages.")
             print(f"Please run manually: {' '.join(privileged)}")
             return command_code
 
     if detect_missing_system_dependencies():
-        print("SnapAgent installer error: system dependency installation did not resolve all libraries.")
+        print("Snappix installer error: system dependency installation did not resolve all libraries.")
         return 1
     return 0
 
@@ -175,7 +175,7 @@ def ensure_venv(project_dir: Path, python_bin: str) -> int:
     venv_dir = project_dir / ".venv"
     if venv_dir.exists():
         return 0
-    print("SnapAgent installer: creating virtual environment...")
+    print("Snappix installer: creating virtual environment...")
     return run_command([python_bin, "-m", "venv", str(venv_dir)], project_dir)
 
 
@@ -194,10 +194,10 @@ def install_packages(project_dir: Path) -> int:
     if not venv_python.exists():
         venv_python = project_dir / ".venv" / "bin" / "python"
     if not venv_python.exists():
-        print("SnapAgent installer error: .venv Python executable not found.")
+        print("Snappix installer error: .venv Python executable not found.")
         return 1
 
-    print("SnapAgent installer: installing dependencies...")
+    print("Snappix installer: installing dependencies...")
     upgrade_code = run_command([str(venv_python), "-m", "pip", "install", "--upgrade", "pip"], project_dir)
     if upgrade_code != 0:
         return upgrade_code
@@ -227,7 +227,7 @@ def main() -> int:
     install_code = install_packages(project_dir)
     if install_code != 0:
         return install_code
-    print("SnapAgent installer: done.")
+    print("Snappix installer: done.")
     print("Start command: .venv/bin/python3 run.py")
     return 0
 

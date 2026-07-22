@@ -34,7 +34,7 @@ from src.global_hotkeys import GlobalHotkeyManager, hotkey_spec_to_pynput
 
 class SettingsDialog(QDialog):
     """
-    Edits persisted SnapAgent application settings.
+    Edits persisted Snappix application settings.
     """
 
     def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
@@ -47,7 +47,7 @@ class SettingsDialog(QDialog):
         """
 
         super().__init__(parent)
-        self.setWindowTitle("SnapAgent Settings")
+        self.setWindowTitle("Snappix Settings")
         self.setModal(True)
         self.resize(520, 360)
         self._config = config
@@ -96,7 +96,7 @@ class SettingsDialog(QDialog):
 
         save_directory_row = QHBoxLayout()
         self.save_directory_edit = QLineEdit(config.capture_save_directory)
-        self.save_directory_edit.setPlaceholderText("~/Pictures/SnapAgent")
+        self.save_directory_edit.setPlaceholderText("~/Pictures/Snappix")
         browse_button = QPushButton("Browse...")
         browse_button.clicked.connect(self._browse_save_directory)
         save_directory_row.addWidget(self.save_directory_edit, 1)

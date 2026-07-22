@@ -1,5 +1,5 @@
 """
-Project file storage for SnapAgent.
+Project file storage for Snappix.
 """
 
 from __future__ import annotations

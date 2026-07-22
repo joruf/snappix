@@ -96,7 +96,7 @@ def normalize_editor_last_tab_behavior(behavior: str) -> str:
 @dataclass(slots=True)
 class AppConfig:
     """
-    Defines persisted SnapAgent user settings.
+    Defines persisted Snappix user settings.
 
     Attributes:
         autostart_enabled: Whether app launches at desktop login.
@@ -123,7 +123,7 @@ class AppConfig:
 
 class ConfigManager:
     """
-    Reads and writes SnapAgent configuration.
+    Reads and writes Snappix configuration.
     """
 
     def __init__(self, config_path: Path) -> None:

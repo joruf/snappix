@@ -152,7 +152,7 @@ class TestSessionRecovery(unittest.TestCase):
         """
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            legacy_path = Path(temp_dir) / f"snapagent-autosave{APP_FILE_EXTENSION}"
+            legacy_path = Path(temp_dir) / f"snappix-autosave{APP_FILE_EXTENSION}"
             legacy_path.write_text("legacy", encoding="utf-8")
             with patch("src.session_recovery.legacy_recovery_snapshot_path", return_value=legacy_path):
                 tab = load_legacy_recovery_tab()

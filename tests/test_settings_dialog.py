@@ -46,7 +46,7 @@ class TestSettingsDialog(unittest.TestCase):
                 hotkey_capture_window="ctrl+shift+w",
                 hotkey_capture_fullscreen="ctrl+shift+f",
                 post_capture_action="editor",
-                capture_save_directory="/tmp/snapagent",
+                capture_save_directory="/tmp/snappix",
             )
         )
         dialog.hotkey_region_edit.setText("Ctrl+Shift+A")

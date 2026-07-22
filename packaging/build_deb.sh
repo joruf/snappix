@@ -5,11 +5,11 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$PROJECT_ROOT/dist"
 BUILD_DIR="$PROJECT_ROOT/.build/deb"
 STAGING_DIR="$BUILD_DIR/staging"
-PKG_NAME="snapagent"
+PKG_NAME="snappix"
 PKG_VERSION="${1:-0.1.0}"
 ARCH="$(dpkg --print-architecture)"
 
-echo "[snapagent] Preparing Debian package build directories..."
+echo "[snappix] Preparing Debian package build directories..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$STAGING_DIR/DEBIAN"
 mkdir -p "$STAGING_DIR/opt/$PKG_NAME"
@@ -17,7 +17,7 @@ mkdir -p "$STAGING_DIR/usr/bin"
 mkdir -p "$STAGING_DIR/usr/share/applications"
 mkdir -p "$STAGING_DIR/usr/share/icons/hicolor/scalable/apps"
 
-echo "[snapagent] Copying application files..."
+echo "[snappix] Copying application files..."
 rsync -a \
   --exclude ".git" \
   --exclude ".venv" \
@@ -26,26 +26,26 @@ rsync -a \
   --exclude "__pycache__" \
   "$PROJECT_ROOT/" "$STAGING_DIR/opt/$PKG_NAME/"
 
-cat > "$STAGING_DIR/usr/bin/snapagent" <<'EOF'
+cat > "$STAGING_DIR/usr/bin/snappix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
-exec python3 /opt/snapagent/run.py "$@"
+exec python3 /opt/snappix/run.py "$@"
 EOF
-chmod 0755 "$STAGING_DIR/usr/bin/snapagent"
+chmod 0755 "$STAGING_DIR/usr/bin/snappix"
 
-cat > "$STAGING_DIR/usr/share/applications/snapagent.desktop" <<'EOF'
+cat > "$STAGING_DIR/usr/share/applications/snappix.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=SnapAgent
+Name=Snappix
 Comment=Screenshot and annotation tool
-Exec=snapagent
-Icon=snapagent
+Exec=snappix
+Icon=snappix
 Terminal=false
 Categories=Graphics;Utility;
-StartupWMClass=snapagent
+StartupWMClass=snappix
 EOF
 
-cp "$PROJECT_ROOT/assets/snapagent.svg" "$STAGING_DIR/usr/share/icons/hicolor/scalable/apps/snapagent.svg"
+cp "$PROJECT_ROOT/assets/snappix.svg" "$STAGING_DIR/usr/share/icons/hicolor/scalable/apps/snappix.svg"
 
 cat > "$STAGING_DIR/DEBIAN/control" <<EOF
 Package: $PKG_NAME
@@ -55,12 +55,12 @@ Priority: optional
 Architecture: $ARCH
 Maintainer: Joachim Ruf <info@loresoft.de>
 Depends: python3, python3-venv, python3-pip, xdotool, x11-utils
-Description: SnapAgent screenshot editor
+Description: Snappix screenshot editor
  Linux screenshot and annotation tool inspired by SnagIt.
 EOF
 
 mkdir -p "$DIST_DIR"
 OUTPUT_DEB="$DIST_DIR/${PKG_NAME}_${PKG_VERSION}_${ARCH}.deb"
-echo "[snapagent] Building package: $OUTPUT_DEB"
+echo "[snappix] Building package: $OUTPUT_DEB"
 dpkg-deb --build "$STAGING_DIR" "$OUTPUT_DEB"
-echo "[snapagent] Done."
+echo "[snappix] Done."

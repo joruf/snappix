@@ -1,5 +1,5 @@
 """
-Global keyboard shortcut registration for SnapAgent.
+Global keyboard shortcut registration for Snappix.
 """
 
 from __future__ import annotations

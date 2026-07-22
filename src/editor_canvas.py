@@ -1,5 +1,5 @@
 """
-Editable screenshot canvas for SnapAgent.
+Editable screenshot canvas for Snappix.
 """
 
 from __future__ import annotations

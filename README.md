@@ -1,6 +1,6 @@
-# SnapAgent
+# Snappix
 
-SnapAgent is a Linux screenshot and annotation application inspired by SnagIt.  
+Snappix is a Linux screenshot and annotation application inspired by SnagIt.  
 It combines fast capture workflows with a tabbed editor, non-destructive annotations, and project-based editing.
 
 ## Documentation
@@ -13,7 +13,7 @@ It combines fast capture workflows with a tabbed editor, non-destructive annotat
 
 - Compact **Capture Panel** with delay slider (0–20 s).
 - Capture modes: **Fullscreen**, **Area**, **Window**, **Scroll**, and **Color Picker**.
-- **Scroll capture** for long pages: select a window, SnapAgent scrolls it automatically and stitches the result.
+- **Scroll capture** for long pages: select a window, Snappix scrolls it automatically and stitches the result.
 - **Post-capture actions:** open in editor, copy to clipboard, or save to folder.
 - **Global hotkeys** (configurable): default `Ctrl+Shift+A/W/F` for area/window/fullscreen.
 - **Wayland support:** region capture via `grim`+`slurp` when available.
@@ -66,31 +66,31 @@ It combines fast capture workflows with a tabbed editor, non-destructive annotat
 
 ## Screenshots
 
-The images below reflect the current SnapAgent UI, including the gray editor pasteboard around the drawable document.
+The images below reflect the current Snappix UI, including the gray editor pasteboard around the drawable document.
 
 ### Capture Panel
 
-![SnapAgent Capture Panel](docs/screenshots/capture-panel.png)
+![Snappix Capture Panel](docs/screenshots/capture-panel.png)
 
 ### Region Overlay
 
-![SnapAgent Region Overlay](docs/screenshots/region-overlay.png)
+![Snappix Region Overlay](docs/screenshots/region-overlay.png)
 
 ### Window Overlay
 
-![SnapAgent Window Overlay](docs/screenshots/capture-window-preview.png)
+![Snappix Window Overlay](docs/screenshots/capture-window-preview.png)
 
 ### Editor Window
 
-![SnapAgent Editor Window with annotations and gray pasteboard](docs/screenshots/editor-window.png)
+![Snappix Editor Window with annotations and gray pasteboard](docs/screenshots/editor-window.png)
 
 ### System Tray Menu
 
-![SnapAgent System Tray Menu](docs/screenshots/system-tray-menu.png)
+![Snappix System Tray Menu](docs/screenshots/system-tray-menu.png)
 
 ### First-Time Setup
 
-![SnapAgent First-Time Setup](docs/screenshots/first-time-setup.png)
+![Snappix First-Time Setup](docs/screenshots/first-time-setup.png)
 
 Regenerate screenshots after UI changes:
 
@@ -125,12 +125,12 @@ sudo apt install tesseract-ocr
 ## Install and Run
 
 ```bash
-git clone https://github.com/joruf/snapagent.git
-cd snapagent
+git clone https://github.com/joruf/snappix.git
+cd snappix
 python3 run.py
 ```
 
-On first start, SnapAgent creates a local `.venv`, installs dependencies, and relaunches automatically.
+On first start, Snappix creates a local `.venv`, installs dependencies, and relaunches automatically.
 
 ## Usage Notes
 
@@ -148,7 +148,7 @@ On first start, SnapAgent creates a local `.venv`, installs dependencies, and re
 ### Scroll Capture
 
 1. Click **Scroll** and click the target window (same picker as **Capture Window**).
-2. SnapAgent detects the scrollbar, jumps to the top, scrolls to the bottom, and merges the frames.
+2. Snappix detects the scrollbar, jumps to the top, scrolls to the bottom, and merges the frames.
 3. The stitched screenshot opens in the editor automatically.
 2. Scroll the target content.
 3. Press **Space** to capture another frame (repeat as needed).
@@ -169,7 +169,7 @@ Open via **View → Settings** (editor) or tray **Settings**:
 
 - Enable/configure global hotkeys
 - Choose action after capture (editor / clipboard / save)
-- Set capture save folder (default: `~/Pictures/SnapAgent/`)
+- Set capture save folder (default: `~/Pictures/Snappix/`)
 
 ## CLI
 
@@ -231,7 +231,7 @@ python3 run.py open --project ./example.sfp
 
 ## Project Format
 
-SnapAgent saves projects as ZIP-based `*.sfp` files:
+Snappix saves projects as ZIP-based `*.sfp` files:
 
 - `manifest.json` with metadata and annotations
 - `assets/screenshot.png` as base image
@@ -242,7 +242,7 @@ See [Technical Documentation](docs/TECHNICAL.md#annotation-model) for details.
 
 ## Configuration
 
-User settings: `~/.config/snapagent/config.json`
+User settings: `~/.config/snappix/config.json`
 
 Includes theme, autostart, hotkeys, post-capture action, and save directory.  
 Full schema: [Technical Documentation → Configuration](docs/TECHNICAL.md#configuration).
