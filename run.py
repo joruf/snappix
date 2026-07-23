@@ -1465,7 +1465,7 @@ class AppController:
             return
 
         self._capture_in_progress = True
-        self.capture_panel.hide()
+        self._hide_windows_for_capture()
 
         def on_capture_done(pixmap) -> None:
             self._capture_in_progress = False
@@ -1474,12 +1474,27 @@ class AppController:
         def on_capture_cancelled() -> None:
             self._capture_in_progress = False
             self.capture_panel.show()
+            self.capture_panel.raise_()
 
         execute_capture_request(
             request=request,
             on_capture=on_capture_done,
             on_cancel=on_capture_cancelled,
         )
+
+    def _hide_windows_for_capture(self) -> None:
+        """
+        Hides Snappix chrome that must not appear in screenshots.
+
+        Returns:
+            None
+        """
+
+        from PySide6.QtWidgets import QApplication
+
+        self.capture_panel.hide()
+        # Flush the hide through Qt before the compositor settle timer starts.
+        QApplication.processEvents()
 
     def start_color_pick(self) -> None:
         """
@@ -1490,13 +1505,14 @@ class AppController:
         """
 
         from PySide6.QtGui import QGuiApplication
-        from src.capture import execute_color_pick
+        from src.capture import execute_color_pick, schedule_capture_after_ui_settle
 
-        self.capture_panel.hide()
+        self._hide_windows_for_capture()
 
         def on_color_picked(hex_color: str) -> None:
             QGuiApplication.clipboard().setText(hex_color)
             self.capture_panel.show()
+            self.capture_panel.raise_()
             if self._tray_available and self.tray_icon.isVisible():
                 self.tray_icon.showMessage(
                     APP_NAME,
@@ -1507,10 +1523,13 @@ class AppController:
 
         def on_color_pick_cancelled() -> None:
             self.capture_panel.show()
+            self.capture_panel.raise_()
 
-        execute_color_pick(
-            on_picked=on_color_picked,
-            on_cancel=on_color_pick_cancelled,
+        schedule_capture_after_ui_settle(
+            lambda: execute_color_pick(
+                on_picked=on_color_picked,
+                on_cancel=on_color_pick_cancelled,
+            )
         )
 
     def toggle_autostart(self, enabled: bool) -> None:

@@ -66,6 +66,28 @@ class CaptureMode:
 
 _ACTIVE_OVERLAYS: list[QWidget] = []
 
+# Wait for the compositor to drop hidden Snappix windows (Capture panel, countdown)
+# before sampling the framebuffer. Too short and the panel still appears in shots.
+CAPTURE_UI_SETTLE_MS = 120
+
+
+def schedule_capture_after_ui_settle(callback: Callable[[], None]) -> None:
+    """
+    Runs ``callback`` after processing events and a short compositor settle delay.
+
+    Callers should hide the Capture panel (and other Snappix chrome) before
+    invoking this helper so screenshots do not include those windows.
+
+    Args:
+        callback: Capture work to run after the UI has settled.
+
+    Returns:
+        None
+    """
+
+    QApplication.processEvents()
+    QTimer.singleShot(CAPTURE_UI_SETTLE_MS, callback)
+
 
 def _install_escape_shortcut(widget: QWidget, callback: Callable[[], None]) -> QShortcut:
     """
@@ -1649,7 +1671,7 @@ class CaptureDelayOverlay(QWidget):
         self.releaseKeyboard()
         self._hide_countdown_chrome()
         # Brief deferral lets the compositor drop the overlay before capture.
-        QTimer.singleShot(50, self._emit_finished)
+        QTimer.singleShot(CAPTURE_UI_SETTLE_MS, self._emit_finished)
 
     def _emit_finished(self) -> None:
         """
@@ -1875,7 +1897,8 @@ def execute_capture_request(
         delay_overlay.raise_()
         delay_overlay.activateWindow()
     else:
-        begin_capture()
+        # Immediate captures still need a settle gap after the Capture panel hides.
+        schedule_capture_after_ui_settle(begin_capture)
 
 
 def _track_overlay(overlay: QWidget) -> None:
