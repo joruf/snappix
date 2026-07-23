@@ -433,7 +433,9 @@ class EditorWindow(QMainWindow):
         self._tool_brush_hardness: dict[str, int] = normalize_tool_brush_hardness(None)
         self._tool_stroke_styles: dict[str, str] = normalize_tool_stroke_styles(None)
         self._tool_width_sliders: dict[str, QSlider] = {}
+        self._tool_width_labels: dict[str, QLabel] = {}
         self._tool_hardness_sliders: dict[str, QSlider] = {}
+        self._tool_hardness_labels: dict[str, QLabel] = {}
         self._tool_style_combos: dict[str, QComboBox] = {}
 
         container = QWidget(self)
@@ -449,7 +451,7 @@ class EditorWindow(QMainWindow):
         self.canvas.selection_style_changed.connect(self._on_selection_style_changed)
         self.canvas.crop_selection_changed.connect(self._on_crop_state_changed)
         self.canvas.crop_applied.connect(self._on_crop_applied)
-        self.canvas.status_message.connect(self.statusBar().showMessage)
+        self.canvas.status_message.connect(self._on_canvas_status_message)
 
         self._toolbar_widget = self._build_toolbar()
         root.addWidget(self._toolbar_widget, 0)
@@ -1847,6 +1849,7 @@ class EditorWindow(QMainWindow):
             width_row.addWidget(value_label)
             root.addLayout(width_row)
             self._tool_width_sliders[tool_key] = slider
+            self._tool_width_labels[tool_key] = value_label
 
             if tool_key in HARDNESS_AWARE_TOOLS:
                 hard_row = QHBoxLayout()
@@ -1874,6 +1877,7 @@ class EditorWindow(QMainWindow):
                 hard_row.addWidget(hard_label)
                 root.addLayout(hard_row)
                 self._tool_hardness_sliders[tool_key] = hard_slider
+                self._tool_hardness_labels[tool_key] = hard_label
 
             if tool_key in STYLE_AWARE_TOOLS:
                 style_row = QHBoxLayout()
@@ -1903,6 +1907,9 @@ class EditorWindow(QMainWindow):
 
             panel_action.setDefaultWidget(panel)
             menu.addAction(panel_action)
+            menu.aboutToShow.connect(
+                lambda _checked=False, key=tool_key: self._prepare_stroke_tool_menu(key)
+            )
             button.setMenu(menu)
             self._configure_menu_tool_button(button)
 
@@ -1973,6 +1980,377 @@ class EditorWindow(QMainWindow):
             style,
             tool=tool or None,
             persist=True,
+        )
+
+    def _prepare_stroke_tool_menu(self, tool_key: str) -> None:
+        """
+        Refreshes one stroke-tool popup from selection or tool defaults.
+
+        Args:
+            tool_key: Tool identifier for the opening menu.
+
+        Returns:
+            None
+        """
+
+        payload = self._primary_selection_payload()
+        if payload is not None and self._selection_uses_stroke_menu(payload, tool_key):
+            self._sync_stroke_tool_menu_widgets(payload, tool_key=tool_key)
+            return
+        self._restore_stroke_tool_menu_widgets(tool_key=tool_key)
+
+    def _prepare_text_tool_menu(self) -> None:
+        """
+        Refreshes the Text tool popup from selection or text defaults.
+
+        Returns:
+            None
+        """
+
+        payload = self._primary_selection_payload()
+        if payload is not None and str(payload.get("type") or "") == "text":
+            self._sync_text_tool_menu_widgets(payload)
+            return
+        self._restore_text_tool_menu_widgets()
+
+    def _primary_selection_payload(self) -> dict[str, Any] | None:
+        """
+        Returns the primary selected annotation payload, if any.
+
+        Returns:
+            dict[str, Any] | None: Selection details or None.
+        """
+
+        selected = self.canvas._selected_annotation_items()  # pylint: disable=protected-access
+        if not selected:
+            return None
+        return self.canvas._build_selection_payload(selected[0])  # pylint: disable=protected-access
+
+    def _selection_uses_stroke_menu(self, payload: dict[str, Any], tool_key: str) -> bool:
+        """
+        Checks whether a selection should drive one stroke-tool popup.
+
+        Args:
+            payload: Selection payload.
+            tool_key: Tool menu being prepared.
+
+        Returns:
+            bool: True when the selection maps to this menu.
+        """
+
+        selection_type = str(payload.get("type") or "")
+        if tool_key in {Tool.BRUSH, Tool.ERASER}:
+            # Brush/eraser menus always edit tool defaults; raster strokes are not
+            # re-editable annotation objects.
+            return False
+        if selection_type in {"rect", "ellipse", "line", "arrow"}:
+            return True
+        return False
+
+    def _set_width_slider_value(self, tool_key: str, width: int) -> None:
+        """
+        Updates one tool Width slider without emitting change handlers.
+
+        Args:
+            tool_key: Tool identifier.
+            width: Width to display.
+
+        Returns:
+            None
+        """
+
+        slider = self._tool_width_sliders.get(tool_key)
+        if tool_key == Tool.TEXT:
+            slider = getattr(self, "text_width_menu_slider", None)
+        if slider is None:
+            return
+        minimum = 1 if tool_key in BRUSH_WIDTH_TOOLS else 0
+        resolved = normalize_stroke_width(width, minimum=minimum)
+        if slider.value() == resolved:
+            return
+        slider.blockSignals(True)
+        slider.setValue(resolved)
+        slider.blockSignals(False)
+        label = self._tool_width_labels.get(tool_key)
+        if tool_key == Tool.TEXT:
+            label = getattr(self, "text_width_menu_label", None)
+        if label is not None:
+            label.setText(str(resolved))
+
+    def _set_style_combo_value(self, tool_key: str, stroke_style: str) -> None:
+        """
+        Updates one tool Style combo without emitting change handlers.
+
+        Args:
+            tool_key: Tool identifier.
+            stroke_style: Named stroke style.
+
+        Returns:
+            None
+        """
+
+        combo = self._tool_style_combos.get(tool_key)
+        if combo is None:
+            return
+        resolved = normalize_named_stroke_style(stroke_style)
+        index = combo.findData(resolved)
+        if index < 0 or combo.currentIndex() == index:
+            return
+        combo.blockSignals(True)
+        combo.setCurrentIndex(index)
+        combo.blockSignals(False)
+
+    def _set_hardness_slider_value(self, tool_key: str, hardness: int) -> None:
+        """
+        Updates one Hard slider without emitting change handlers.
+
+        Args:
+            tool_key: Tool identifier.
+            hardness: Hardness percentage.
+
+        Returns:
+            None
+        """
+
+        slider = self._tool_hardness_sliders.get(tool_key)
+        if slider is None:
+            return
+        resolved = normalize_brush_hardness(hardness)
+        if slider.value() == resolved:
+            return
+        slider.blockSignals(True)
+        slider.setValue(resolved)
+        slider.blockSignals(False)
+        label = self._tool_hardness_labels.get(tool_key)
+        if label is not None:
+            label.setText(f"{resolved}%")
+
+    def _sync_stroke_tool_menu_widgets(
+        self,
+        payload: dict[str, Any],
+        *,
+        tool_key: str | None = None,
+    ) -> None:
+        """
+        Shows selected annotation stroke properties in tool popup widgets.
+
+        Args:
+            payload: Selection payload.
+            tool_key: Optional single tool menu to update; all when omitted.
+
+        Returns:
+            None
+        """
+
+        stroke_width = payload.get("stroke_width")
+        stroke_style = payload.get("stroke_style")
+        targets = (
+            [tool_key]
+            if tool_key
+            else [
+                key
+                for key in self._tool_width_sliders.keys()
+                if key not in {Tool.BRUSH, Tool.ERASER}
+            ]
+        )
+        for key in targets:
+            if key is None or key in {Tool.BRUSH, Tool.ERASER}:
+                continue
+            if isinstance(stroke_width, (int, float)) and key in WIDTH_AWARE_TOOLS:
+                self._set_width_slider_value(key, int(round(float(stroke_width))))
+            if (
+                isinstance(stroke_style, str)
+                and key in STYLE_AWARE_TOOLS
+                and key in self._tool_style_combos
+            ):
+                self._set_style_combo_value(key, stroke_style)
+
+    def _restore_stroke_tool_menu_widgets(self, *, tool_key: str | None = None) -> None:
+        """
+        Restores stroke-tool popup widgets to persisted tool defaults.
+
+        Args:
+            tool_key: Optional single tool menu to restore; all when omitted.
+
+        Returns:
+            None
+        """
+
+        targets = (
+            [tool_key]
+            if tool_key
+            else list(
+                dict.fromkeys(
+                    list(self._tool_width_sliders.keys())
+                    + list(self._tool_hardness_sliders.keys())
+                    + list(self._tool_style_combos.keys())
+                )
+            )
+        )
+        for key in targets:
+            if key is None:
+                continue
+            if key in WIDTH_AWARE_TOOLS and key in self._tool_width_sliders:
+                self._set_width_slider_value(
+                    key,
+                    self._tool_stroke_widths.get(key, 6),
+                )
+            if key in HARDNESS_AWARE_TOOLS:
+                self._set_hardness_slider_value(
+                    key,
+                    self._tool_brush_hardness.get(key, 80),
+                )
+            if key in STYLE_AWARE_TOOLS:
+                self._set_style_combo_value(
+                    key,
+                    self._tool_stroke_styles.get(key, STROKE_STYLE_SOLID),
+                )
+
+    def _sync_text_tool_menu_widgets(self, payload: dict[str, Any]) -> None:
+        """
+        Shows selected text properties in the Text tool popup.
+
+        Does not overwrite stored Text-tool defaults used for new annotations.
+
+        Args:
+            payload: Text selection payload.
+
+        Returns:
+            None
+        """
+
+        font_family = payload.get("font_family")
+        if isinstance(font_family, str) and font_family.strip():
+            self.font_family_combo.blockSignals(True)
+            self.font_family_combo.setCurrentText(font_family.strip())
+            self.font_family_combo.blockSignals(False)
+        font_size = payload.get("font_size")
+        if isinstance(font_size, int):
+            self._set_font_size_combo_value(font_size)
+        for attr, button_name in (
+            ("font_bold", "text_bold_button"),
+            ("font_italic", "text_italic_button"),
+            ("font_underline", "text_underline_button"),
+        ):
+            value = payload.get(attr)
+            button = getattr(self, button_name, None)
+            if isinstance(value, bool) and button is not None:
+                button.blockSignals(True)
+                button.setChecked(value)
+                button.blockSignals(False)
+        letter_spacing = payload.get("letter_spacing")
+        if isinstance(letter_spacing, (int, float)):
+            self.text_letter_spacing_spin.blockSignals(True)
+            self.text_letter_spacing_spin.setValue(float(letter_spacing))
+            self.text_letter_spacing_spin.blockSignals(False)
+        line_spacing_factor = payload.get("line_spacing_factor")
+        if isinstance(line_spacing_factor, (int, float)):
+            self.text_line_spacing_spin.blockSignals(True)
+            self.text_line_spacing_spin.setValue(float(line_spacing_factor))
+            self.text_line_spacing_spin.blockSignals(False)
+        box_padding = payload.get("box_padding")
+        if isinstance(box_padding, (int, float)):
+            self.text_padding_spin.blockSignals(True)
+            self.text_padding_spin.setValue(float(box_padding))
+            self.text_padding_spin.blockSignals(False)
+        corner_radius = payload.get("corner_radius")
+        if isinstance(corner_radius, (int, float)):
+            self.text_radius_spin.blockSignals(True)
+            self.text_radius_spin.setValue(float(corner_radius))
+            self.text_radius_spin.blockSignals(False)
+        text_style = str(payload.get("text_style") or TEXT_STYLE_PLAIN)
+        style_index = self.text_style_combo.findData(text_style)
+        if style_index >= 0:
+            self.text_style_combo.blockSignals(True)
+            self.text_style_combo.setCurrentIndex(style_index)
+            self.text_style_combo.blockSignals(False)
+        supports_container = text_style in {TEXT_STYLE_BOX, TEXT_STYLE_BUBBLE}
+        self.text_letter_spacing_spin.setEnabled(True)
+        self.text_line_spacing_spin.setEnabled(supports_container)
+        self.text_padding_spin.setEnabled(supports_container)
+        self.text_radius_spin.setEnabled(supports_container)
+        stroke_width = payload.get("stroke_width")
+        if isinstance(stroke_width, (int, float)):
+            self._set_width_slider_value(Tool.TEXT, int(round(float(stroke_width))))
+
+    def _restore_text_tool_menu_widgets(self) -> None:
+        """
+        Restores Text tool popup widgets to defaults for new text annotations.
+
+        Returns:
+            None
+        """
+
+        style = self.canvas._style  # pylint: disable=protected-access
+        family = style.font_family.strip() if style.font_family else ""
+        if family:
+            self.font_family_combo.blockSignals(True)
+            self.font_family_combo.setCurrentText(family)
+            self.font_family_combo.blockSignals(False)
+        self._set_font_size_combo_value(int(style.font_size))
+        self.text_bold_button.blockSignals(True)
+        self.text_bold_button.setChecked(self._text_bold_enabled)
+        self.text_bold_button.blockSignals(False)
+        self.text_italic_button.blockSignals(True)
+        self.text_italic_button.setChecked(self._text_italic_enabled)
+        self.text_italic_button.blockSignals(False)
+        self.text_underline_button.blockSignals(True)
+        self.text_underline_button.setChecked(self._text_underline_enabled)
+        self.text_underline_button.blockSignals(False)
+        self.text_letter_spacing_spin.blockSignals(True)
+        self.text_letter_spacing_spin.setValue(float(self._text_letter_spacing))
+        self.text_letter_spacing_spin.blockSignals(False)
+        self.text_line_spacing_spin.blockSignals(True)
+        self.text_line_spacing_spin.setValue(float(self._text_line_spacing))
+        self.text_line_spacing_spin.blockSignals(False)
+        self.text_padding_spin.blockSignals(True)
+        self.text_padding_spin.setValue(float(self._text_box_padding))
+        self.text_padding_spin.blockSignals(False)
+        self.text_radius_spin.blockSignals(True)
+        self.text_radius_spin.setValue(float(self._text_corner_radius))
+        self.text_radius_spin.blockSignals(False)
+        style_index = self.text_style_combo.findData(style.text_style)
+        if style_index >= 0:
+            self.text_style_combo.blockSignals(True)
+            self.text_style_combo.setCurrentIndex(style_index)
+            self.text_style_combo.blockSignals(False)
+        supports_container = style.text_style in {TEXT_STYLE_BOX, TEXT_STYLE_BUBBLE}
+        self.text_letter_spacing_spin.setEnabled(True)
+        self.text_line_spacing_spin.setEnabled(supports_container)
+        self.text_padding_spin.setEnabled(supports_container)
+        self.text_radius_spin.setEnabled(supports_container)
+        self._set_width_slider_value(
+            Tool.TEXT,
+            self._tool_stroke_widths.get(Tool.TEXT, 2),
+        )
+
+    def _apply_text_menu_style(self, history_label: str, **style_kwargs: Any) -> None:
+        """
+        Applies Text-menu properties to selection or Text-tool defaults.
+
+        Args:
+            history_label: History entry label.
+            **style_kwargs: Style fields forwarded to ``canvas.set_style``.
+
+        Returns:
+            None
+        """
+
+        if self.canvas.has_text_selection():
+            self.canvas.set_style(
+                **style_kwargs,
+                emit_history=False,
+                apply_to_selection=True,
+                update_active_style=False,
+            )
+            self._set_next_history_label(history_label)
+            self._push_history_state()
+            return
+        self.canvas.set_style(
+            **style_kwargs,
+            emit_history=False,
+            apply_to_selection=False,
+            update_active_style=True,
         )
 
     def _setup_text_tool_option_menu(self) -> None:
@@ -2135,6 +2513,7 @@ class EditorWindow(QMainWindow):
 
         panel_action.setDefaultWidget(panel)
         menu.addAction(panel_action)
+        menu.aboutToShow.connect(self._prepare_text_tool_menu)
         button.setMenu(menu)
         self._configure_menu_tool_button(button)
 
@@ -2373,7 +2752,12 @@ class EditorWindow(QMainWindow):
         minimum = 1 if target_tool in BRUSH_WIDTH_TOOLS else 0
         resolved = normalize_stroke_width(width, minimum=minimum)
 
-        if self.canvas.has_stroke_width_selection():
+        # Brush/eraser menus always edit tool defaults. Shape/line/text menus edit
+        # the current selection when one exists.
+        if (
+            target_tool not in BRUSH_WIDTH_TOOLS
+            and self.canvas.has_stroke_width_selection()
+        ):
             self.canvas.set_style(
                 stroke_width=float(resolved),
                 emit_history=False,
@@ -2954,9 +3338,7 @@ class EditorWindow(QMainWindow):
         text_style = self.text_style_combo.currentData()
         if not isinstance(text_style, str):
             return
-        self._set_next_history_label("Change text style")
-        self.canvas.set_style(text_style=text_style)
-        self._push_history_state()
+        self._apply_text_menu_style("Change text style", text_style=text_style)
 
     def _duplicate_selection(self) -> None:
         """
@@ -3089,7 +3471,7 @@ class EditorWindow(QMainWindow):
 
     def _font_size_changed(self, value: str) -> None:
         """
-        Updates active and selected text font size.
+        Updates selected text font size or the Text-tool default.
 
         Args:
             value: New font size in points as text.
@@ -3100,13 +3482,15 @@ class EditorWindow(QMainWindow):
 
         if not value.isdigit():
             return
-        self._set_next_history_label("Change font size")
-        self.canvas.set_style(font_size=int(value))
-        self._push_history_state()
+        size = int(value)
+        if not self.canvas.has_text_selection():
+            # Keep combo/default in sync for newly inserted text.
+            pass
+        self._apply_text_menu_style("Change font size", font_size=size)
 
     def _font_family_changed(self, value: str) -> None:
         """
-        Updates active and selected text font family.
+        Updates selected text font family or the Text-tool default.
 
         Args:
             value: New font family name.
@@ -3115,13 +3499,11 @@ class EditorWindow(QMainWindow):
             None
         """
 
-        self._set_next_history_label("Change font family")
-        self.canvas.set_style(font_family=value)
-        self._push_history_state()
+        self._apply_text_menu_style("Change font family", font_family=value)
 
     def _text_bold_toggled(self, checked: bool) -> None:
         """
-        Updates active and selected text bold style.
+        Updates selected text bold style or the Text-tool default.
 
         Args:
             checked: True when bold is enabled.
@@ -3130,14 +3512,13 @@ class EditorWindow(QMainWindow):
             None
         """
 
-        self._text_bold_enabled = bool(checked)
-        self._set_next_history_label("Toggle bold text")
-        self.canvas.set_style(font_bold=self._text_bold_enabled)
-        self._push_history_state()
+        if not self.canvas.has_text_selection():
+            self._text_bold_enabled = bool(checked)
+        self._apply_text_menu_style("Toggle bold text", font_bold=bool(checked))
 
     def _text_italic_toggled(self, checked: bool) -> None:
         """
-        Updates active and selected text italic style.
+        Updates selected text italic style or the Text-tool default.
 
         Args:
             checked: True when italic is enabled.
@@ -3146,14 +3527,13 @@ class EditorWindow(QMainWindow):
             None
         """
 
-        self._text_italic_enabled = bool(checked)
-        self._set_next_history_label("Toggle italic text")
-        self.canvas.set_style(font_italic=self._text_italic_enabled)
-        self._push_history_state()
+        if not self.canvas.has_text_selection():
+            self._text_italic_enabled = bool(checked)
+        self._apply_text_menu_style("Toggle italic text", font_italic=bool(checked))
 
     def _text_underline_toggled(self, checked: bool) -> None:
         """
-        Updates active and selected text underline style.
+        Updates selected text underline style or the Text-tool default.
 
         Args:
             checked: True when underline is enabled.
@@ -3162,14 +3542,16 @@ class EditorWindow(QMainWindow):
             None
         """
 
-        self._text_underline_enabled = bool(checked)
-        self._set_next_history_label("Toggle underline text")
-        self.canvas.set_style(font_underline=self._text_underline_enabled)
-        self._push_history_state()
+        if not self.canvas.has_text_selection():
+            self._text_underline_enabled = bool(checked)
+        self._apply_text_menu_style(
+            "Toggle underline text",
+            font_underline=bool(checked),
+        )
 
     def _text_letter_spacing_changed(self, value: float) -> None:
         """
-        Updates active and selected text letter spacing.
+        Updates selected text letter spacing or the Text-tool default.
 
         Args:
             value: Letter spacing in pixels.
@@ -3178,14 +3560,16 @@ class EditorWindow(QMainWindow):
             None
         """
 
-        self._text_letter_spacing = float(value)
-        self._set_next_history_label("Change letter spacing")
-        self.canvas.set_style(letter_spacing=self._text_letter_spacing)
-        self._push_history_state()
+        if not self.canvas.has_text_selection():
+            self._text_letter_spacing = float(value)
+        self._apply_text_menu_style(
+            "Change letter spacing",
+            letter_spacing=float(value),
+        )
 
     def _text_line_spacing_changed(self, value: float) -> None:
         """
-        Updates active and selected text line spacing.
+        Updates selected text line spacing or the Text-tool default.
 
         Args:
             value: Line spacing multiplier.
@@ -3194,14 +3578,16 @@ class EditorWindow(QMainWindow):
             None
         """
 
-        self._text_line_spacing = float(value)
-        self._set_next_history_label("Change line spacing")
-        self.canvas.set_style(line_spacing_factor=self._text_line_spacing)
-        self._push_history_state()
+        if not self.canvas.has_text_selection():
+            self._text_line_spacing = float(value)
+        self._apply_text_menu_style(
+            "Change line spacing",
+            line_spacing_factor=float(value),
+        )
 
     def _text_padding_changed(self, value: float) -> None:
         """
-        Updates active and selected text box padding.
+        Updates selected text box padding or the Text-tool default.
 
         Args:
             value: Inner box padding in pixels.
@@ -3210,14 +3596,16 @@ class EditorWindow(QMainWindow):
             None
         """
 
-        self._text_box_padding = float(value)
-        self._set_next_history_label("Change text box padding")
-        self.canvas.set_style(box_padding=self._text_box_padding)
-        self._push_history_state()
+        if not self.canvas.has_text_selection():
+            self._text_box_padding = float(value)
+        self._apply_text_menu_style(
+            "Change text box padding",
+            box_padding=float(value),
+        )
 
     def _text_radius_changed(self, value: float) -> None:
         """
-        Updates active and selected text box corner radius.
+        Updates selected text box corner radius or the Text-tool default.
 
         Args:
             value: Corner radius in pixels.
@@ -3226,10 +3614,12 @@ class EditorWindow(QMainWindow):
             None
         """
 
-        self._text_corner_radius = float(value)
-        self._set_next_history_label("Change text box radius")
-        self.canvas.set_style(corner_radius=self._text_corner_radius)
-        self._push_history_state()
+        if not self.canvas.has_text_selection():
+            self._text_corner_radius = float(value)
+        self._apply_text_menu_style(
+            "Change text box radius",
+            corner_radius=float(value),
+        )
 
     def _snap_toggled(self, checked: bool) -> None:
         """
@@ -3316,8 +3706,27 @@ class EditorWindow(QMainWindow):
         self._set_next_history_label(action_label)
         self._push_history_state()
         self._refresh_layer_panel()
-        self._show_canvas_action_notification(action_label)
         self._apply_one_shot_tool_completion(action_label)
+        self._show_canvas_action_notification(action_label)
+
+    def _on_canvas_status_message(self, message: str) -> None:
+        """
+        Shows a canvas status message in the footer status bar.
+
+        OCR results are also written to the permanent selection-info label so
+        the recognized text remains visible after tool switches.
+
+        Args:
+            message: Status text from the canvas.
+
+        Returns:
+            None
+        """
+
+        timeout_ms = 8000 if message.startswith("OCR") else 4500
+        self.statusBar().showMessage(message, timeout_ms)
+        if message.startswith("OCR"):
+            self._selection_info_label.setText(message)
 
     def _show_canvas_action_notification(self, action_label: str) -> None:
         """
@@ -3338,9 +3747,7 @@ class EditorWindow(QMainWindow):
         message = message_by_action.get(action_label)
         if message is None:
             return
-        # Keep OCR success messages longer so the copied text remains readable.
-        timeout_ms = 8000 if action_label == "Copy OCR text" else 4500
-        self.statusBar().showMessage(message, timeout_ms)
+        self._on_canvas_status_message(message)
 
     def _apply_one_shot_tool_completion(self, action_label: str) -> None:
         """
@@ -3398,9 +3805,9 @@ class EditorWindow(QMainWindow):
         """
 
         selection_type = str(payload.get("type", "") or "").strip().lower()
-        # Document info is status-only. Avoid touching Text-tool popup widgets
-        # (parented under a QMenu) on every empty-canvas refresh.
         if selection_type == "document" or not selection_type:
+            self._restore_stroke_tool_menu_widgets()
+            self._restore_text_tool_menu_widgets()
             self._selection_info_label.setText(format_selection_info(payload))
             return
 
@@ -3436,68 +3843,13 @@ class EditorWindow(QMainWindow):
             )
             self._set_target_color("text", color, apply_to_canvas=False)
 
-        font_size = payload.get("font_size")
-        if isinstance(font_size, int):
-            self._set_font_size_combo_value(font_size)
-        font_family = payload.get("font_family")
-        if isinstance(font_family, str) and font_family.strip():
-            self.font_family_combo.blockSignals(True)
-            self.font_family_combo.setCurrentText(font_family.strip())
-            self.font_family_combo.blockSignals(False)
-        font_bold = payload.get("font_bold")
-        if isinstance(font_bold, bool):
-            self._text_bold_enabled = font_bold
-            self.text_bold_button.blockSignals(True)
-            self.text_bold_button.setChecked(font_bold)
-            self.text_bold_button.blockSignals(False)
-        font_italic = payload.get("font_italic")
-        if isinstance(font_italic, bool):
-            self._text_italic_enabled = font_italic
-            self.text_italic_button.blockSignals(True)
-            self.text_italic_button.setChecked(font_italic)
-            self.text_italic_button.blockSignals(False)
-        font_underline = payload.get("font_underline")
-        if isinstance(font_underline, bool):
-            self._text_underline_enabled = font_underline
-            self.text_underline_button.blockSignals(True)
-            self.text_underline_button.setChecked(font_underline)
-            self.text_underline_button.blockSignals(False)
-        letter_spacing = payload.get("letter_spacing")
-        if isinstance(letter_spacing, (int, float)):
-            self._text_letter_spacing = float(letter_spacing)
-            self.text_letter_spacing_spin.blockSignals(True)
-            self.text_letter_spacing_spin.setValue(float(letter_spacing))
-            self.text_letter_spacing_spin.blockSignals(False)
-        line_spacing_factor = payload.get("line_spacing_factor")
-        if isinstance(line_spacing_factor, (int, float)):
-            self._text_line_spacing = float(line_spacing_factor)
-            self.text_line_spacing_spin.blockSignals(True)
-            self.text_line_spacing_spin.setValue(float(line_spacing_factor))
-            self.text_line_spacing_spin.blockSignals(False)
-        box_padding = payload.get("box_padding")
-        if isinstance(box_padding, (int, float)):
-            self._text_box_padding = float(box_padding)
-            self.text_padding_spin.blockSignals(True)
-            self.text_padding_spin.setValue(float(box_padding))
-            self.text_padding_spin.blockSignals(False)
-        corner_radius = payload.get("corner_radius")
-        if isinstance(corner_radius, (int, float)):
-            self._text_corner_radius = float(corner_radius)
-            self.text_radius_spin.blockSignals(True)
-            self.text_radius_spin.setValue(float(corner_radius))
-            self.text_radius_spin.blockSignals(False)
-        has_text_selection = str(payload.get("type") or "") == "text"
-        text_style = str(payload.get("text_style") or TEXT_STYLE_PLAIN)
-        supports_container_layout = text_style in {TEXT_STYLE_BOX, TEXT_STYLE_BUBBLE}
-        style_index = self.text_style_combo.findData(text_style)
-        if style_index >= 0:
-            self.text_style_combo.blockSignals(True)
-            self.text_style_combo.setCurrentIndex(style_index)
-            self.text_style_combo.blockSignals(False)
-        self.text_letter_spacing_spin.setEnabled(has_text_selection)
-        self.text_line_spacing_spin.setEnabled(supports_container_layout)
-        self.text_padding_spin.setEnabled(supports_container_layout)
-        self.text_radius_spin.setEnabled(supports_container_layout)
+        if selection_type in {"rect", "ellipse", "line", "arrow"}:
+            self._sync_stroke_tool_menu_widgets(payload)
+        elif selection_type == "text":
+            self._sync_text_tool_menu_widgets(payload)
+        else:
+            self._restore_stroke_tool_menu_widgets()
+            self._restore_text_tool_menu_widgets()
 
         self._update_geometry_controls_from_payload(payload)
         self._sync_layer_controls_from_payload(payload)

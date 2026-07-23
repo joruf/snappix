@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QCursor, QPainter, QPen
+from PySide6.QtGui import QColor, QCursor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem
 
 
@@ -49,6 +49,7 @@ class CropSelectionItem(QGraphicsRectItem):
         self._always_show_handles = False
         self._aspect_ratio_lock_enabled = True
         self._resize_aspect_ratio = 1.0
+        self._interior_interactive = True
         self.on_geometry_changed: Callable[[], None] | None = None
 
         border_pen = QPen(QColor(52, 152, 219, 230), 2.0, Qt.PenStyle.DashLine)
@@ -102,6 +103,55 @@ class CropSelectionItem(QGraphicsRectItem):
 
         self._always_show_handles = enabled
         self.update()
+
+    def set_interior_interactive(self, enabled: bool) -> None:
+        """
+        Controls whether the filled interior captures mouse events.
+
+        When disabled, only the border and handles are interactive so thin
+        annotations (lines/arrows) remain clickable underneath the overlay.
+
+        Args:
+            enabled: True to include the filled rectangle in hit testing.
+
+        Returns:
+            None
+        """
+
+        self._interior_interactive = bool(enabled)
+        # Keep a light visual fill, but allow clicks to pass through when needed.
+        if self._interior_interactive:
+            self.setBrush(QColor(52, 152, 219, 48))
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
+        else:
+            self.setBrush(QColor(52, 152, 219, 24))
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.prepareGeometryChange()
+        self.update()
+
+    def shape(self) -> QPainterPath:
+        """
+        Returns the interactive hit region for the overlay.
+
+        Returns:
+            QPainterPath: Full rectangle, or only border/handles when interior
+            clicks should pass through to annotations below.
+        """
+
+        if self._interior_interactive:
+            return super().shape()
+
+        path = QPainterPath()
+        for handle in self._handle_rects().values():
+            path.addRect(handle)
+        rect = self.rect()
+        tolerance = self.BORDER_HIT_TOLERANCE
+        border = QPainterPath()
+        border.addRect(rect.adjusted(-tolerance, -tolerance, tolerance, tolerance))
+        inner = QPainterPath()
+        inner.addRect(rect.adjusted(tolerance, tolerance, -tolerance, -tolerance))
+        path.addPath(border.subtracted(inner))
+        return path
 
     def set_aspect_ratio_lock_enabled(self, enabled: bool) -> None:
         """

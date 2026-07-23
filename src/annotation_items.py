@@ -11,7 +11,17 @@ from typing import cast
 from uuid import uuid4
 
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QImage, QPainter, QPainterPath, QPen, QPixmap, QTransform
+from PySide6.QtGui import (
+    QColor,
+    QFont,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QPainterPathStroker,
+    QPen,
+    QPixmap,
+    QTransform,
+)
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
@@ -276,10 +286,103 @@ class StyleState:
     text_style: str = TEXT_STYLE_PLAIN
 
 
-class ArrowItem(QGraphicsLineItem):
+class StrokeLineItem(QGraphicsLineItem):
+    """
+    Line annotation with a thicker clickable stroke for reliable selection.
+    """
+
+    HIT_PADDING = 8.0
+
+    def shape(self) -> QPainterPath:
+        """
+        Returns a stroked path around the line for mouse hit testing.
+
+        Returns:
+            QPainterPath: Clickable stroke geometry.
+        """
+
+        line = self.line()
+        path = QPainterPath()
+        if line.length() < 0.001:
+            half = self.HIT_PADDING
+            path.addRect(QRectF(line.p1().x() - half, line.p1().y() - half, half * 2.0, half * 2.0))
+            return path
+
+        base = QPainterPath()
+        base.moveTo(line.p1())
+        base.lineTo(line.p2())
+        stroker = QPainterPathStroker()
+        stroker.setWidth(max(float(self.pen().widthF()), 1.0) + (self.HIT_PADDING * 2.0))
+        stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
+        stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        return stroker.createStroke(base)
+
+    def boundingRect(self) -> QRectF:
+        """
+        Returns bounds that include the expanded hit stroke.
+
+        Returns:
+            QRectF: Item bounds for painting and layout.
+        """
+
+        return self.shape().controlPointRect().adjusted(-1.0, -1.0, 1.0, 1.0)
+
+
+class ArrowItem(StrokeLineItem):
     """
     Draws a line with an arrow head at the end.
     """
+
+    def _arrow_head_path(self) -> QPainterPath:
+        """
+        Builds the triangular arrow head path at the line end.
+
+        Returns:
+            QPainterPath: Closed arrow-head triangle, or empty when too short.
+        """
+
+        line = self.line()
+        path = QPainterPath()
+        length = float(line.length())
+        if length < 1.0:
+            return path
+
+        # Use the geometric direction p1→p2 in screen coordinates so the head
+        # always follows the drawn shaft (independent of QLineF.angle quirks).
+        dx = float(line.dx()) / length
+        dy = float(line.dy()) / length
+        size = max(8.0, float(self.pen().widthF()) * 3.0)
+        tip = line.p2()
+        back_x = -dx
+        back_y = -dy
+        # Wing directions: rotate the back vector by ±30°.
+        left = QPointF(
+            tip.x() + size * (back_x * math.cos(math.radians(30.0)) - back_y * math.sin(math.radians(30.0))),
+            tip.y() + size * (back_x * math.sin(math.radians(30.0)) + back_y * math.cos(math.radians(30.0))),
+        )
+        right = QPointF(
+            tip.x() + size * (back_x * math.cos(math.radians(-30.0)) - back_y * math.sin(math.radians(-30.0))),
+            tip.y() + size * (back_x * math.sin(math.radians(-30.0)) + back_y * math.cos(math.radians(-30.0))),
+        )
+        path.moveTo(tip)
+        path.lineTo(left)
+        path.lineTo(right)
+        path.closeSubpath()
+        return path
+
+    def shape(self) -> QPainterPath:
+        """
+        Returns clickable geometry for the shaft and arrow head.
+
+        Returns:
+            QPainterPath: Combined hit area.
+        """
+
+        path = super().shape()
+        head = self._arrow_head_path()
+        if not head.isEmpty():
+            path.addPath(head)
+        return path
 
     def paint(
         self,
@@ -300,31 +403,14 @@ class ArrowItem(QGraphicsLineItem):
         """
 
         super().paint(painter, option, widget)
-        line = self.line()
-        if line.length() < 1:
+        head = self._arrow_head_path()
+        if head.isEmpty():
             return
 
         pen = self.pen()
         painter.setPen(pen)
         painter.setBrush(pen.color())
-
-        angle = math.radians(line.angle())
-        size = max(8.0, pen.widthF() * 3.0)
-        p2 = line.p2()
-        left = QPointF(
-            p2.x() + size * math.cos(angle + math.radians(150)),
-            p2.y() - size * math.sin(angle + math.radians(150)),
-        )
-        right = QPointF(
-            p2.x() + size * math.cos(angle - math.radians(150)),
-            p2.y() - size * math.sin(angle - math.radians(150)),
-        )
-        path = QPainterPath()
-        path.moveTo(p2)
-        path.lineTo(left)
-        path.lineTo(right)
-        path.closeSubpath()
-        painter.drawPath(path)
+        painter.drawPath(head)
 
 
 def color_to_list(color: QColor) -> list[int]:
@@ -674,14 +760,15 @@ def add_annotation_to_scene(
         apply_payload_transform(item, annotation.payload)
         return item
     if annotation.annotation_type == "line":
-        item = scene.addLine(
+        item = StrokeLineItem(
             annotation.x,
             annotation.y,
             annotation.x + annotation.width,
             annotation.y + annotation.height,
-            apply_stored_pen_style(pen, annotation.payload),
         )
+        item.setPen(apply_stored_pen_style(pen, annotation.payload))
         configure_graphics_item(item, "line")
+        scene.addItem(item)
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
         apply_payload_transform(item, annotation.payload)
         return item

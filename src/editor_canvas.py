@@ -75,6 +75,7 @@ from src.annotation_items import (
     STROKE_STYLE_DASH_DOT,
     STROKE_STYLE_DOT,
     STROKE_STYLE_SOLID,
+    StrokeLineItem,
     StyleState,
     add_annotation_to_scene,
     annotation_from_item,
@@ -100,7 +101,7 @@ from src.brush_paint import paint_soft_brush_segment
 from src.crop_item import CropSelectionItem
 from src.image_effects import pixelate_qimage_region
 from src.models import AnnotationModel
-from src.ocr import extract_text_from_png_bytes
+from src.ocr import extract_text_from_png_bytes, format_ocr_copied_status
 from src.pixel_selection import (
     build_selection_overlay_pixmap,
     build_wand_mask_image,
@@ -1848,6 +1849,19 @@ class EditorCanvas(QGraphicsView):
                 return True
         return False
 
+    def has_text_selection(self) -> bool:
+        """
+        Returns whether the selection contains editable text annotations.
+
+        Returns:
+            bool: True when at least one selected text annotation exists.
+        """
+
+        for item in self._selected_annotation_items():
+            if str(item.data(ITEM_ROLE_TYPE) or "") == "text":
+                return True
+        return False
+
     def zoom_in(self) -> None:
         """
         Zooms into the canvas.
@@ -1947,7 +1961,7 @@ class EditorCanvas(QGraphicsView):
             item.setBrush(self._style.fill_color)
             return item
         if self._tool == Tool.LINE:
-            item = QGraphicsLineItem(start.x(), start.y(), start.x(), start.y())
+            item = StrokeLineItem(start.x(), start.y(), start.x(), start.y())
             item.setPen(pen)
             return item
         if self._tool == Tool.ARROW:
@@ -3796,6 +3810,7 @@ class EditorCanvas(QGraphicsView):
 
         if not has_tesseract():
             self._emit_content_changed("OCR unavailable: install tesseract-ocr")
+            self.status_message.emit("OCR unavailable. Please install tesseract-ocr.")
             return
         clipped = rect.intersected(self.document_rect()).normalized()
         if clipped.width() < 2 or clipped.height() < 2:
@@ -3810,10 +3825,14 @@ class EditorCanvas(QGraphicsView):
         if not text:
             self._last_ocr_copied_text = ""
             self._emit_content_changed("OCR found no text")
+            self.status_message.emit("OCR completed, but no text was found.")
             return
         QGuiApplication.clipboard().setText(text)
         self._last_ocr_copied_text = text
         self._emit_content_changed("Copy OCR text")
+        # Emit after content_changed so tool-switch / document-footer updates
+        # cannot overwrite the recognized-text status.
+        self.status_message.emit(format_ocr_copied_status(text))
 
     def last_ocr_copied_text(self) -> str:
         """
@@ -4352,6 +4371,8 @@ class EditorCanvas(QGraphicsView):
             return
 
         target_rect = self._item_scene_rect(target)
+        annotation_type = str(target.data(ITEM_ROLE_TYPE) or "")
+        pass_through_interior = annotation_type in {"line", "arrow"}
         if self._resize_overlay_item is None:
             overlay = CropSelectionItem(target_rect)
             overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
@@ -4359,12 +4380,14 @@ class EditorCanvas(QGraphicsView):
             overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
             overlay.set_always_show_handles(True)
             overlay.set_aspect_ratio_lock_enabled(True)
+            overlay.set_interior_interactive(not pass_through_interior)
             overlay.on_geometry_changed = self._apply_resize_overlay_to_target
             overlay.setZValue(1400)
             self._scene.addItem(overlay)
             self._resize_overlay_item = overlay
         else:
             self._updating_resize_overlay = True
+            self._resize_overlay_item.set_interior_interactive(not pass_through_interior)
             self._resize_overlay_item.setPos(target_rect.topLeft())
             self._resize_overlay_item.setRect(
                 QRectF(0.0, 0.0, target_rect.width(), target_rect.height())

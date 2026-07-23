@@ -418,25 +418,24 @@ class TestEditorSelectionInfo(unittest.TestCase):
         self.assertIn("1 annotation", footer)
         window.close()
 
-    def test_document_style_change_skips_text_popup_widgets(self) -> None:
+    def test_document_deselect_restores_text_tool_defaults(self) -> None:
         """
-        Ensures document footer updates do not touch Text-tool menu controls.
+        Ensures clearing the selection restores Text-tool popup defaults.
         """
 
         window = EditorWindow(_solid_pixmap(100, 80))
-        with patch.object(window.text_letter_spacing_spin, "setEnabled") as set_enabled:
-            with patch.object(window.text_style_combo, "setCurrentIndex") as set_index:
-                window._on_selection_style_changed(  # pylint: disable=protected-access
-                    {
-                        "type": "document",
-                        "pixel_width": 100,
-                        "pixel_height": 80,
-                        "zoom": 100,
-                        "annotation_count": 0,
-                    }
-                )
-        set_enabled.assert_not_called()
-        set_index.assert_not_called()
+        window._text_bold_enabled = True  # pylint: disable=protected-access
+        window.text_bold_button.setChecked(False)
+        window._on_selection_style_changed(  # pylint: disable=protected-access
+            {
+                "type": "document",
+                "pixel_width": 100,
+                "pixel_height": 80,
+                "zoom": 100,
+                "annotation_count": 0,
+            }
+        )
+        self.assertTrue(window.text_bold_button.isChecked())
         self.assertIn("Document", window._selection_info_label.text())  # pylint: disable=protected-access
         window.close()
 

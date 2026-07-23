@@ -226,6 +226,33 @@ class TestEditorCanvasTools(unittest.TestCase):
         clipboard.setText.assert_called_once_with("Detected text")
         self.assertEqual(canvas.last_ocr_copied_text(), "Detected text")
 
+    @patch("src.editor_canvas.has_tesseract", return_value=True)
+    @patch("src.editor_canvas.extract_text_from_png_bytes", return_value="Invoice total 42.00")
+    @patch("src.editor_canvas.QGuiApplication")
+    def test_ocr_result_is_written_to_editor_footer(
+        self,
+        mock_gui_app: MagicMock,
+        _mock_extract: MagicMock,
+        _mock_has_tesseract: MagicMock,
+    ) -> None:
+        """
+        Ensures recognized OCR text remains visible in the editor footer.
+        """
+
+        from src.editor_window import EditorWindow
+
+        clipboard = MagicMock()
+        mock_gui_app.clipboard.return_value = clipboard
+        window = EditorWindow(_checkerboard_pixmap(120, 80))
+        window._one_shot_tool = Tool.OCR  # pylint: disable=protected-access
+        window.canvas._run_ocr_on_region(QRectF(8.0, 8.0, 50.0, 30.0))  # pylint: disable=protected-access
+
+        footer = window._selection_info_label.text()  # pylint: disable=protected-access
+        self.assertIn("OCR copied:", footer)
+        self.assertIn("Invoice total 42.00", footer)
+        self.assertEqual(window.canvas._tool, Tool.SELECT)  # pylint: disable=protected-access
+        window.close()
+
     @patch("src.editor_canvas.has_tesseract", return_value=False)
     @patch("src.editor_canvas.extract_text_from_png_bytes")
     def test_run_ocr_on_region_skips_when_tesseract_missing(
