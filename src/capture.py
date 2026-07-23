@@ -212,10 +212,14 @@ class CapturePanel(QWidget):
         self.delay_slider.setRange(0, 20)
         self.delay_slider.setValue(0)
         self.delay_slider.valueChanged.connect(self._sync_delay_label_from_slider)
-        self.delay_slider.setToolTip("Delay capture start in seconds.")
+        self.delay_slider.setToolTip(
+            "Delay capture start in seconds. Press Esc during the countdown to cancel."
+        )
 
         self.delay_value_label = QLabel("0 s")
-        self.delay_value_label.setToolTip("Current delay before capture starts.")
+        self.delay_value_label.setToolTip(
+            "Current delay before capture starts. Esc cancels during countdown."
+        )
         delay_row = QHBoxLayout()
         delay_row.addWidget(self.delay_slider, 1)
         delay_row.addWidget(self.delay_value_label)
@@ -1472,6 +1476,181 @@ def capture_full_screen() -> DesktopSnapshot:
     return DesktopSnapshot(pixmap=composed, virtual_geometry=virtual_geometry)
 
 
+class CaptureDelayOverlay(QWidget):
+    """
+    Shows a capture countdown that can be cancelled with Escape.
+    """
+
+    finished = Signal()
+    cancelled = Signal()
+
+    def __init__(self, delay_seconds: int) -> None:
+        """
+        Initializes the countdown overlay.
+
+        Args:
+            delay_seconds: Remaining seconds before capture starts.
+        """
+
+        super().__init__()
+        self._remaining = max(1, int(delay_seconds))
+        self._closed = False
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 14, 18, 14)
+        root.setSpacing(6)
+
+        self._countdown_label = QLabel(str(self._remaining), self)
+        self._countdown_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._countdown_label.setStyleSheet(
+            "color: #ffffff; font-size: 42px; font-weight: 700;"
+        )
+        root.addWidget(self._countdown_label)
+
+        hint = QLabel("Capturing soon — press Esc to cancel", self)
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setStyleSheet("color: #e8eef7; font-size: 12px;")
+        root.addWidget(hint)
+
+        self.setStyleSheet(
+            "CaptureDelayOverlay {"
+            " background: rgba(20, 24, 32, 210);"
+            " border: 1px solid rgba(255, 255, 255, 55);"
+            " border-radius: 10px;"
+            "}"
+        )
+        self.adjustSize()
+        self._place_near_cursor()
+
+        self._escape_shortcut = _install_escape_shortcut(self, self._cancel)
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._on_tick)
+
+    def showEvent(self, event) -> None:
+        """
+        Starts the countdown when the overlay becomes visible.
+
+        Args:
+            event: Qt show event.
+
+        Returns:
+            None
+        """
+
+        super().showEvent(event)
+        self._countdown_label.setText(str(self._remaining))
+        if not self._timer.isActive():
+            self._timer.start()
+        self.raise_()
+        self.activateWindow()
+        self.grabKeyboard()
+
+    def keyPressEvent(self, event) -> None:
+        """
+        Cancels the delayed capture when Escape is pressed.
+
+        Args:
+            event: Key event.
+
+        Returns:
+            None
+        """
+
+        if event.key() == Qt.Key.Key_Escape:
+            self._cancel()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event) -> None:
+        """
+        Releases keyboard grab when the overlay closes.
+
+        Args:
+            event: Close event.
+
+        Returns:
+            None
+        """
+
+        self.releaseKeyboard()
+        self._timer.stop()
+        super().closeEvent(event)
+
+    def _place_near_cursor(self) -> None:
+        """
+        Positions the overlay near the current pointer screen.
+
+        Returns:
+            None
+        """
+
+        screen = QGuiApplication.screenAt(QCursor.pos())
+        if screen is None:
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return
+        available = screen.availableGeometry()
+        x = available.center().x() - (self.width() // 2)
+        y = available.y() + 48
+        self.move(x, y)
+
+    def _on_tick(self) -> None:
+        """
+        Decrements the countdown and finishes when reaching zero.
+
+        Returns:
+            None
+        """
+
+        if self._closed:
+            return
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._finish()
+            return
+        self._countdown_label.setText(str(self._remaining))
+
+    def _finish(self) -> None:
+        """
+        Completes the delay and notifies listeners to start capture.
+
+        Returns:
+            None
+        """
+
+        if self._closed:
+            return
+        self._closed = True
+        self._timer.stop()
+        self.releaseKeyboard()
+        self.finished.emit()
+        self.close()
+
+    def _cancel(self) -> None:
+        """
+        Cancels the delayed capture.
+
+        Returns:
+            None
+        """
+
+        if self._closed:
+            return
+        self._closed = True
+        self._timer.stop()
+        self.releaseKeyboard()
+        self.cancelled.emit()
+        self.close()
+
+
 def execute_color_pick(
     on_picked: Callable[[str], None],
     on_cancel: Callable[[], None],
@@ -1644,7 +1823,28 @@ def execute_capture_request(
         QTimer.singleShot(70, check_selection_process)
 
     if request.delay_seconds > 0:
-        QTimer.singleShot(request.delay_seconds * 1000, begin_capture)
+        delay_state = {"cancelled": False}
+        delay_overlay = CaptureDelayOverlay(request.delay_seconds)
+        _track_overlay(delay_overlay)
+
+        def on_delay_finished() -> None:
+            _untrack_overlay(delay_overlay)
+            if delay_state["cancelled"]:
+                return
+            begin_capture()
+
+        def on_delay_cancelled() -> None:
+            if delay_state["cancelled"]:
+                return
+            delay_state["cancelled"] = True
+            _untrack_overlay(delay_overlay)
+            on_cancel()
+
+        delay_overlay.finished.connect(on_delay_finished)
+        delay_overlay.cancelled.connect(on_delay_cancelled)
+        delay_overlay.show()
+        delay_overlay.raise_()
+        delay_overlay.activateWindow()
     else:
         begin_capture()
 
