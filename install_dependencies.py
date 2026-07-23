@@ -283,7 +283,19 @@ def install_system_dependencies(project_dir: Path) -> int:
 
     missing = detect_missing_system_dependencies()
     recommended_missing = detect_missing_recommended_dependencies()
+    print("Snappix installer: checking system packages...")
+    if missing:
+        print(
+            "Snappix installer: detecting missing required packages: "
+            + ", ".join(missing)
+        )
+    if recommended_missing:
+        print(
+            "Snappix installer: detecting missing recommended tools: "
+            + ", ".join(recommended_missing)
+        )
     if not missing and not recommended_missing:
+        print("Snappix installer: required system packages are present")
         return 0
 
     package_manager = detect_package_manager()
@@ -449,6 +461,7 @@ def bootstrap(project_dir: Path, python_bin: str | None = None) -> int:
     """
 
     interpreter = python_bin or sys.executable
+    print("Snappix installer: checking installation requirements...")
     system_code = install_system_dependencies(project_dir)
     create_code = ensure_venv(project_dir, interpreter)
     if create_code != 0:

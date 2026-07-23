@@ -925,6 +925,42 @@ class AppController:
         self.config.export_preset = normalized
         self.config_manager.save(self.config)
 
+    def _on_editor_export_scale_changed(self, scale: float) -> None:
+        """
+        Persists the export scale preference from any editor tab.
+
+        Args:
+            scale: Newly selected export scale.
+
+        Returns:
+            None
+        """
+
+        from src.config import normalize_export_scale
+
+        normalized = normalize_export_scale(scale)
+        if abs(normalized - float(self.config.export_scale)) < 0.001:
+            return
+        self.config.export_scale = normalized
+        self.config_manager.save(self.config)
+
+    def _on_editor_export_keep_transparency_changed(self, keep: bool) -> None:
+        """
+        Persists the export transparency preference from any editor tab.
+
+        Args:
+            keep: True when transparency should be preserved.
+
+        Returns:
+            None
+        """
+
+        resolved = bool(keep)
+        if resolved == bool(self.config.export_keep_transparency):
+            return
+        self.config.export_keep_transparency = resolved
+        self.config_manager.save(self.config)
+
     def _on_editor_batch_profiles_changed(
         self,
         profiles: object,
@@ -1058,6 +1094,8 @@ class AppController:
         editor.set_recovery_path(recovery_path or create_tab_recovery_path())
         editor.set_theme_selection(self.config.theme)
         editor.set_export_preset(self.config.export_preset, emit_signal=False)
+        editor.set_export_scale(self.config.export_scale)
+        editor.set_export_keep_transparency(self.config.export_keep_transparency)
         editor.set_auto_crop_on_shrink(self.config.auto_crop_on_shrink)
         editor.apply_editor_shortcuts(self.config.editor_shortcuts)
         editor.set_batch_export_profiles(
@@ -1071,6 +1109,10 @@ class AppController:
         )
         editor.theme_changed.connect(self.set_theme)
         editor.export_preset_changed.connect(self._on_editor_export_preset_changed)
+        editor.export_scale_changed.connect(self._on_editor_export_scale_changed)
+        editor.export_keep_transparency_changed.connect(
+            self._on_editor_export_keep_transparency_changed
+        )
         editor.batch_export_profiles_changed.connect(
             self._on_editor_batch_profiles_changed
         )

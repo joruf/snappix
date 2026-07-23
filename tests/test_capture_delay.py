@@ -77,3 +77,36 @@ class TestCaptureDelayOverlay(unittest.TestCase):
 
         self.assertTrue(cancelled["value"])
         self.assertFalse(captured["value"])
+
+    def test_finish_hides_countdown_before_capture_signal(self) -> None:
+        """
+        Ensures countdown text is hidden before the finished signal fires.
+        """
+
+        from PySide6.QtCore import QEventLoop
+
+        overlay = CaptureDelayOverlay(1)
+        states: list[tuple[bool, bool]] = []
+        loop = QEventLoop()
+
+        def on_finished() -> None:
+            states.append(
+                (
+                    overlay.isVisible(),
+                    overlay._countdown_label.isVisible(),  # pylint: disable=protected-access
+                )
+            )
+            loop.quit()
+
+        overlay.finished.connect(on_finished)
+        overlay.show()
+        QApplication.processEvents()
+        overlay._remaining = 1  # pylint: disable=protected-access
+        overlay._on_tick()  # pylint: disable=protected-access
+        QTimer.singleShot(500, loop.quit)
+        loop.exec()
+        self.assertTrue(states)
+        self.assertFalse(states[0][0])
+        self.assertFalse(states[0][1])
+        self.assertFalse(overlay._countdown_label.text())  # pylint: disable=protected-access
+        overlay.close()

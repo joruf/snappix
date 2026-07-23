@@ -31,6 +31,7 @@ from PySide6.QtGui import (
     QBrush,
     QColor,
     QContextMenuEvent,
+    QCursor,
     QFont,
     QGuiApplication,
     QImage,
@@ -66,6 +67,7 @@ from src.annotation_items import (
     ArrowItem,
     ITEM_ROLE_ID,
     ITEM_ROLE_LOCKED,
+    ITEM_ROLE_TRANSFORM,
     ITEM_ROLE_TYPE,
     STROKE_STYLE_DASH,
     STROKE_STYLE_DASH_DOT,
@@ -74,11 +76,13 @@ from src.annotation_items import (
     StyleState,
     add_annotation_to_scene,
     annotation_from_item,
+    apply_item_transform,
     color_to_list,
     configure_graphics_item,
     create_pen,
     normalize_stroke_style,
     stroke_style_to_qt,
+    transform_payload_from_item,
 )
 from src.annotation_items import _stroke_style_from_pen as stroke_style_from_pen
 from src.annotation_shapes import (
@@ -88,6 +92,7 @@ from src.annotation_shapes import (
     TEXT_STYLE_BUBBLE,
     TEXT_STYLE_PLAIN,
 )
+from src.brush_paint import paint_soft_brush_segment
 from src.crop_item import CropSelectionItem
 from src.image_effects import pixelate_qimage_region
 from src.models import AnnotationModel
@@ -184,7 +189,9 @@ class Tool:
     SELECT_PATH = "select_path"
     MAGIC_WAND = "magic_wand"
     BRUSH = "brush"
+    ERASER = "eraser"
     BUCKET = "bucket"
+    EYEDROPPER = "eyedropper"
 
 
 ERASE_MODE_TRANSPARENT = "transparent"
@@ -257,7 +264,7 @@ class EditorCanvas(QGraphicsView):
             stroke_color=QColor(231, 76, 60, 255),
             fill_color=QColor(231, 76, 60, 80),
             text_color=QColor(44, 62, 80, 255),
-            stroke_width=3.0,
+            stroke_width=6.0,
             font_size=16,
             font_family="Sans Serif",
             font_bold=False,
@@ -303,6 +310,9 @@ class EditorCanvas(QGraphicsView):
         self._brush_painting = False
         self._brush_last_pos: QPointF | None = None
         self._brush_stroke_dirty = False
+        self._brush_hardness = 80.0
+        self._brush_erase_mode = False
+        self._eyedropper_target = "stroke"
         self._last_ocr_copied_text = ""
 
         self._background_item = QGraphicsPixmapItem()
@@ -826,7 +836,40 @@ class EditorCanvas(QGraphicsView):
         if tool == Tool.TEXT:
             self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
             return
+        if tool == Tool.BUCKET:
+            self.viewport().setCursor(self._build_bucket_cursor())
+            return
+        if tool in {Tool.BRUSH, Tool.ERASER}:
+            self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+            return
+        if tool == Tool.EYEDROPPER:
+            self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+            return
         self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+
+    def _build_bucket_cursor(self) -> QCursor:
+        """
+        Builds a paint-bucket style cursor for the Fill tool.
+
+        Returns:
+            QCursor: Custom bucket cursor hotspot near the spout.
+        """
+
+        size = 24
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        body = QColor("#4aa3ff")
+        outline = QColor("#1b2a3a")
+        painter.setPen(QPen(outline, 1.4))
+        painter.setBrush(body)
+        painter.drawRoundedRect(7, 9, 11, 9, 1.5, 1.5)
+        painter.drawLine(10, 9, 14, 4)
+        painter.setBrush(QColor(74, 163, 255, 160))
+        painter.drawEllipse(15, 16, 5, 5)
+        painter.end()
+        return QCursor(pixmap, 8, 4)
 
     def set_style(
         self,
@@ -845,6 +888,8 @@ class EditorCanvas(QGraphicsView):
         corner_radius: float | None = None,
         stroke_style: str | None = None,
         text_style: str | None = None,
+        *,
+        emit_history: bool = True,
     ) -> None:
         """
         Updates active style options and selected item style.
@@ -863,6 +908,7 @@ class EditorCanvas(QGraphicsView):
             line_spacing_factor: Optional line-spacing multiplier.
             box_padding: Optional text container padding in pixels.
             corner_radius: Optional text container corner radius in pixels.
+            emit_history: When False, skips the content-changed history signal.
 
         Returns:
             None
@@ -996,7 +1042,7 @@ class EditorCanvas(QGraphicsView):
                     )
                     text_item.setFont(font)
                 changed = True
-        if changed:
+        if changed and emit_history:
             self._emit_content_changed("Update selected style")
 
     def set_grid_visible(self, visible: bool) -> None:
@@ -1094,7 +1140,9 @@ class EditorCanvas(QGraphicsView):
             Tool.SELECT_PATH,
             Tool.MAGIC_WAND,
             Tool.BRUSH,
+            Tool.ERASER,
             Tool.BUCKET,
+            Tool.EYEDROPPER,
         }:
             pass
         elif self._try_toggle_item_selection(event):
@@ -1191,12 +1239,19 @@ class EditorCanvas(QGraphicsView):
             self._clear_resize_overlay()
             self.fill_pixel_selection()
             return
-        if self._tool == Tool.BRUSH:
+        if self._tool == Tool.EYEDROPPER:
+            self._clear_resize_overlay()
+            self._sample_color_at(scene_pos)
+            return
+        if self._tool in {Tool.BRUSH, Tool.ERASER}:
             self._clear_resize_overlay()
             self._brush_painting = True
             self._brush_last_pos = scene_pos
             self._brush_stroke_dirty = False
+            self._brush_erase_mode = self._tool == Tool.ERASER
             self._paint_brush_segment(scene_pos, scene_pos)
+            self.grabMouse()
+            event.accept()
             return
         if self._tool == Tool.FILL_BG:
             self._clear_resize_overlay()
@@ -1329,10 +1384,13 @@ class EditorCanvas(QGraphicsView):
             current = self.mapToScene(event.position().toPoint())
             self._update_path_preview(current)
             return
-        if self._tool == Tool.BRUSH and self._brush_painting and self._brush_last_pos is not None:
+        if self._tool in {Tool.BRUSH, Tool.ERASER} and self._brush_painting and self._brush_last_pos is not None:
+            if not (event.buttons() & Qt.MouseButton.LeftButton):
+                return
             current = self.mapToScene(event.position().toPoint())
             self._paint_brush_segment(self._brush_last_pos, current)
             self._brush_last_pos = current
+            event.accept()
             return
         if (
             self._tool == Tool.SELECT
@@ -1412,12 +1470,15 @@ class EditorCanvas(QGraphicsView):
             }
             self._emit_content_changed(draw_names.get(self._tool, "Draw annotation"))
             return
-        if event.button() == Qt.MouseButton.LeftButton and self._tool == Tool.BRUSH:
+        if event.button() == Qt.MouseButton.LeftButton and self._tool in {Tool.BRUSH, Tool.ERASER}:
+            self.releaseMouse()
             if self._brush_painting and self._brush_stroke_dirty:
-                self._emit_content_changed("Brush stroke")
+                label = "Eraser stroke" if self._brush_erase_mode else "Brush stroke"
+                self._emit_content_changed(label)
             self._brush_painting = False
             self._brush_last_pos = None
             self._brush_stroke_dirty = False
+            event.accept()
             return
         super().mouseReleaseEvent(event)
         if event.button() == Qt.MouseButton.LeftButton and self._tool == Tool.SELECT:
@@ -1552,7 +1613,7 @@ class EditorCanvas(QGraphicsView):
             None
         """
 
-        self._apply_zoom(1.1)
+        self._apply_zoom(1.06)
 
     def zoom_out(self) -> None:
         """
@@ -1562,7 +1623,7 @@ class EditorCanvas(QGraphicsView):
             None
         """
 
-        self._apply_zoom(1.0 / 1.1)
+        self._apply_zoom(1.0 / 1.06)
 
     def reset_zoom(self) -> None:
         """
@@ -1964,6 +2025,105 @@ class EditorCanvas(QGraphicsView):
 
         return self._wand_tolerance
 
+    def set_brush_hardness(self, hardness: float) -> None:
+        """
+        Sets soft brush / eraser hardness.
+
+        Args:
+            hardness: Hardness percentage from 0 (soft) to 100 (hard).
+
+        Returns:
+            None
+        """
+
+        self._brush_hardness = max(0.0, min(100.0, float(hardness)))
+
+    def brush_hardness(self) -> float:
+        """
+        Returns the current brush hardness percentage.
+
+        Returns:
+            float: Hardness in [0, 100].
+        """
+
+        return self._brush_hardness
+
+    def set_eyedropper_target(self, target: str) -> None:
+        """
+        Sets whether the eyedropper writes stroke or fill color.
+
+        Args:
+            target: ``stroke`` or ``fill``.
+
+        Returns:
+            None
+        """
+
+        resolved = str(target).strip().lower()
+        self._eyedropper_target = "fill" if resolved == "fill" else "stroke"
+
+    def eyedropper_target(self) -> str:
+        """
+        Returns the eyedropper color target.
+
+        Returns:
+            str: ``stroke`` or ``fill``.
+        """
+
+        return self._eyedropper_target
+
+    def _sample_color_at(self, scene_pos: QPointF) -> None:
+        """
+        Samples a document pixel color into the active style target.
+
+        Args:
+            scene_pos: Click position in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        screenshot = self.screenshot()
+        if screenshot.isNull():
+            return
+        origin = self.document_rect().topLeft()
+        ratio = max(1.0, float(screenshot.devicePixelRatio()))
+        image = screenshot.toImage()
+        image_x = int((scene_pos.x() - origin.x()) * ratio)
+        image_y = int((scene_pos.y() - origin.y()) * ratio)
+        if image_x < 0 or image_y < 0 or image_x >= image.width() or image_y >= image.height():
+            self.status_message.emit("Eyedropper: click inside the document.")
+            return
+        sampled = QColor(image.pixelColor(image_x, image_y))
+        if self._eyedropper_target == "fill":
+            self._style.fill_color = sampled
+            for item in self._selected_annotation_items():
+                if bool(item.data(ITEM_ROLE_LOCKED) or False):
+                    continue
+                annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
+                if annotation_type in {"rect", "ellipse"}:
+                    item.setBrush(sampled)
+                elif annotation_type == "text" and isinstance(item, StyledTextItem):
+                    item.set_colors(fill_color=sampled)
+            self.selection_style_changed.emit({"fill_rgba": color_to_list(sampled)})
+            self._emit_content_changed("Change fill color")
+            return
+        self._style.stroke_color = sampled
+        for item in self._selected_annotation_items():
+            if bool(item.data(ITEM_ROLE_LOCKED) or False):
+                continue
+            annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
+            if annotation_type in {"rect", "ellipse", "line", "arrow"}:
+                pen = item.pen()
+                pen.setColor(sampled)
+                item.setPen(pen)
+            elif annotation_type == "text" and isinstance(item, StyledTextItem):
+                item.set_colors(stroke_color=sampled)
+            elif annotation_type == "text":
+                item.setDefaultTextColor(sampled)
+        self.selection_style_changed.emit({"stroke_rgba": color_to_list(sampled)})
+        self._emit_content_changed("Change border color")
+
     def set_wand_contiguous(self, contiguous: bool) -> None:
         """
         Sets whether wand selection is contiguous flood-fill.
@@ -2151,10 +2311,11 @@ class EditorCanvas(QGraphicsView):
 
     def _paint_brush_segment(self, start: QPointF, end: QPointF) -> None:
         """
-        Paints one freehand brush segment onto the screenshot.
+        Paints one freehand brush or eraser segment onto the screenshot.
 
-        Uses the Border color and Width as brush size. When a pixel selection
-        is active, painting is clipped to that selection.
+        Uses the Border color (including alpha) and Width as brush size. Softness
+        comes from brush hardness. When a pixel selection is active, painting is
+        clipped to that selection.
 
         Args:
             start: Segment start in document coordinates.
@@ -2183,28 +2344,26 @@ class EditorCanvas(QGraphicsView):
         brush_width = max(1.0, float(self._style.stroke_width) * ratio)
         radius = brush_width / 2.0
         color = QColor(self._style.stroke_color)
-
-        painter = QPainter(image)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        clip_region = None
         if self.has_pixel_selection():
             mask = self._active_selection_mask(image.width(), image.height())
             if mask is not None and mask_has_selection(mask):
-                painter.setClipRegion(region_from_mask(mask))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(color)
-        # Always stamp endpoints so clicks and short moves leave visible paint.
-        painter.drawEllipse(start_px, radius, radius)
-        painter.drawEllipse(end_px, radius, radius)
-        if start_px != end_px:
-            pen = QPen(color, brush_width)
-            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-            painter.setPen(pen)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawLine(start_px, end_px)
-        painter.end()
+                clip_region = region_from_mask(mask)
 
-        self._background_item.setPixmap(QPixmap.fromImage(image))
+        paint_soft_brush_segment(
+            image,
+            start_px,
+            end_px,
+            radius=radius,
+            color=color,
+            hardness=self._brush_hardness,
+            erase=self._brush_erase_mode,
+            clip_region=clip_region,
+        )
+
+        painted = QPixmap.fromImage(image)
+        painted.setDevicePixelRatio(screenshot.devicePixelRatio())
+        self._background_item.setPixmap(painted)
         self._brush_stroke_dirty = True
 
     def _apply_wand_at(self, scene_pos: QPointF, *, add: bool) -> None:
@@ -2477,9 +2636,19 @@ class EditorCanvas(QGraphicsView):
         for model in models:
             add_annotation_to_scene(self._scene, model)
 
-    def export_composited_pixmap(self) -> QPixmap:
+    def export_composited_pixmap(
+        self,
+        scale: float = 1.0,
+        background: QColor | None = None,
+    ) -> QPixmap:
         """
         Renders screenshot and all annotations into a single pixmap.
+
+        Args:
+            scale: Output scale factor (1.0 = @1x, 2.0 = @2x, 3.0 = @3x).
+            background: Optional opaque matte color. When set, transparent pixels
+                are filled with this color (useful for JPEG). When None, alpha is
+                preserved.
 
         Returns:
             QPixmap: Composited output.
@@ -2506,11 +2675,28 @@ class EditorCanvas(QGraphicsView):
         if self._path_preview_item is not None:
             path_preview_was_visible = self._path_preview_item.isVisible()
             self._path_preview_item.setVisible(False)
-        image = QImage(rect.size(), QImage.Format.Format_ARGB32)
+        matte_was_visible = self._document_matte_item.isVisible()
+        shadow_was_visible = self._document_shadow_item.isVisible()
+        workspace_was_visible = self._workspace_item.isVisible()
+        self._document_matte_item.setVisible(False)
+        self._document_shadow_item.setVisible(False)
+        self._workspace_item.setVisible(False)
+
+        resolved_scale = max(0.25, min(8.0, float(scale)))
+        out_size = QRect(0, 0, max(1, int(round(rect.width() * resolved_scale))), max(1, int(round(rect.height() * resolved_scale))))
+        image = QImage(out_size.size(), QImage.Format.Format_ARGB32)
         image.fill(Qt.GlobalColor.transparent)
         painter = QPainter(image)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         self._scene.render(painter, QRectF(image.rect()), QRectF(rect))
         painter.end()
+        if background is not None and background.isValid():
+            matted = QImage(image.size(), QImage.Format.Format_ARGB32)
+            matted.fill(background)
+            matte_painter = QPainter(matted)
+            matte_painter.drawImage(0, 0, image)
+            matte_painter.end()
+            image = matted
         if self._resize_overlay_item is not None:
             self._resize_overlay_item.setVisible(resize_overlay_was_visible)
         if self._copy_feedback_item is not None:
@@ -2521,6 +2707,9 @@ class EditorCanvas(QGraphicsView):
             self._pixel_selection_outline.setVisible(pixel_outline_was_visible)
         if self._path_preview_item is not None:
             self._path_preview_item.setVisible(path_preview_was_visible)
+        self._document_matte_item.setVisible(matte_was_visible)
+        self._document_shadow_item.setVisible(shadow_was_visible)
+        self._workspace_item.setVisible(workspace_was_visible)
         return QPixmap.fromImage(image)
 
     def flash_copy_feedback(self, target_rect: QRectF | None = None) -> None:
@@ -3794,6 +3983,16 @@ class EditorCanvas(QGraphicsView):
             p1 = item.mapToScene(line.p1())
             p2 = item.mapToScene(line.p2())
             return QRectF(p1, p2).normalized()
+        if annotation_type == "image" and isinstance(item, QGraphicsPixmapItem):
+            pixmap = item.pixmap()
+            ratio = max(1.0, float(pixmap.devicePixelRatio()))
+            local = QRectF(
+                0.0,
+                0.0,
+                float(pixmap.width()) / ratio,
+                float(pixmap.height()) / ratio,
+            )
+            return item.mapRectToScene(local).normalized()
         return item.sceneBoundingRect().normalized()
 
     def _sync_resize_overlay_with_target(self, target: QGraphicsItem | None = None) -> None:
@@ -4131,6 +4330,239 @@ class EditorCanvas(QGraphicsView):
             return False
         self._sync_resize_overlay_with_target()
         self._emit_content_changed("Move selection")
+        return True
+
+    def align_selected(self, mode: str) -> bool:
+        """
+        Aligns selected annotation items relative to their common bounds.
+
+        Args:
+            mode: One of left, center_h, right, top, middle_v, bottom.
+
+        Returns:
+            bool: True when any item moved.
+        """
+
+        selected = [
+            item
+            for item in self._selected_annotation_items()
+            if not bool(item.data(ITEM_ROLE_LOCKED) or False)
+        ]
+        if len(selected) < 2:
+            return False
+        rects = [(item, self._item_scene_rect(item).normalized()) for item in selected]
+        union = QRectF(rects[0][1])
+        for _, item_rect in rects[1:]:
+            union = union.united(item_rect)
+        resolved = str(mode).strip().lower()
+        changed = False
+        for item, item_rect in rects:
+            dx = 0.0
+            dy = 0.0
+            if resolved == "left":
+                dx = union.left() - item_rect.left()
+            elif resolved == "center_h":
+                dx = union.center().x() - item_rect.center().x()
+            elif resolved == "right":
+                dx = union.right() - item_rect.right()
+            elif resolved == "top":
+                dy = union.top() - item_rect.top()
+            elif resolved == "middle_v":
+                dy = union.center().y() - item_rect.center().y()
+            elif resolved == "bottom":
+                dy = union.bottom() - item_rect.bottom()
+            else:
+                return False
+            if abs(dx) < 0.001 and abs(dy) < 0.001:
+                continue
+            item.setPos(item.pos() + QPointF(dx, dy))
+            changed = True
+        if not changed:
+            return False
+        self._sync_resize_overlay_with_target()
+        self._emit_content_changed("Align selection")
+        return True
+
+    def distribute_selected(self, axis: str) -> bool:
+        """
+        Distributes selected annotation items evenly along one axis.
+
+        Args:
+            axis: ``horizontal`` or ``vertical``.
+
+        Returns:
+            bool: True when spacing changed.
+        """
+
+        selected = [
+            item
+            for item in self._selected_annotation_items()
+            if not bool(item.data(ITEM_ROLE_LOCKED) or False)
+        ]
+        if len(selected) < 3:
+            return False
+        resolved = str(axis).strip().lower()
+        entries = [(item, self._item_scene_rect(item).normalized()) for item in selected]
+        if resolved == "horizontal":
+            entries.sort(key=lambda pair: pair[1].center().x())
+            first = entries[0][1]
+            last = entries[-1][1]
+            span = last.center().x() - first.center().x()
+            if abs(span) < 0.001:
+                return False
+            step = span / (len(entries) - 1)
+            changed = False
+            for index, (item, item_rect) in enumerate(entries):
+                target_x = first.center().x() + step * index
+                dx = target_x - item_rect.center().x()
+                if abs(dx) < 0.001:
+                    continue
+                item.setPos(item.pos() + QPointF(dx, 0.0))
+                changed = True
+        elif resolved == "vertical":
+            entries.sort(key=lambda pair: pair[1].center().y())
+            first = entries[0][1]
+            last = entries[-1][1]
+            span = last.center().y() - first.center().y()
+            if abs(span) < 0.001:
+                return False
+            step = span / (len(entries) - 1)
+            changed = False
+            for index, (item, item_rect) in enumerate(entries):
+                target_y = first.center().y() + step * index
+                dy = target_y - item_rect.center().y()
+                if abs(dy) < 0.001:
+                    continue
+                item.setPos(item.pos() + QPointF(0.0, dy))
+                changed = True
+        else:
+            return False
+        if not changed:
+            return False
+        self._sync_resize_overlay_with_target()
+        self._emit_content_changed("Distribute selection")
+        return True
+
+    def transform_selected(
+        self,
+        *,
+        rotate_delta: float = 0.0,
+        rotation: float | None = None,
+        mirror_h: bool | None = None,
+        mirror_v: bool | None = None,
+        skew_x: float | None = None,
+        skew_y: float | None = None,
+    ) -> bool:
+        """
+        Applies geometric transforms to selected annotation items.
+
+        Args:
+            rotate_delta: Relative rotation delta in degrees.
+            rotation: Absolute rotation when provided.
+            mirror_h: Absolute horizontal mirror when provided; True toggles when
+                used via flip helpers.
+            mirror_v: Absolute vertical mirror when provided.
+            skew_x: Absolute horizontal skew in degrees when provided.
+            skew_y: Absolute vertical skew in degrees when provided.
+
+        Returns:
+            bool: True when any item transformed.
+        """
+
+        selected = [
+            item
+            for item in self._selected_annotation_items()
+            if not bool(item.data(ITEM_ROLE_LOCKED) or False)
+        ]
+        if not selected:
+            return False
+        changed = False
+        for item in selected:
+            current = transform_payload_from_item(item)
+            stored = item.data(ITEM_ROLE_TRANSFORM)
+            base_scale_x = 1.0
+            base_scale_y = 1.0
+            if isinstance(stored, dict):
+                base_scale_x = float(stored.get("base_scale_x", 1.0) or 1.0)
+                base_scale_y = float(stored.get("base_scale_y", 1.0) or 1.0)
+            next_rotation = float(current["rotation"])
+            if rotation is not None:
+                next_rotation = float(rotation)
+            next_rotation += float(rotate_delta)
+            next_mirror_h = bool(current["mirror_h"])
+            if mirror_h is not None:
+                next_mirror_h = bool(mirror_h)
+            next_mirror_v = bool(current["mirror_v"])
+            if mirror_v is not None:
+                next_mirror_v = bool(mirror_v)
+            next_skew_x = float(current["skew_x"])
+            if skew_x is not None:
+                next_skew_x = float(skew_x)
+            next_skew_y = float(current["skew_y"])
+            if skew_y is not None:
+                next_skew_y = float(skew_y)
+            apply_item_transform(
+                item,
+                rotation=next_rotation,
+                mirror_h=next_mirror_h,
+                mirror_v=next_mirror_v,
+                skew_x=next_skew_x,
+                skew_y=next_skew_y,
+                base_scale_x=base_scale_x,
+                base_scale_y=base_scale_y,
+            )
+            changed = True
+        if not changed:
+            return False
+        self._sync_resize_overlay_with_target()
+        self._emit_content_changed("Transform selection")
+        return True
+
+    def flip_selected(self, *, horizontal: bool = False, vertical: bool = False) -> bool:
+        """
+        Toggles mirror flags on the current selection.
+
+        Args:
+            horizontal: Toggle horizontal mirror when True.
+            vertical: Toggle vertical mirror when True.
+
+        Returns:
+            bool: True when any item changed.
+        """
+
+        selected = [
+            item
+            for item in self._selected_annotation_items()
+            if not bool(item.data(ITEM_ROLE_LOCKED) or False)
+        ]
+        if not selected or (not horizontal and not vertical):
+            return False
+        changed = False
+        for item in selected:
+            current = transform_payload_from_item(item)
+            stored = item.data(ITEM_ROLE_TRANSFORM)
+            base_scale_x = 1.0
+            base_scale_y = 1.0
+            if isinstance(stored, dict):
+                base_scale_x = float(stored.get("base_scale_x", 1.0) or 1.0)
+                base_scale_y = float(stored.get("base_scale_y", 1.0) or 1.0)
+            next_mirror_h = (not bool(current["mirror_h"])) if horizontal else bool(current["mirror_h"])
+            next_mirror_v = (not bool(current["mirror_v"])) if vertical else bool(current["mirror_v"])
+            apply_item_transform(
+                item,
+                rotation=float(current["rotation"]),
+                mirror_h=next_mirror_h,
+                mirror_v=next_mirror_v,
+                skew_x=float(current["skew_x"]),
+                skew_y=float(current["skew_y"]),
+                base_scale_x=base_scale_x,
+                base_scale_y=base_scale_y,
+            )
+            changed = True
+        if not changed:
+            return False
+        self._sync_resize_overlay_with_target()
+        self._emit_content_changed("Transform selection")
         return True
 
     def set_selected_geometry(self, x: float, y: float, width: float, height: float) -> bool:

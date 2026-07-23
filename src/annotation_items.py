@@ -28,6 +28,7 @@ from src.models import AnnotationModel
 ITEM_ROLE_TYPE = 1001
 ITEM_ROLE_ID = 1002
 ITEM_ROLE_LOCKED = 1003
+ITEM_ROLE_TRANSFORM = 1004
 
 STROKE_STYLE_SOLID = "solid"
 STROKE_STYLE_DASH = "dash"
@@ -39,6 +40,170 @@ STROKE_STYLE_VALUES = {
     STROKE_STYLE_DOT: Qt.PenStyle.DotLine,
     STROKE_STYLE_DASH_DOT: Qt.PenStyle.DashDotLine,
 }
+
+
+def normalize_transform_payload(payload: dict | None) -> dict[str, float | bool]:
+    """
+    Extracts and sanitizes geometric transform fields from a payload.
+
+    Args:
+        payload: Annotation payload dictionary.
+
+    Returns:
+        dict[str, float | bool]: Normalized transform keys.
+    """
+
+    source = payload if isinstance(payload, dict) else {}
+    return {
+        "rotation": float(source.get("rotation", 0.0) or 0.0),
+        "mirror_h": bool(source.get("mirror_h", False)),
+        "mirror_v": bool(source.get("mirror_v", False)),
+        "skew_x": float(source.get("skew_x", 0.0) or 0.0),
+        "skew_y": float(source.get("skew_y", 0.0) or 0.0),
+    }
+
+
+def transform_payload_from_item(item: QGraphicsItem) -> dict[str, float | bool]:
+    """
+    Reads stored geometric transform metadata from one graphics item.
+
+    Args:
+        item: Scene annotation item.
+
+    Returns:
+        dict[str, float | bool]: Normalized transform payload fragment.
+    """
+
+    stored = item.data(ITEM_ROLE_TRANSFORM)
+    if isinstance(stored, dict):
+        return normalize_transform_payload(stored)
+    return normalize_transform_payload(None)
+
+
+def merge_transform_into_payload(item: QGraphicsItem, payload: dict) -> dict:
+    """
+    Merges item transform metadata into an annotation payload.
+
+    Args:
+        item: Source graphics item.
+        payload: Existing payload dictionary (mutated and returned).
+
+    Returns:
+        dict: Payload including transform fields when non-default.
+    """
+
+    transform = transform_payload_from_item(item)
+    if abs(float(transform["rotation"])) > 0.001:
+        payload["rotation"] = float(transform["rotation"])
+    elif "rotation" in payload:
+        del payload["rotation"]
+    if transform["mirror_h"]:
+        payload["mirror_h"] = True
+    elif "mirror_h" in payload:
+        del payload["mirror_h"]
+    if transform["mirror_v"]:
+        payload["mirror_v"] = True
+    elif "mirror_v" in payload:
+        del payload["mirror_v"]
+    if abs(float(transform["skew_x"])) > 0.001:
+        payload["skew_x"] = float(transform["skew_x"])
+    elif "skew_x" in payload:
+        del payload["skew_x"]
+    if abs(float(transform["skew_y"])) > 0.001:
+        payload["skew_y"] = float(transform["skew_y"])
+    elif "skew_y" in payload:
+        del payload["skew_y"]
+    return payload
+
+
+def apply_item_transform(
+    item: QGraphicsItem,
+    *,
+    rotation: float = 0.0,
+    mirror_h: bool = False,
+    mirror_v: bool = False,
+    skew_x: float = 0.0,
+    skew_y: float = 0.0,
+    base_scale_x: float = 1.0,
+    base_scale_y: float = 1.0,
+) -> None:
+    """
+    Applies rotation, mirror, and skew to one annotation item.
+
+    Args:
+        item: Target graphics item.
+        rotation: Rotation in degrees.
+        mirror_h: Horizontal mirror flag.
+        mirror_v: Vertical mirror flag.
+        skew_x: Horizontal skew angle in degrees.
+        skew_y: Vertical skew angle in degrees.
+        base_scale_x: Optional base X scale (used by image annotations).
+        base_scale_y: Optional base Y scale (used by image annotations).
+
+    Returns:
+        None
+    """
+
+    payload = {
+        "rotation": float(rotation),
+        "mirror_h": bool(mirror_h),
+        "mirror_v": bool(mirror_v),
+        "skew_x": float(skew_x),
+        "skew_y": float(skew_y),
+        "base_scale_x": float(base_scale_x),
+        "base_scale_y": float(base_scale_y),
+    }
+    item.setData(ITEM_ROLE_TRANSFORM, payload)
+    local_rect = item.boundingRect()
+    origin = local_rect.center()
+    item.setTransformOriginPoint(origin)
+
+    transform = QTransform()
+    scale_x = (-1.0 if mirror_h else 1.0) * float(base_scale_x)
+    scale_y = (-1.0 if mirror_v else 1.0) * float(base_scale_y)
+    transform.scale(scale_x, scale_y)
+    shear_x = math.tan(math.radians(float(skew_x))) if abs(float(skew_x)) > 0.001 else 0.0
+    shear_y = math.tan(math.radians(float(skew_y))) if abs(float(skew_y)) > 0.001 else 0.0
+    if abs(shear_x) > 0.0001 or abs(shear_y) > 0.0001:
+        transform.shear(shear_x, shear_y)
+    item.setTransform(transform)
+    item.setRotation(float(rotation))
+
+
+def apply_payload_transform(item: QGraphicsItem, payload: dict | None) -> None:
+    """
+    Applies transform fields from an annotation payload to a scene item.
+
+    Args:
+        item: Target graphics item.
+        payload: Annotation payload.
+
+    Returns:
+        None
+    """
+
+    transform = normalize_transform_payload(payload)
+    base_scale_x = 1.0
+    base_scale_y = 1.0
+    if isinstance(item, QGraphicsPixmapItem):
+        pixmap = item.pixmap()
+        if pixmap.width() > 0 and pixmap.height() > 0:
+            scene_w = float((payload or {}).get("_image_width", 0.0) or 0.0)
+            scene_h = float((payload or {}).get("_image_height", 0.0) or 0.0)
+            # Prefer explicit geometry when restoring from model dimensions.
+            if scene_w > 0.0 and scene_h > 0.0:
+                base_scale_x = scene_w / float(pixmap.width())
+                base_scale_y = scene_h / float(pixmap.height())
+    apply_item_transform(
+        item,
+        rotation=float(transform["rotation"]),
+        mirror_h=bool(transform["mirror_h"]),
+        mirror_v=bool(transform["mirror_v"]),
+        skew_x=float(transform["skew_x"]),
+        skew_y=float(transform["skew_y"]),
+        base_scale_x=base_scale_x,
+        base_scale_y=base_scale_y,
+    )
 
 
 def normalize_stroke_style(value: str) -> str:
@@ -269,11 +434,13 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
     if annotation_type == "step" and isinstance(item, StepBadgeItem):
         model = annotation_from_step_item(item)
         model.payload["z_index"] = item.zValue()
+        merge_transform_into_payload(item, model.payload)
         return model
 
     if annotation_type == "text" and isinstance(item, StyledTextItem):
         model = annotation_from_styled_text_item(item)
         model.payload["z_index"] = item.zValue()
+        merge_transform_into_payload(item, model.payload)
         return model
 
     if annotation_type in {"rect", "ellipse"}:
@@ -281,6 +448,8 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
         rect = shape_item.rect().translated(shape_item.pos())
         pen = shape_item.pen()
         brush = shape_item.brush()
+        payload = {"z_index": item.zValue()}
+        merge_transform_into_payload(item, payload)
         return AnnotationModel(
             annotation_type=annotation_type,
             x=rect.x(),
@@ -290,13 +459,18 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
             stroke_rgba=color_to_list(pen.color()),
             fill_rgba=color_to_list(brush.color()),
             stroke_width=pen.widthF(),
-            payload={"z_index": item.zValue()},
+            payload=payload,
         )
 
     if annotation_type in {"line", "arrow"}:
         line_item = cast(QGraphicsLineItem, item)
         line = line_item.line()
         pen = line_item.pen()
+        payload = {
+            "stroke_style": _stroke_style_from_pen(pen),
+            "z_index": item.zValue(),
+        }
+        merge_transform_into_payload(item, payload)
         return AnnotationModel(
             annotation_type=annotation_type,
             x=line.p1().x() + line_item.pos().x(),
@@ -306,16 +480,19 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
             stroke_rgba=color_to_list(pen.color()),
             fill_rgba=[0, 0, 0, 0],
             stroke_width=pen.widthF(),
-            payload={
-                "stroke_style": _stroke_style_from_pen(pen),
-                "z_index": item.zValue(),
-            },
+            payload=payload,
         )
 
     if annotation_type == "text":
         text_item = cast(QGraphicsTextItem, item)
         rect = text_item.boundingRect().translated(text_item.pos())
         color = text_item.defaultTextColor()
+        payload = {
+            "text_style": TEXT_STYLE_PLAIN,
+            "letter_spacing": float(text_item.font().letterSpacing()),
+            "z_index": item.zValue(),
+        }
+        merge_transform_into_payload(item, payload)
         return AnnotationModel(
             annotation_type=annotation_type,
             x=rect.x(),
@@ -331,26 +508,32 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
             font_bold=text_item.font().bold(),
             font_italic=text_item.font().italic(),
             font_underline=text_item.font().underline(),
-            payload={
-                "text_style": TEXT_STYLE_PLAIN,
-                "letter_spacing": float(text_item.font().letterSpacing()),
-                "z_index": item.zValue(),
-            },
+            payload=payload,
         )
 
     if annotation_type == "image":
         image_item = cast(QGraphicsPixmapItem, item)
-        rect = image_item.sceneBoundingRect().normalized()
+        pixmap = image_item.pixmap()
+        stored = image_item.data(ITEM_ROLE_TRANSFORM)
+        base_scale_x = 1.0
+        base_scale_y = 1.0
+        if isinstance(stored, dict):
+            base_scale_x = float(stored.get("base_scale_x", 1.0) or 1.0)
+            base_scale_y = float(stored.get("base_scale_y", 1.0) or 1.0)
+        width = float(pixmap.width()) * abs(base_scale_x) if pixmap.width() > 0 else 1.0
+        height = float(pixmap.height()) * abs(base_scale_y) if pixmap.height() > 0 else 1.0
+        payload = {"image_png_base64": image_item.data(2001), "z_index": item.zValue()}
+        merge_transform_into_payload(item, payload)
         return AnnotationModel(
             annotation_type=annotation_type,
-            x=rect.x(),
-            y=rect.y(),
-            width=rect.width(),
-            height=rect.height(),
+            x=image_item.pos().x(),
+            y=image_item.pos().y(),
+            width=width,
+            height=height,
             stroke_rgba=[0, 0, 0, 0],
             fill_rgba=[0, 0, 0, 0],
             stroke_width=0.0,
-            payload={"image_png_base64": image_item.data(2001), "z_index": item.zValue()},
+            payload=payload,
         )
 
     return None
@@ -385,20 +568,24 @@ def add_annotation_to_scene(
     if annotation.annotation_type == "step":
         item = add_step_to_scene(scene, annotation)
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
         return item
     if annotation.annotation_type == "text" and is_styled_text_annotation(annotation):
         item = add_styled_text_to_scene(scene, annotation)
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
         return item
     if annotation.annotation_type == "rect":
         item = scene.addRect(rect, pen, fill)
         configure_graphics_item(item, "rect")
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
         return item
     if annotation.annotation_type == "ellipse":
         item = scene.addEllipse(rect, pen, fill)
         configure_graphics_item(item, "ellipse")
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
         return item
     if annotation.annotation_type == "line":
         item = scene.addLine(
@@ -410,6 +597,7 @@ def add_annotation_to_scene(
         )
         configure_graphics_item(item, "line")
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
         return item
     if annotation.annotation_type == "arrow":
         item = ArrowItem(
@@ -422,6 +610,7 @@ def add_annotation_to_scene(
         configure_graphics_item(item, "arrow")
         scene.addItem(item)
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
         return item
     if annotation.annotation_type == "text":
         item = scene.addText(annotation.text)
@@ -442,6 +631,7 @@ def add_annotation_to_scene(
         configure_graphics_item(item, "text")
         item.setTextInteractionFlags(Qt.TextInteractionFlag.TextEditorInteraction)
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
         return item
     if annotation.annotation_type == "image":
         encoded = str(annotation.payload.get("image_png_base64", ""))
@@ -449,15 +639,14 @@ def add_annotation_to_scene(
             return None
         item = QGraphicsPixmapItem(_decode_base64_to_pixmap(encoded))
         item.setPos(annotation.x, annotation.y)
-        pixmap = item.pixmap()
-        if pixmap.width() > 0 and pixmap.height() > 0:
-            scale_x = annotation.width / pixmap.width()
-            scale_y = annotation.height / pixmap.height()
-            item.setTransform(QTransform.fromScale(scale_x, scale_y))
         configure_graphics_item(item, "image")
         item.setData(2001, encoded)
         scene.addItem(item)
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        image_payload = dict(annotation.payload)
+        image_payload["_image_width"] = float(annotation.width)
+        image_payload["_image_height"] = float(annotation.height)
+        apply_payload_transform(item, image_payload)
         return item
 
     return None

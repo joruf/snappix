@@ -10,12 +10,14 @@ from pathlib import Path
 
 from src.config import (
     DEFAULT_EXPORT_PRESET,
+    DEFAULT_EXPORT_SCALE,
     DEFAULT_HOTKEY_CAPTURE_REGION,
     DEFAULT_EDITOR_LAST_TAB_BEHAVIOR,
     AppConfig,
     ConfigManager,
     normalize_editor_last_tab_behavior,
     normalize_export_preset,
+    normalize_export_scale,
     normalize_hotkey_spec,
     normalize_post_capture_action,
 )
@@ -112,6 +114,8 @@ class TestConfigManager(unittest.TestCase):
                     hotkey_capture_window="ctrl+shift+w",
                     editor_last_tab_behavior="close_window",
                     export_preset="print",
+                    export_scale=2.0,
+                    export_keep_transparency=False,
                     batch_export_profiles=[
                         {
                             "key": "custom_profile",
@@ -134,6 +138,8 @@ class TestConfigManager(unittest.TestCase):
             self.assertEqual(restored.hotkey_capture_window, "ctrl+shift+w")
             self.assertEqual(restored.editor_last_tab_behavior, "close_window")
             self.assertEqual(restored.export_preset, "print")
+            self.assertEqual(restored.export_scale, 2.0)
+            self.assertFalse(restored.export_keep_transparency)
             self.assertEqual(restored.batch_export_profile_key, "custom_profile")
             self.assertEqual(restored.batch_export_last_directory, "/tmp/snappix-export")
             self.assertEqual(len(restored.batch_export_profiles), 1)
@@ -171,6 +177,15 @@ class TestConfigManager(unittest.TestCase):
 
         self.assertEqual(normalize_export_preset("print"), "print")
         self.assertEqual(normalize_export_preset("unknown"), DEFAULT_EXPORT_PRESET)
+
+    def test_normalize_export_scale(self) -> None:
+        """
+        Ensures export scale values normalize to 1/2/3.
+        """
+
+        self.assertEqual(normalize_export_scale(2), 2.0)
+        self.assertEqual(normalize_export_scale("3"), 3.0)
+        self.assertEqual(normalize_export_scale("bad"), DEFAULT_EXPORT_SCALE)
 
     def test_invalid_batch_export_profile_key_falls_back(self) -> None:
         """

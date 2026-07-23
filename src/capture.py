@@ -1514,10 +1514,10 @@ class CaptureDelayOverlay(QWidget):
         )
         root.addWidget(self._countdown_label)
 
-        hint = QLabel("Capturing soon — press Esc to cancel", self)
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet("color: #e8eef7; font-size: 12px;")
-        root.addWidget(hint)
+        self._hint_label = QLabel("Capturing soon — press Esc to cancel", self)
+        self._hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._hint_label.setStyleSheet("color: #e8eef7; font-size: 12px;")
+        root.addWidget(self._hint_label)
 
         self.setStyleSheet(
             "CaptureDelayOverlay {"
@@ -1614,9 +1614,25 @@ class CaptureDelayOverlay(QWidget):
             return
         self._remaining -= 1
         if self._remaining <= 0:
+            # Hide timer chrome before capture so it is not in the screenshot.
+            self._hide_countdown_chrome()
             self._finish()
             return
         self._countdown_label.setText(str(self._remaining))
+
+    def _hide_countdown_chrome(self) -> None:
+        """
+        Hides countdown text and the overlay window immediately.
+
+        Returns:
+            None
+        """
+
+        self._countdown_label.clear()
+        self._countdown_label.hide()
+        self._hint_label.hide()
+        self.hide()
+        QApplication.processEvents()
 
     def _finish(self) -> None:
         """
@@ -1631,6 +1647,18 @@ class CaptureDelayOverlay(QWidget):
         self._closed = True
         self._timer.stop()
         self.releaseKeyboard()
+        self._hide_countdown_chrome()
+        # Brief deferral lets the compositor drop the overlay before capture.
+        QTimer.singleShot(50, self._emit_finished)
+
+    def _emit_finished(self) -> None:
+        """
+        Emits the finished signal after the overlay is fully hidden.
+
+        Returns:
+            None
+        """
+
         self.finished.emit()
         self.close()
 
@@ -1647,6 +1675,7 @@ class CaptureDelayOverlay(QWidget):
         self._closed = True
         self._timer.stop()
         self.releaseKeyboard()
+        self._hide_countdown_chrome()
         self.cancelled.emit()
         self.close()
 

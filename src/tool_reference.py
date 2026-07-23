@@ -85,12 +85,23 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
     ToolHelpEntry(
         tool=Tool.BRUSH,
         name="Brush",
-        tooltip_blurb="freehand paint with Border color; Width sets size",
+        tooltip_blurb="soft freehand paint; Width + Hardness + Border opacity",
         description=(
-            "Freehand brush on the screenshot using the Border color. "
-            "Set thickness with Width. If a pixel selection is active, painting stays inside it."
+            "Freehand soft brush on the screenshot using the Border color and opacity. "
+            "Set thickness with Width and edge softness with Hardness. "
+            "If a pixel selection is active, painting stays inside it."
         ),
         shortcut_hint="B",
+    ),
+    ToolHelpEntry(
+        tool=Tool.ERASER,
+        name="Eraser",
+        tooltip_blurb="soft freehand erase; Width + Hardness + Border opacity",
+        description=(
+            "Soft eraser that removes screenshot pixels. Width and Hardness match the Brush. "
+            "Border opacity controls erase strength. Clips to an active pixel selection."
+        ),
+        shortcut_hint="E",
     ),
     ToolHelpEntry(
         tool=Tool.BUCKET,
@@ -101,6 +112,16 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
             "Requires a pixel selection first. Raise Fill opacity if the result looks faint."
         ),
         shortcut_hint="G",
+    ),
+    ToolHelpEntry(
+        tool=Tool.EYEDROPPER,
+        name="Eyedropper",
+        tooltip_blurb="sample document color into Border or Fill",
+        description=(
+            "Samples a color from the screenshot into Border or Fill. "
+            "Use the tool menu to choose the target."
+        ),
+        shortcut_hint="I",
     ),
     ToolHelpEntry(
         tool=Tool.RECT,

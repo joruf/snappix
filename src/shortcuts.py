@@ -81,7 +81,9 @@ EDITOR_SHORTCUT_DEFINITIONS: tuple[ShortcutDefinition, ...] = (
     ShortcutDefinition("tool_select_path", "Pixel select lasso", "Tools", "L"),
     ShortcutDefinition("tool_magic_wand", "Magic Wand", "Tools", "W"),
     ShortcutDefinition("tool_brush", "Brush", "Tools", "B"),
+    ShortcutDefinition("tool_eraser", "Eraser", "Tools", "E"),
     ShortcutDefinition("tool_bucket", "Fill selection", "Tools", "G"),
+    ShortcutDefinition("tool_eyedropper", "Eyedropper", "Tools", "I"),
 )
 
 _EDITOR_SHORTCUT_BY_ID = {

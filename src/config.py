@@ -81,6 +81,9 @@ DEFAULT_BATCH_EXPORT_PROFILES: list[dict[str, Any]] = [
     },
 ]
 DEFAULT_BATCH_EXPORT_PROFILE_KEY = "docs_hq"
+DEFAULT_EXPORT_SCALE = 1.0
+VALID_EXPORT_SCALES = frozenset({1.0, 2.0, 3.0})
+DEFAULT_EXPORT_KEEP_TRANSPARENCY = True
 
 DEFAULT_HOTKEY_CAPTURE_REGION = "ctrl+shift+a"
 DEFAULT_HOTKEY_CAPTURE_WINDOW = "ctrl+shift+w"
@@ -187,6 +190,28 @@ def normalize_export_preset(preset: str) -> str:
     return DEFAULT_EXPORT_PRESET
 
 
+def normalize_export_scale(scale: float | int | str) -> float:
+    """
+    Returns a supported export scale factor.
+
+    Args:
+        scale: Requested scale (@1x/@2x/@3x).
+
+    Returns:
+        float: Valid scale factor.
+    """
+
+    try:
+        resolved = float(scale)
+    except (TypeError, ValueError):
+        return DEFAULT_EXPORT_SCALE
+    if abs(resolved - 3.0) < 0.001:
+        return 3.0
+    if abs(resolved - 2.0) < 0.001:
+        return 2.0
+    return 1.0
+
+
 def normalize_batch_export_profiles(
     profiles: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
 ) -> list[dict[str, Any]]:
@@ -256,6 +281,8 @@ class AppConfig:
         capture_save_directory: Optional folder for automatic capture saves.
         editor_last_tab_behavior: Behavior when the last editor tab is closed.
         export_preset: Preferred export quality preset.
+        export_scale: Preferred export scale factor (1.0, 2.0, or 3.0).
+        export_keep_transparency: Whether PNG exports preserve alpha by default.
         batch_export_profiles: Saved named batch export profiles.
         batch_export_profile_key: Active batch export profile key.
         batch_export_last_directory: Last used batch export output directory.
@@ -273,6 +300,8 @@ class AppConfig:
     capture_save_directory: str = ""
     editor_last_tab_behavior: str = DEFAULT_EDITOR_LAST_TAB_BEHAVIOR
     export_preset: str = DEFAULT_EXPORT_PRESET
+    export_scale: float = DEFAULT_EXPORT_SCALE
+    export_keep_transparency: bool = DEFAULT_EXPORT_KEEP_TRANSPARENCY
     batch_export_profiles: list[dict[str, Any]] = None
     batch_export_profile_key: str = DEFAULT_BATCH_EXPORT_PROFILE_KEY
     batch_export_last_directory: str = ""
@@ -369,6 +398,12 @@ class ConfigManager:
             export_preset=normalize_export_preset(
                 str(payload.get("export_preset", DEFAULT_EXPORT_PRESET))
             ),
+            export_scale=normalize_export_scale(
+                payload.get("export_scale", DEFAULT_EXPORT_SCALE)
+            ),
+            export_keep_transparency=bool(
+                payload.get("export_keep_transparency", DEFAULT_EXPORT_KEEP_TRANSPARENCY)
+            ),
             batch_export_profiles=normalize_batch_export_profiles(
                 payload.get("batch_export_profiles")
                 if isinstance(payload.get("batch_export_profiles"), list)
@@ -417,6 +452,8 @@ class ConfigManager:
                 config.editor_last_tab_behavior
             ),
             "export_preset": normalize_export_preset(config.export_preset),
+            "export_scale": normalize_export_scale(config.export_scale),
+            "export_keep_transparency": bool(config.export_keep_transparency),
             "batch_export_profiles": normalize_batch_export_profiles(
                 config.batch_export_profiles
             ),

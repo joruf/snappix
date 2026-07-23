@@ -127,6 +127,17 @@ def build_cli_parser() -> argparse.ArgumentParser:
         default=-1,
         help="PDF resolution (72-1200)",
     )
+    export_parser.add_argument(
+        "--scale",
+        type=float,
+        default=1.0,
+        help="Export scale (1, 2, or 3)",
+    )
+    export_parser.add_argument(
+        "--matte",
+        action="store_true",
+        help="Fill transparent pixels with white (recommended for JPG)",
+    )
 
     batch_export_parser = subparsers.add_parser(
         "batch-export",
@@ -237,6 +248,8 @@ def run_cli(
                 fmt=str(args.format),
                 jpg_quality=resolved_jpg_quality,
                 pdf_dpi=resolved_pdf_dpi,
+                scale=float(args.scale),
+                keep_transparency=not bool(args.matte),
             )
         if args.command == "batch-export":
             preset_jpg_quality, preset_pdf_dpi = resolve_export_preset(str(args.preset))
@@ -365,6 +378,8 @@ def _run_export_command(
     fmt: str,
     jpg_quality: int,
     pdf_dpi: int,
+    scale: float = 1.0,
+    keep_transparency: bool = True,
 ) -> int:
     """
     Handles the `export` CLI command.
@@ -375,6 +390,8 @@ def _run_export_command(
         fmt: Export format (png/jpg/pdf).
         jpg_quality: JPEG quality value.
         pdf_dpi: PDF DPI value.
+        scale: Output scale factor.
+        keep_transparency: Preserve alpha when True (ignored for JPG).
 
     Returns:
         int: Command exit code.
@@ -388,7 +405,14 @@ def _run_export_command(
     canvas = EditorCanvas()
     canvas.set_screenshot(base64_png_to_pixmap(model.screenshot_png_base64))
     canvas.load_annotations(model.annotations)
-    pixmap = canvas.export_composited_pixmap()
+    from src.config import normalize_export_scale
+    from PySide6.QtGui import QColor
+
+    resolved_scale = normalize_export_scale(scale)
+    background = None
+    if fmt == "jpg" or not keep_transparency:
+        background = QColor(255, 255, 255, 255)
+    pixmap = canvas.export_composited_pixmap(scale=resolved_scale, background=background)
     if pixmap.isNull():
         print("Export failed: rendered image is empty.")
         return 2

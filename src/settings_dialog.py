@@ -330,6 +330,8 @@ class SettingsDialog(QDialog):
                 str(self.editor_last_tab_combo.currentData())
             ),
             export_preset=self._config.export_preset,
+            export_scale=self._config.export_scale,
+            export_keep_transparency=self._config.export_keep_transparency,
             batch_export_profiles=[
                 dict(profile) for profile in self._config.batch_export_profiles
             ],

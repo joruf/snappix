@@ -279,6 +279,8 @@ class EditorWindow(QMainWindow):
     new_canvas_requested = Signal()
     new_tab_requested = Signal()
     export_preset_changed = Signal(str)
+    export_scale_changed = Signal(float)
+    export_keep_transparency_changed = Signal(bool)
 
     def __init__(self, screenshot: QPixmap) -> None:
         """
@@ -345,6 +347,9 @@ class EditorWindow(QMainWindow):
         self._current_stroke_color = QColor(231, 76, 60, 255)
         self._current_fill_color = QColor(231, 76, 60, 80)
         self._current_text_color = QColor(44, 62, 80, 255)
+        self._eyedropper_color_target = "stroke"
+        self._export_scale = 1.0
+        self._export_keep_transparency = True
         self._text_bold_enabled = False
         self._text_italic_enabled = False
         self._text_underline_enabled = False
@@ -435,7 +440,9 @@ class EditorWindow(QMainWindow):
             (Tool.SELECT_PATH, "Lasso"),
             (Tool.MAGIC_WAND, "Magic Wand"),
             (Tool.BRUSH, "Brush"),
+            (Tool.ERASER, "Eraser"),
             (Tool.BUCKET, "Fill"),
+            (Tool.EYEDROPPER, "Eyedropper"),
             (Tool.RECT, "Rectangle"),
             (Tool.ELLIPSE, "Circle"),
             (Tool.LINE, "Line"),
@@ -564,6 +571,7 @@ class EditorWindow(QMainWindow):
         self.stroke_alpha_slider.setFixedWidth(56)
         self.stroke_alpha_slider.setToolTip("Border opacity")
         self.stroke_alpha_slider.valueChanged.connect(self._stroke_alpha_changed)
+        self.stroke_alpha_slider.sliderReleased.connect(self._stroke_alpha_committed)
         self._configure_compact_toolbar_height(self.stroke_alpha_slider, 22)
         style_layout.addWidget(self.stroke_alpha_slider)
         self.stroke_alpha_label = QLabel("100%")
@@ -614,19 +622,37 @@ class EditorWindow(QMainWindow):
         style_layout.addWidget(self._create_toolbar_label("Width"))
         self.stroke_size_slider = QSlider(Qt.Orientation.Horizontal)
         self.stroke_size_slider.setRange(1, 64)
-        self.stroke_size_slider.setValue(3)
+        self.stroke_size_slider.setValue(6)
         self.stroke_size_slider.setFixedWidth(72)
         self.stroke_size_slider.setToolTip(
             "Stroke / brush thickness in pixels (also used by Rectangle, Line, and Brush)."
         )
         self.stroke_size_slider.valueChanged.connect(self._stroke_width_changed)
+        self.stroke_size_slider.sliderReleased.connect(self._stroke_width_committed)
         self._configure_compact_toolbar_height(self.stroke_size_slider, 22)
         style_layout.addWidget(self.stroke_size_slider)
-        self.stroke_size_label = QLabel("3")
+        self.stroke_size_label = QLabel("6")
         self.stroke_size_label.setMinimumWidth(22)
         self.stroke_size_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._configure_compact_toolbar_height(self.stroke_size_label, 22)
         style_layout.addWidget(self.stroke_size_label)
+        style_layout.addWidget(self._create_toolbar_label("Hard"))
+        self.brush_hardness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.brush_hardness_slider.setRange(0, 100)
+        self.brush_hardness_slider.setValue(int(self.canvas.brush_hardness()))
+        self.brush_hardness_slider.setFixedWidth(64)
+        self.brush_hardness_slider.setToolTip(
+            "Brush / eraser hardness (0 = soft edge, 100 = hard edge)."
+        )
+        self.brush_hardness_slider.valueChanged.connect(self._brush_hardness_changed)
+        self.brush_hardness_slider.sliderReleased.connect(self._brush_hardness_committed)
+        self._configure_compact_toolbar_height(self.brush_hardness_slider, 22)
+        style_layout.addWidget(self.brush_hardness_slider)
+        self.brush_hardness_label = QLabel(f"{int(self.canvas.brush_hardness())}%")
+        self.brush_hardness_label.setMinimumWidth(34)
+        self.brush_hardness_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._configure_compact_toolbar_height(self.brush_hardness_label, 22)
+        style_layout.addWidget(self.brush_hardness_label)
         style_layout.addWidget(self._create_toolbar_label("Line"))
         self.stroke_style_combo = QComboBox()
         self.stroke_style_combo.addItem("Solid", STROKE_STYLE_SOLID)
@@ -821,6 +847,91 @@ class EditorWindow(QMainWindow):
         self.geometry_apply_button.clicked.connect(self._apply_selected_geometry)
         self._configure_compact_toolbar_height(self.geometry_apply_button)
         arrange_layout.addWidget(self.geometry_apply_button)
+        arrange_layout.addSpacing(6)
+        arrange_layout.addWidget(self._create_toolbar_label("Align"))
+        for mode, label in (
+            ("left", "L"),
+            ("center_h", "C"),
+            ("right", "R"),
+            ("top", "T"),
+            ("middle_v", "M"),
+            ("bottom", "B"),
+        ):
+            button = QPushButton(label)
+            button.setFixedWidth(28)
+            button.setToolTip(f"Align selection {mode.replace('_', ' ')}")
+            button.clicked.connect(
+                lambda _checked=False, align_mode=mode: self._align_selection(align_mode)
+            )
+            self._configure_compact_toolbar_height(button)
+            arrange_layout.addWidget(button)
+        arrange_layout.addWidget(self._create_toolbar_label("Dist"))
+        self.distribute_h_button = QPushButton("H")
+        self.distribute_h_button.setFixedWidth(28)
+        self.distribute_h_button.setToolTip("Distribute selection horizontally (3+ items)")
+        self.distribute_h_button.clicked.connect(
+            lambda: self._distribute_selection("horizontal")
+        )
+        self._configure_compact_toolbar_height(self.distribute_h_button)
+        arrange_layout.addWidget(self.distribute_h_button)
+        self.distribute_v_button = QPushButton("V")
+        self.distribute_v_button.setFixedWidth(28)
+        self.distribute_v_button.setToolTip("Distribute selection vertically (3+ items)")
+        self.distribute_v_button.clicked.connect(
+            lambda: self._distribute_selection("vertical")
+        )
+        self._configure_compact_toolbar_height(self.distribute_v_button)
+        arrange_layout.addWidget(self.distribute_v_button)
+        arrange_layout.addSpacing(6)
+        arrange_layout.addWidget(self._create_toolbar_label("Rotate"))
+        self.rotate_ccw_button = QPushButton("-15°")
+        self.rotate_ccw_button.clicked.connect(lambda: self._rotate_selection(-15.0))
+        self._configure_compact_toolbar_height(self.rotate_ccw_button)
+        arrange_layout.addWidget(self.rotate_ccw_button)
+        self.rotate_cw_button = QPushButton("+15°")
+        self.rotate_cw_button.clicked.connect(lambda: self._rotate_selection(15.0))
+        self._configure_compact_toolbar_height(self.rotate_cw_button)
+        arrange_layout.addWidget(self.rotate_cw_button)
+        self.rotation_spin = QDoubleSpinBox()
+        self.rotation_spin.setRange(-360.0, 360.0)
+        self.rotation_spin.setDecimals(1)
+        self.rotation_spin.setSuffix("°")
+        self.rotation_spin.setFixedWidth(78)
+        self._configure_compact_toolbar_height(self.rotation_spin)
+        arrange_layout.addWidget(self.rotation_spin)
+        self.rotation_apply_button = QPushButton("Set°")
+        self.rotation_apply_button.clicked.connect(self._apply_rotation_spin)
+        self._configure_compact_toolbar_height(self.rotation_apply_button)
+        arrange_layout.addWidget(self.rotation_apply_button)
+        self.flip_h_button = QPushButton("Flip H")
+        self.flip_h_button.clicked.connect(lambda: self._flip_selection(horizontal=True))
+        self._configure_compact_toolbar_height(self.flip_h_button)
+        arrange_layout.addWidget(self.flip_h_button)
+        self.flip_v_button = QPushButton("Flip V")
+        self.flip_v_button.clicked.connect(lambda: self._flip_selection(vertical=True))
+        self._configure_compact_toolbar_height(self.flip_v_button)
+        arrange_layout.addWidget(self.flip_v_button)
+        arrange_layout.addWidget(self._create_toolbar_label("Skew"))
+        self.skew_x_spin = QDoubleSpinBox()
+        self.skew_x_spin.setRange(-60.0, 60.0)
+        self.skew_x_spin.setDecimals(1)
+        self.skew_x_spin.setPrefix("X ")
+        self.skew_x_spin.setSuffix("°")
+        self.skew_x_spin.setFixedWidth(82)
+        self._configure_compact_toolbar_height(self.skew_x_spin)
+        arrange_layout.addWidget(self.skew_x_spin)
+        self.skew_y_spin = QDoubleSpinBox()
+        self.skew_y_spin.setRange(-60.0, 60.0)
+        self.skew_y_spin.setDecimals(1)
+        self.skew_y_spin.setPrefix("Y ")
+        self.skew_y_spin.setSuffix("°")
+        self.skew_y_spin.setFixedWidth(82)
+        self._configure_compact_toolbar_height(self.skew_y_spin)
+        arrange_layout.addWidget(self.skew_y_spin)
+        self.skew_apply_button = QPushButton("Skew")
+        self.skew_apply_button.clicked.connect(self._apply_skew_spins)
+        self._configure_compact_toolbar_height(self.skew_apply_button)
+        arrange_layout.addWidget(self.skew_apply_button)
         arrange_layout.addStretch(1)
         self._property_tabs.addTab(arrange_tab, "Arrange")
 
@@ -836,6 +947,25 @@ class EditorWindow(QMainWindow):
         self.export_preset_combo.currentIndexChanged.connect(self._on_export_preset_index_changed)
         self._configure_compact_combo(self.export_preset_combo, 110)
         export_layout.addWidget(self.export_preset_combo)
+        export_layout.addWidget(self._create_toolbar_label("Scale"))
+        self.export_scale_combo = QComboBox()
+        self.export_scale_combo.addItem("@1x", 1.0)
+        self.export_scale_combo.addItem("@2x", 2.0)
+        self.export_scale_combo.addItem("@3x", 3.0)
+        self.export_scale_combo.setCurrentIndex(0)
+        self.export_scale_combo.currentIndexChanged.connect(self._on_export_scale_changed)
+        self._configure_compact_combo(self.export_scale_combo, 64)
+        export_layout.addWidget(self.export_scale_combo)
+        self.export_keep_transparency_check = QCheckBox("Keep transparency")
+        self.export_keep_transparency_check.setChecked(True)
+        self.export_keep_transparency_check.setToolTip(
+            "When unchecked, transparent pixels are filled with white (needed for JPEG)."
+        )
+        self.export_keep_transparency_check.toggled.connect(
+            self._on_export_keep_transparency_toggled
+        )
+        self._configure_compact_toolbar_height(self.export_keep_transparency_check, 22)
+        export_layout.addWidget(self.export_keep_transparency_check)
         export_layout.addWidget(self._create_toolbar_label("Batch"))
         self.batch_profile_combo = QComboBox()
         self.batch_profile_combo.currentIndexChanged.connect(
@@ -919,7 +1049,9 @@ class EditorWindow(QMainWindow):
             Tool.SELECT_PATH,
             Tool.MAGIC_WAND,
             Tool.BRUSH,
+            Tool.ERASER,
             Tool.BUCKET,
+            Tool.EYEDROPPER,
         } or resolved_type in {"rect", "ellipse", "line", "arrow", "step", "image"}:
             self._property_tabs.setCurrentIndex(self._PROPERTY_TAB_STYLE)
 
@@ -1042,11 +1174,21 @@ class EditorWindow(QMainWindow):
             painter.setBrush(QBrush(QColor(74, 163, 255, 180)))
             painter.drawEllipse(QRectF(4.0, 3.0, 5.0, 5.0))
             painter.drawLine(6, 8, 13, 15)
+        elif tool == Tool.ERASER:
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(236, 240, 241, 220)))
+            painter.drawRoundedRect(QRectF(4.0, 5.0, 10.0, 8.0), 1.5, 1.5)
+            painter.drawLine(5, 7, 13, 7)
         elif tool == Tool.BUCKET:
             painter.setPen(stroke_pen)
             painter.setBrush(QBrush(QColor(74, 163, 255, 120)))
             painter.drawRect(QRectF(4.0, 7.0, 9.0, 7.0))
             painter.drawLine(7, 7, 10, 3)
+        elif tool == Tool.EYEDROPPER:
+            painter.setPen(QPen(QColor("#f5f5f5"), 1.6))
+            painter.drawLine(QPointF(5.0, 14.0), QPointF(11.0, 8.0))
+            painter.setBrush(QBrush(QColor("#e74c3c")))
+            painter.drawEllipse(QRectF(10.0, 3.0, 5.0, 5.0))
         elif tool == Tool.BLUR:
             painter.setPen(QPen(QColor("#c39bd3"), 1.6))
             painter.setBrush(QBrush(QColor(155, 89, 182, 120)))
@@ -1515,7 +1657,9 @@ class EditorWindow(QMainWindow):
             ("tool_select_path", Tool.SELECT_PATH),
             ("tool_magic_wand", Tool.MAGIC_WAND),
             ("tool_brush", Tool.BRUSH),
+            ("tool_eraser", Tool.ERASER),
             ("tool_bucket", Tool.BUCKET),
+            ("tool_eyedropper", Tool.EYEDROPPER),
         ]:
             tool_action = QAction(self)
             tool_action.triggered.connect(
@@ -1657,6 +1801,29 @@ class EditorWindow(QMainWindow):
         wand_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         wand_button.setFixedSize(40, 28)
 
+        eyedropper_menu = QMenu(self)
+        self.eyedropper_stroke_action = QAction("Sample → Border", self)
+        self.eyedropper_stroke_action.setCheckable(True)
+        self.eyedropper_stroke_action.setChecked(True)
+        self.eyedropper_fill_action = QAction("Sample → Fill", self)
+        self.eyedropper_fill_action.setCheckable(True)
+        eyedropper_group = QActionGroup(self)
+        eyedropper_group.setExclusive(True)
+        eyedropper_group.addAction(self.eyedropper_stroke_action)
+        eyedropper_group.addAction(self.eyedropper_fill_action)
+        self.eyedropper_stroke_action.triggered.connect(
+            lambda: self._set_eyedropper_target("stroke")
+        )
+        self.eyedropper_fill_action.triggered.connect(
+            lambda: self._set_eyedropper_target("fill")
+        )
+        eyedropper_menu.addAction(self.eyedropper_stroke_action)
+        eyedropper_menu.addAction(self.eyedropper_fill_action)
+        eyedropper_button = self._tool_buttons[Tool.EYEDROPPER]
+        eyedropper_button.setMenu(eyedropper_menu)
+        eyedropper_button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        eyedropper_button.setFixedSize(40, 28)
+
         self._setup_blur_tool_option_menu()
 
     def _setup_blur_tool_option_menu(self) -> None:
@@ -1775,7 +1942,9 @@ class EditorWindow(QMainWindow):
             Tool.FILL_BG,
             Tool.BLUR,
             Tool.BRUSH,
+            Tool.ERASER,
             Tool.BUCKET,
+            Tool.EYEDROPPER,
         }
 
     def _on_tool_button_clicked(self, tool: str) -> None:
@@ -1986,7 +2155,14 @@ class EditorWindow(QMainWindow):
         self._set_target_color(target, updated)
         self._push_history_state()
 
-    def _set_target_color(self, target: str, color: QColor, apply_to_canvas: bool = True) -> None:
+    def _set_target_color(
+        self,
+        target: str,
+        color: QColor,
+        apply_to_canvas: bool = True,
+        *,
+        emit_history: bool = True,
+    ) -> None:
         """
         Applies one target color to canvas and toolbar state.
 
@@ -1994,28 +2170,33 @@ class EditorWindow(QMainWindow):
             target: Style target key (stroke, fill, text).
             color: New target color.
             apply_to_canvas: True to apply style changes to selected canvas items.
+            emit_history: When False, skips canvas history emission for live previews.
 
         Returns:
             None
         """
 
         if target == "stroke":
+            self._eyedropper_color_target = "stroke"
+            self.canvas.set_eyedropper_target("stroke")
             self._current_stroke_color = QColor(color)
             if apply_to_canvas:
-                self.canvas.set_style(stroke_color=color)
+                self.canvas.set_style(stroke_color=color, emit_history=emit_history)
             self._update_color_button_preview(self.stroke_button, color)
             self._set_alpha_slider_value(self.stroke_alpha_slider, self.stroke_alpha_label, color)
             return
         if target == "fill":
+            self._eyedropper_color_target = "fill"
+            self.canvas.set_eyedropper_target("fill")
             self._current_fill_color = QColor(color)
             if apply_to_canvas:
-                self.canvas.set_style(fill_color=color)
+                self.canvas.set_style(fill_color=color, emit_history=emit_history)
             self._update_color_button_preview(self.fill_button, color)
             self._set_alpha_slider_value(self.fill_alpha_slider, self.fill_alpha_label, color)
             return
         self._current_text_color = QColor(color)
         if apply_to_canvas:
-            self.canvas.set_style(text_color=color)
+            self.canvas.set_style(text_color=color, emit_history=emit_history)
         self._update_color_button_preview(self.text_color_button, color)
         self._set_alpha_slider_value(self.text_alpha_slider, self.text_alpha_label, color)
 
@@ -2098,9 +2279,47 @@ class EditorWindow(QMainWindow):
         """
 
         self.stroke_size_label.setText(str(int(value)))
+        self.canvas.set_style(stroke_width=float(value), emit_history=False)
+        if not self.stroke_size_slider.isSliderDown():
+            self._set_next_history_label("Change border width")
+            self._push_history_state()
+
+    def _stroke_width_committed(self) -> None:
+        """
+        Records border width history after a slider drag completes.
+
+        Returns:
+            None
+        """
+
         self._set_next_history_label("Change border width")
-        self.canvas.set_style(stroke_width=float(value))
         self._push_history_state()
+
+    def _brush_hardness_changed(self, value: int) -> None:
+        """
+        Updates soft brush / eraser hardness while dragging.
+
+        Args:
+            value: Hardness percentage.
+
+        Returns:
+            None
+        """
+
+        resolved = max(0, min(100, int(value)))
+        self.canvas.set_brush_hardness(float(resolved))
+        self.brush_hardness_label.setText(f"{resolved}%")
+
+    def _brush_hardness_committed(self) -> None:
+        """
+        Finalizes brush hardness after a slider drag.
+
+        Returns:
+            None
+        """
+
+        # Hardness only affects future raster strokes; no document snapshot needed.
+        return
 
     def _blur_block_size_changed(self, value: int) -> None:
         """
@@ -2226,8 +2445,20 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        self._apply_target_alpha("stroke", value, emit_history=False)
+        if not self.stroke_alpha_slider.isSliderDown():
+            self._set_next_history_label("Change border opacity")
+            self._push_history_state()
+
+    def _stroke_alpha_committed(self) -> None:
+        """
+        Records border opacity history after a slider drag completes.
+
+        Returns:
+            None
+        """
+
         self._set_next_history_label("Change border opacity")
-        self._apply_target_alpha("stroke", value)
         self._push_history_state()
 
     def _fill_alpha_changed(self, value: int) -> None:
@@ -2260,13 +2491,20 @@ class EditorWindow(QMainWindow):
         self._apply_target_alpha("text", value)
         self._push_history_state()
 
-    def _apply_target_alpha(self, target: str, value: int) -> None:
+    def _apply_target_alpha(
+        self,
+        target: str,
+        value: int,
+        *,
+        emit_history: bool = True,
+    ) -> None:
         """
         Applies alpha percentage to current target color.
 
         Args:
             target: Style target key.
             value: Opacity percentage from 0 to 100.
+            emit_history: When False, skips canvas history emission.
 
         Returns:
             None
@@ -2275,7 +2513,7 @@ class EditorWindow(QMainWindow):
         alpha_value = max(0, min(255, round((value / 100.0) * 255)))
         color = self._color_for_target(target)
         color.setAlpha(alpha_value)
-        self._set_target_color(target, color)
+        self._set_target_color(target, color, emit_history=emit_history)
 
     def _set_alpha_slider_value(self, slider: QSlider, label: QLabel, color: QColor) -> None:
         """
@@ -2595,6 +2833,7 @@ class EditorWindow(QMainWindow):
             Tool.STEP: "Insert step",
             Tool.OCR: "Copy OCR text",
             Tool.BRUSH: "Brush stroke",
+            Tool.ERASER: "Eraser stroke",
             Tool.BUCKET: "Fill selection",
         }
         expected = expected_action_by_tool.get(self._one_shot_tool)
@@ -2943,6 +3182,223 @@ class EditorWindow(QMainWindow):
             self._set_next_history_label("Set selection geometry")
             self._push_history_state()
             self._refresh_layer_panel()
+
+    def _align_selection(self, mode: str) -> None:
+        """
+        Aligns the current multi-selection.
+
+        Args:
+            mode: Align mode identifier.
+
+        Returns:
+            None
+        """
+
+        if self.canvas.align_selected(mode):
+            self._push_history_state()
+            self._refresh_layer_panel()
+
+    def _distribute_selection(self, axis: str) -> None:
+        """
+        Distributes the current multi-selection.
+
+        Args:
+            axis: ``horizontal`` or ``vertical``.
+
+        Returns:
+            None
+        """
+
+        if self.canvas.distribute_selected(axis):
+            self._push_history_state()
+            self._refresh_layer_panel()
+
+    def _rotate_selection(self, degrees: float) -> None:
+        """
+        Rotates the selection by a relative angle.
+
+        Args:
+            degrees: Rotation delta in degrees.
+
+        Returns:
+            None
+        """
+
+        if self.canvas.transform_selected(rotate_delta=float(degrees)):
+            self._push_history_state()
+            self._refresh_layer_panel()
+
+    def _apply_rotation_spin(self) -> None:
+        """
+        Applies absolute rotation from the Arrange spin box.
+
+        Returns:
+            None
+        """
+
+        if self.canvas.transform_selected(rotation=float(self.rotation_spin.value())):
+            self._push_history_state()
+            self._refresh_layer_panel()
+
+    def _flip_selection(self, *, horizontal: bool = False, vertical: bool = False) -> None:
+        """
+        Mirrors the current selection.
+
+        Args:
+            horizontal: Flip horizontally when True.
+            vertical: Flip vertically when True.
+
+        Returns:
+            None
+        """
+
+        if self.canvas.flip_selected(horizontal=horizontal, vertical=vertical):
+            self._push_history_state()
+            self._refresh_layer_panel()
+
+    def _apply_skew_spins(self) -> None:
+        """
+        Applies skew angles from the Arrange spin boxes.
+
+        Returns:
+            None
+        """
+
+        if self.canvas.transform_selected(
+            skew_x=float(self.skew_x_spin.value()),
+            skew_y=float(self.skew_y_spin.value()),
+        ):
+            self._push_history_state()
+            self._refresh_layer_panel()
+
+    def _set_eyedropper_target(self, target: str) -> None:
+        """
+        Sets whether the eyedropper writes border or fill color.
+
+        Args:
+            target: ``stroke`` or ``fill``.
+
+        Returns:
+            None
+        """
+
+        resolved = "fill" if str(target).strip().lower() == "fill" else "stroke"
+        self._eyedropper_color_target = resolved
+        self.canvas.set_eyedropper_target(resolved)
+        if resolved == "fill":
+            self.eyedropper_fill_action.setChecked(True)
+        else:
+            self.eyedropper_stroke_action.setChecked(True)
+
+    def _on_export_scale_changed(self, _index: int) -> None:
+        """
+        Updates the preferred export scale factor.
+
+        Args:
+            _index: Combo index (unused).
+
+        Returns:
+            None
+        """
+
+        scale = self.export_scale_combo.currentData()
+        self._export_scale = float(scale) if isinstance(scale, (int, float)) else 1.0
+        self.export_scale_changed.emit(float(self._export_scale))
+
+    def _on_export_keep_transparency_toggled(self, checked: bool) -> None:
+        """
+        Updates whether exports preserve alpha.
+
+        Args:
+            checked: True to keep transparency.
+
+        Returns:
+            None
+        """
+
+        self._export_keep_transparency = bool(checked)
+        self.export_keep_transparency_changed.emit(bool(checked))
+
+    def export_scale(self) -> float:
+        """
+        Returns the active export scale factor.
+
+        Returns:
+            float: Scale multiplier.
+        """
+
+        return float(self._export_scale)
+
+    def set_export_scale(self, scale: float) -> None:
+        """
+        Applies an export scale preference to the Export tab.
+
+        Args:
+            scale: Desired scale (1, 2, or 3).
+
+        Returns:
+            None
+        """
+
+        resolved = float(scale)
+        if abs(resolved - 3.0) < 0.001:
+            resolved = 3.0
+        elif abs(resolved - 2.0) < 0.001:
+            resolved = 2.0
+        else:
+            resolved = 1.0
+        self._export_scale = resolved
+        if hasattr(self, "export_scale_combo"):
+            index = self.export_scale_combo.findData(resolved)
+            if index >= 0:
+                self.export_scale_combo.blockSignals(True)
+                self.export_scale_combo.setCurrentIndex(index)
+                self.export_scale_combo.blockSignals(False)
+
+    def export_keep_transparency(self) -> bool:
+        """
+        Returns whether exports preserve transparency.
+
+        Returns:
+            bool: Transparency preference.
+        """
+
+        return bool(self._export_keep_transparency)
+
+    def set_export_keep_transparency(self, keep: bool) -> None:
+        """
+        Applies the export transparency preference.
+
+        Args:
+            keep: True to preserve alpha.
+
+        Returns:
+            None
+        """
+
+        self._export_keep_transparency = bool(keep)
+        if hasattr(self, "export_keep_transparency_check"):
+            self.export_keep_transparency_check.blockSignals(True)
+            self.export_keep_transparency_check.setChecked(bool(keep))
+            self.export_keep_transparency_check.blockSignals(False)
+
+    def _export_output_pixmap(self, *, for_jpeg: bool = False) -> QPixmap:
+        """
+        Builds a composited export pixmap using Export-tab preferences.
+
+        Args:
+            for_jpeg: True when the target format cannot store alpha.
+
+        Returns:
+            QPixmap: Scaled composited image.
+        """
+
+        keep_alpha = bool(self._export_keep_transparency) and not for_jpeg
+        background = None if keep_alpha else QColor(255, 255, 255, 255)
+        return self.canvas.export_composited_pixmap(
+            scale=float(self._export_scale),
+            background=background,
+        )
 
     def _on_crop_state_changed(self, is_active: bool) -> None:
         """
@@ -3356,7 +3812,7 @@ class EditorWindow(QMainWindow):
             file_path = f"{file_path}.png"
         if fmt == "JPG" and not file_path.lower().endswith((".jpg", ".jpeg")):
             file_path = f"{file_path}.jpg"
-        pixmap = self.canvas.export_composited_pixmap()
+        pixmap = self._export_output_pixmap(for_jpeg=(fmt == "JPG"))
         if fmt == "JPG":
             quality = self._ask_jpeg_quality(self._jpeg_quality)
             if quality is None:
@@ -3387,7 +3843,7 @@ class EditorWindow(QMainWindow):
         if "PNG" in selected_filter:
             if not file_path.lower().endswith(".png"):
                 file_path = f"{file_path}.png"
-            self.canvas.export_composited_pixmap().save(file_path, "PNG")
+            self._export_output_pixmap(for_jpeg=False).save(file_path, "PNG")
             self.statusBar().showMessage("Exported PNG")
             return
 
@@ -3398,7 +3854,7 @@ class EditorWindow(QMainWindow):
             if quality is None:
                 return
             self._jpeg_quality = quality
-            self.canvas.export_composited_pixmap().save(file_path, "JPG", quality)
+            self._export_output_pixmap(for_jpeg=True).save(file_path, "JPG", quality)
             self.statusBar().showMessage("Exported JPG")
             return
 
@@ -3454,7 +3910,7 @@ class EditorWindow(QMainWindow):
         writer.setResolution(max(72, min(1200, int(dpi))))
         writer.setColorModel(QPdfWriter.ColorModel.RGB)
 
-        pixmap = self.canvas.export_composited_pixmap()
+        pixmap = self._export_output_pixmap(for_jpeg=False)
         painter = QPainter(writer)
         page_rect = writer.pageLayout().paintRectPixels(writer.resolution())
         scaled = pixmap.scaled(
@@ -4110,8 +4566,9 @@ class EditorWindow(QMainWindow):
 
         normalized_base = base_name.strip() or default_base
         target_root = Path(directory_path)
-        pixmap = self.canvas.export_composited_pixmap()
-        if pixmap.isNull():
+        pixmap_png = self._export_output_pixmap(for_jpeg=False)
+        pixmap_jpg = self._export_output_pixmap(for_jpeg=True)
+        if pixmap_png.isNull():
             QMessageBox.warning(self, APP_NAME, "Could not render image for batch export.")
             return
 
@@ -4142,10 +4599,10 @@ class EditorWindow(QMainWindow):
             if progress.wasCanceled():
                 break
             if fmt == "png":
-                if pixmap.save(str(target), "PNG"):
+                if pixmap_png.save(str(target), "PNG"):
                     saved_targets.append(str(target))
             elif fmt == "jpg":
-                if pixmap.save(str(target), "JPG", max(1, min(100, self._jpeg_quality))):
+                if pixmap_jpg.save(str(target), "JPG", max(1, min(100, self._jpeg_quality))):
                     saved_targets.append(str(target))
             else:
                 self._write_pdf_to_path(str(target), max(72, min(1200, self._pdf_dpi)))
@@ -4285,7 +4742,7 @@ class EditorWindow(QMainWindow):
         if not dialog.exec():
             return
         painter = QPainter(printer)
-        pixmap = self.canvas.export_composited_pixmap()
+        pixmap = self._export_output_pixmap(for_jpeg=False)
         rect = painter.viewport()
         scaled = pixmap.scaled(rect.size(), Qt.AspectRatioMode.KeepAspectRatio)
         painter.drawPixmap(0, 0, scaled)

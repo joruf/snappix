@@ -122,12 +122,14 @@ class TestEditorHistory(unittest.TestCase):
         window = EditorWindow(_solid_pixmap(200, 120))
         window._toggle_tool_lock(Tool.RECT)  # pylint: disable=protected-access
         self.assertEqual(window._locked_tool, Tool.RECT)  # pylint: disable=protected-access
-        self.assertIn("🔒", window._tool_buttons[Tool.RECT].text())  # pylint: disable=protected-access
+        locked_tip = window._tool_buttons[Tool.RECT].toolTip()  # pylint: disable=protected-access
+        self.assertIn("locked", locked_tip.lower())
 
         window._on_tool_button_clicked(Tool.RECT)  # pylint: disable=protected-access
         self.assertIsNone(window._locked_tool)  # pylint: disable=protected-access
         self.assertEqual(window._active_tool, Tool.SELECT)  # pylint: disable=protected-access
-        self.assertNotIn("🔒", window._tool_buttons[Tool.RECT].text())  # pylint: disable=protected-access
+        unlocked_tip = window._tool_buttons[Tool.RECT].toolTip()  # pylint: disable=protected-access
+        self.assertNotIn("currently locked", unlocked_tip.lower())
         window.close()
 
     def test_flatten_and_erase_create_history_entries(self) -> None:
