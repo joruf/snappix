@@ -487,6 +487,7 @@ class AppController:
             QPushButton,
             QStackedWidget,
             QSystemTrayIcon,
+            QTabBar,
             QTabWidget,
             QToolButton,
             QVBoxLayout,
@@ -522,6 +523,21 @@ class AppController:
                     event.ignore()
                     return
                 super().closeEvent(event)
+
+        class TabBarWithTrailingButton(QTabBar):
+            """Notifies an external callback whenever the tab layout changes."""
+
+            def __init__(self, on_layout_changed) -> None:
+                super().__init__()
+                self._on_layout_changed = on_layout_changed
+
+            def tabLayoutChange(self) -> None:
+                super().tabLayoutChange()
+                self._on_layout_changed()
+
+            def resizeEvent(self, event) -> None:
+                super().resizeEvent(event)
+                self._on_layout_changed()
 
         from src.video_recorder import has_ffmpeg
 
@@ -585,14 +601,31 @@ class AppController:
         self.editor_host.resize(1240, 860)
         self.editor_stack = QStackedWidget(self.editor_host)
         self.editor_tabs = QTabWidget(self.editor_stack)
-        self.editor_tabs.setTabsClosable(True)
-        self.editor_tabs.tabCloseRequested.connect(self._close_editor_tab_by_index)
         new_tab_corner_button = QToolButton(self.editor_tabs)
         new_tab_corner_button.setText("+")
         new_tab_corner_button.setToolTip("New empty tab (Ctrl+T).")
         new_tab_corner_button.setAutoRaise(True)
+        new_tab_corner_button.setCursor(Qt.CursorShape.PointingHandCursor)
         new_tab_corner_button.clicked.connect(self.create_empty_editor_tab)
-        self.editor_tabs.setCornerWidget(new_tab_corner_button, Qt.Corner.TopRightCorner)
+        new_tab_corner_button.show()
+
+        def reposition_new_tab_corner_button() -> None:
+            tab_bar = self.editor_tabs.tabBar()
+            if tab_bar.count() > 0:
+                last_rect = tab_bar.tabRect(tab_bar.count() - 1)
+                anchor = tab_bar.mapTo(self.editor_tabs, last_rect.topRight())
+                x = anchor.x() + 4
+                y = anchor.y() + (last_rect.height() - new_tab_corner_button.height()) // 2
+            else:
+                anchor = tab_bar.mapTo(self.editor_tabs, tab_bar.rect().topLeft())
+                x, y = anchor.x() + 4, anchor.y() + 4
+            new_tab_corner_button.move(x, y)
+            new_tab_corner_button.raise_()
+
+        self.editor_tabs.setTabBar(TabBarWithTrailingButton(reposition_new_tab_corner_button))
+        reposition_new_tab_corner_button()
+        self.editor_tabs.setTabsClosable(True)
+        self.editor_tabs.tabCloseRequested.connect(self._close_editor_tab_by_index)
         self.editor_empty_state = QWidget(self.editor_stack)
         empty_layout = QVBoxLayout(self.editor_empty_state)
         empty_layout.setContentsMargins(40, 40, 40, 40)

@@ -908,6 +908,11 @@ def execute_scroll_capture(
     overlay.raise_()
     overlay.activateWindow()
     overlay.grabKeyboard()
+    # Force an immediate synchronous paint: some compositors race the very
+    # first async update() on a freshly mapped always-on-top fullscreen
+    # window, occasionally dropping the initial frame (dimming/crosshair/
+    # selection border never appear until the next repaint trigger).
+    overlay.repaint()
 
     process = subprocess.Popen(
         ["xdotool", "selectwindow"],
@@ -1877,6 +1882,11 @@ def execute_color_pick(
     overlay.raise_()
     overlay.activateWindow()
     overlay.grabKeyboard()
+    # Force an immediate synchronous paint: some compositors race the very
+    # first async update() on a freshly mapped always-on-top fullscreen
+    # window, occasionally dropping the initial frame (dimming/crosshair/
+    # selection border never appear until the next repaint trigger).
+    overlay.repaint()
 
 
 def execute_capture_request(
@@ -1930,6 +1940,7 @@ def execute_capture_request(
             overlay.raise_()
             overlay.activateWindow()
             overlay.grabKeyboard()
+            overlay.repaint()
             return
 
         if is_wayland_session():
@@ -1957,6 +1968,7 @@ def execute_capture_request(
         overlay.raise_()
         overlay.activateWindow()
         overlay.grabKeyboard()
+        overlay.repaint()
 
         process = subprocess.Popen(
             ["xdotool", "selectwindow"],
@@ -2109,6 +2121,7 @@ def select_video_region(
         overlay.raise_()
         overlay.activateWindow()
         overlay.grabKeyboard()
+        overlay.repaint()
 
     schedule_capture_after_ui_settle(begin_selection)
 
