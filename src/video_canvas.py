@@ -4,8 +4,8 @@ Video playback and time-ranged annotation canvas for the Snappix video editor.
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, QSizeF, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter
+from PySide6.QtCore import QPoint, QPointF, QRectF, QSizeF, QTimer, QUrl, Qt, Signal
+from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
@@ -18,16 +18,32 @@ from PySide6.QtWidgets import (
 )
 
 from src.annotation_items import (
+    ITEM_ROLE_ID,
+    ITEM_ROLE_LOCKED,
+    ITEM_ROLE_TYPE,
     ArrowItem,
     DoubleArrowItem,
+    STROKE_STYLE_SOLID,
     StrokeLineItem,
     StyleState,
+    annotation_from_item,
+    configure_graphics_item,
     create_pen,
     list_to_color,
 )
 from src.annotation_shapes import TEXT_STYLE_BUBBLE, StyledTextItem
+from src.crop_item import CropSelectionItem
+from src.editor_canvas import (
+    DRAG_LINE_TOOLS,
+    DRAG_RECT_TOOLS,
+    POLY_DRAW_TOOLS,
+    Tool,
+)
 from src.shape_items import (
     PATH_SHAPE_KINDS,
+    SHAPE_LINE_TYPES,
+    SHAPE_RECT_TYPES,
+    STAMP_MARK_TYPES,
     PathShapeItem,
     PolyPathItem,
     SpotlightItem,
@@ -37,46 +53,26 @@ from src.video_models import VideoAnnotationModel
 
 DEFAULT_ANNOTATION_DURATION_MS = 3000
 
-
-class Tool:
-    """
-    Defines the drawing tools available in the video editor.
-    """
-
-    SELECT = "select"
-    RECT = "rect"
-    ELLIPSE = "ellipse"
-    TRIANGLE = "triangle"
-    ROUND_RECT = "round_rect"
-    STAR = "star"
-    HIGHLIGHT = "highlight"
-    SPOTLIGHT = "spotlight"
-    CROSS = "cross"
-    CHECKMARK = "checkmark"
-    LINE = "line"
-    ARROW = "arrow"
-    DOUBLE_ARROW = "double_arrow"
-    POLYLINE = "polyline"
-    POLYGON = "polygon"
-    BENT_ARROW = "bent_arrow"
-    CALLOUT = "callout"
-    TEXT = "text"
-
-
-DRAG_RECT_TOOLS = frozenset(
-    {
-        Tool.RECT,
-        Tool.ELLIPSE,
-        Tool.TRIANGLE,
-        Tool.STAR,
-        Tool.SPOTLIGHT,
-        Tool.CROSS,
-        Tool.CHECKMARK,
-    }
-)
-DRAG_LINE_TOOLS = frozenset({Tool.LINE, Tool.ARROW, Tool.DOUBLE_ARROW})
-POLY_DRAW_TOOLS = frozenset({Tool.POLYLINE, Tool.POLYGON, Tool.BENT_ARROW})
 DRAG_TOOLS = DRAG_RECT_TOOLS | DRAG_LINE_TOOLS
+
+_DRAW_ACTION_LABELS: dict[str, str] = {
+    Tool.RECT: "Draw rectangle",
+    Tool.ELLIPSE: "Draw ellipse",
+    Tool.TRIANGLE: "Draw triangle",
+    Tool.STAR: "Draw star",
+    Tool.POLYGON: "Draw polygon",
+    Tool.LINE: "Draw line",
+    Tool.POLYLINE: "Draw polyline",
+    Tool.ARROW: "Draw arrow",
+    Tool.DOUBLE_ARROW: "Draw double arrow",
+    Tool.BENT_ARROW: "Draw bent arrow",
+    Tool.SPOTLIGHT: "Draw spotlight",
+    Tool.CROSS: "Draw cross",
+    Tool.CHECKMARK: "Draw checkmark",
+    Tool.TEXT: "Insert text",
+    Tool.CALLOUT: "Insert callout",
+    Tool.STEP: "Insert step",
+}
 
 
 def _style_for_annotation(annotation: VideoAnnotationModel) -> StyleState:
@@ -100,7 +96,28 @@ def _style_for_annotation(annotation: VideoAnnotationModel) -> StyleState:
         font_bold=annotation.font_bold,
         font_italic=annotation.font_italic,
         font_underline=annotation.font_underline,
+        stroke_style=str(annotation.payload.get("stroke_style", STROKE_STYLE_SOLID) or STROKE_STYLE_SOLID),
     )
+
+
+def _configure_video_annotation_item(
+    item: QGraphicsItem,
+    annotation: VideoAnnotationModel,
+) -> None:
+    """
+    Applies selection flags and stable annotation metadata to one scene item.
+
+    Args:
+        item: Graphics item to configure.
+        annotation: Source annotation model.
+
+    Returns:
+        None
+    """
+
+    configure_graphics_item(item, annotation.annotation_type)
+    item.setData(ITEM_ROLE_ID, annotation.annotation_id)
+    item.setZValue(1.0)
 
 
 def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | None:
@@ -119,24 +136,28 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
     rect = QRectF(annotation.x, annotation.y, annotation.width, annotation.height)
 
     if annotation.annotation_type == Tool.RECT:
-        item = QGraphicsRectItem(rect)
+        corner_radius = float(annotation.payload.get("corner_radius", 0.0) or 0.0)
+        item = PathShapeItem("rect", rect, corner_radius=corner_radius)
         item.setPen(pen)
         item.setBrush(style.fill_color)
+        _configure_video_annotation_item(item, annotation)
         return item
     if annotation.annotation_type == Tool.ELLIPSE:
         item = QGraphicsEllipseItem(rect)
         item.setPen(pen)
         item.setBrush(style.fill_color)
+        _configure_video_annotation_item(item, annotation)
         return item
     if annotation.annotation_type in PATH_SHAPE_KINDS:
         item = PathShapeItem(annotation.annotation_type, rect)
         item.setPen(pen)
         if annotation.annotation_type == Tool.HIGHLIGHT:
             item.setBrush(list_to_color(annotation.fill_rgba) if annotation.fill_rgba else QColor(255, 235, 59, 110))
-        elif annotation.annotation_type in {Tool.CROSS, Tool.CHECKMARK}:
+        elif annotation.annotation_type in STAMP_MARK_TYPES:
             item.setBrush(style.stroke_color)
         else:
             item.setBrush(style.fill_color)
+        _configure_video_annotation_item(item, annotation)
         return item
     if annotation.annotation_type == Tool.SPOTLIGHT:
         item = SpotlightItem(
@@ -146,6 +167,7 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
         )
         item.setPen(pen)
         item.setPos(annotation.x, annotation.y)
+        _configure_video_annotation_item(item, annotation)
         return item
     if annotation.annotation_type in POLY_DRAW_TOOLS:
         points = points_from_payload(annotation.payload)
@@ -154,6 +176,7 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
         item = PolyPathItem(annotation.annotation_type, points)
         item.setPen(pen)
         item.setBrush(style.fill_color if annotation.annotation_type == Tool.POLYGON else QColor(0, 0, 0, 0))
+        _configure_video_annotation_item(item, annotation)
         return item
     if annotation.annotation_type == Tool.DOUBLE_ARROW:
         line_item = DoubleArrowItem()
@@ -164,6 +187,7 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
             annotation.y + annotation.height,
         )
         line_item.setPen(pen)
+        _configure_video_annotation_item(line_item, annotation)
         return line_item
     if annotation.annotation_type in (Tool.LINE, Tool.ARROW):
         line_item = ArrowItem() if annotation.annotation_type == Tool.ARROW else StrokeLineItem()
@@ -174,7 +198,18 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
             annotation.y + annotation.height,
         )
         line_item.setPen(pen)
+        _configure_video_annotation_item(line_item, annotation)
         return line_item
+    if annotation.annotation_type == Tool.STEP:
+        from src.annotation_shapes import StepBadgeItem
+
+        step_number = int(annotation.payload.get("step_number", 1) or 1)
+        item = StepBadgeItem(step_number)
+        item.setPen(pen)
+        item.setBrush(style.fill_color)
+        item.setPos(annotation.x, annotation.y)
+        _configure_video_annotation_item(item, annotation)
+        return item
     if annotation.annotation_type in (Tool.TEXT, Tool.CALLOUT):
         text_style = str(annotation.payload.get("text_style", ""))
         if annotation.annotation_type == Tool.CALLOUT and not text_style:
@@ -188,6 +223,7 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
             stroke_width=style.stroke_width,
         )
         text_item.setPos(annotation.x, annotation.y)
+        _configure_video_annotation_item(text_item, annotation)
         return text_item
     return None
 
@@ -200,7 +236,10 @@ class VideoCanvas(QGraphicsView):
     position_changed = Signal(int)
     duration_changed = Signal(int)
     annotation_created = Signal(object)
+    annotations_removed = Signal()
+    tool_changed = Signal(str)
     content_changed = Signal()
+    selection_style_changed = Signal(object)
     zoom_changed = Signal(float)
 
     ZOOM_MIN = 0.1
@@ -215,12 +254,16 @@ class VideoCanvas(QGraphicsView):
         super().__init__()
         self._scene = QGraphicsScene(self)
         self.setScene(self._scene)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform
         )
         self.setBackgroundBrush(QColor(20, 20, 20))
 
         self._video_item = QGraphicsVideoItem()
+        self._video_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self._video_item.setZValue(0.0)
         self._scene.addItem(self._video_item)
 
         self._player = QMediaPlayer(self)
@@ -257,6 +300,14 @@ class VideoCanvas(QGraphicsView):
         self._first_frame_forced = False
         self._zoom_factor = 1.0
         self._initial_view_pending = True
+        self._resize_overlay_item: CropSelectionItem | None = None
+        self._resize_overlay_target: QGraphicsItem | None = None
+        self._updating_resize_overlay = False
+        self._pending_selection_id: str | None = None
+        self._rebuilding_visible_items = False
+        self._rect_corner_radius = 0.0
+        self._last_action_label = "Edit"
+        self._scene.selectionChanged.connect(self._on_selection_changed)
 
     def load_video(self, path: str) -> None:
         """
@@ -441,7 +492,80 @@ class VideoCanvas(QGraphicsView):
             None
         """
 
+        if self._tool in POLY_DRAW_TOOLS and tool not in POLY_DRAW_TOOLS:
+            self._cancel_poly_draw()
+        if self._drag_start is not None:
+            self._drag_start = None
+            if self._preview_item is not None and self._preview_item.scene() is self._scene:
+                self._scene.removeItem(self._preview_item)
+            self._preview_item = None
+        if tool != Tool.SELECT:
+            self._clear_resize_overlay()
+        previous_tool = self._tool
         self._tool = tool
+        if tool == Tool.SELECT:
+            self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
+        else:
+            self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        if previous_tool != tool:
+            self.tool_changed.emit(tool)
+        self._update_style_color_context()
+
+    def set_rect_corner_radius(self, radius: float) -> None:
+        """
+        Sets the default corner radius for new rectangle annotations.
+
+        Args:
+            radius: Corner radius in pixels.
+
+        Returns:
+            None
+        """
+
+        self._rect_corner_radius = max(0.0, float(radius))
+
+    def consume_last_action_label(self) -> str:
+        """
+        Returns and resets the last recorded canvas action label.
+
+        Returns:
+            str: Action label used for one-shot tool handling.
+        """
+
+        label = self._last_action_label.strip() or "Edit"
+        self._last_action_label = "Edit"
+        return label
+
+    def apply_style_to_selection(self, target: str, color: QColor) -> None:
+        """
+        Applies one style color to all currently selected annotations.
+
+        Args:
+            target: ``stroke``, ``fill``, or ``text``.
+            color: Color to apply.
+
+        Returns:
+            None
+        """
+
+        changed = False
+        for item in self._scene.selectedItems():
+            if item is self._resize_overlay_item or item is self._video_item:
+                continue
+            if target == "stroke" and hasattr(item, "setPen"):
+                pen = item.pen()
+                pen.setColor(color)
+                item.setPen(pen)
+                changed = True
+            elif target == "fill" and hasattr(item, "setBrush"):
+                item.setBrush(color)
+                changed = True
+            elif target == "text" and hasattr(item, "setDefaultTextColor"):
+                item.setDefaultTextColor(color)
+                changed = True
+        if changed and self._sync_visible_items_to_models():
+            self.content_changed.emit()
+        self._refresh_selection_style()
 
     def set_style(self, style: StyleState) -> None:
         """
@@ -643,18 +767,168 @@ class VideoCanvas(QGraphicsView):
             None
         """
 
-        for item in list(self._visible_items.values()):
-            self._scene.removeItem(item)
-        self._visible_items.clear()
+        if self._pending_selection_id:
+            selected_ids = {self._pending_selection_id}
+        else:
+            selected_ids = {
+                str(item.data(ITEM_ROLE_ID))
+                for item in self._scene.selectedItems()
+                if item.data(ITEM_ROLE_ID)
+            }
 
-        for annotation in self._annotations:
-            if not (annotation.start_ms <= self._position_ms <= annotation.end_ms):
-                continue
-            item = build_annotation_item(annotation)
-            if item is None:
-                continue
-            self._scene.addItem(item)
-            self._visible_items[annotation.annotation_id] = item
+        self._sync_visible_items_to_models()
+
+        self._rebuilding_visible_items = True
+        try:
+            self._clear_resize_overlay()
+
+            for item in list(self._visible_items.values()):
+                self._scene.removeItem(item)
+            self._visible_items.clear()
+
+            for annotation in self._annotations:
+                if not (annotation.start_ms <= self._position_ms <= annotation.end_ms):
+                    continue
+                item = build_annotation_item(annotation)
+                if item is None:
+                    continue
+                if annotation.annotation_id in selected_ids:
+                    item.setSelected(True)
+                self._scene.addItem(item)
+                self._visible_items[annotation.annotation_id] = item
+
+            if self._pending_selection_id:
+                self._pending_selection_id = None
+        finally:
+            self._rebuilding_visible_items = False
+
+        self._on_selection_changed()
+
+    def _next_step_number(self) -> int:
+        """
+        Returns the next unused step badge number for new annotations.
+
+        Returns:
+            int: Next step number.
+        """
+
+        used = {
+            int(annotation.payload.get("step_number", 0) or 0)
+            for annotation in self._annotations
+            if annotation.annotation_type == Tool.STEP
+        }
+        number = 1
+        while number in used:
+            number += 1
+        return number
+
+    def _cancel_poly_draw(self) -> None:
+        """
+        Discards an in-progress multi-point annotation preview.
+
+        Returns:
+            None
+        """
+
+        if self._poly_preview is not None and self._poly_preview.scene() is self._scene:
+            self._scene.removeItem(self._poly_preview)
+        self._poly_preview = None
+        self._poly_points = []
+
+    def _refresh_selection_style(self) -> None:
+        """
+        Emits style details for the current canvas selection.
+
+        Returns:
+            None
+        """
+
+        selected = [
+            item
+            for item in self._scene.selectedItems()
+            if item is not self._resize_overlay_item and item is not self._video_item
+        ]
+        if len(selected) != 1:
+            self.selection_style_changed.emit({"type": "document"})
+            return
+        serialized = annotation_from_item(selected[0])
+        if serialized is None:
+            self.selection_style_changed.emit({"type": "document"})
+            return
+        self.selection_style_changed.emit(
+            {
+                "type": serialized.annotation_type,
+                "stroke_rgba": serialized.stroke_rgba,
+                "fill_rgba": serialized.fill_rgba,
+            }
+        )
+
+    def _update_style_color_context(self) -> None:
+        """
+        Refreshes style-panel context after tool changes.
+
+        Returns:
+            None
+        """
+
+        if self._tool == Tool.SELECT:
+            self._refresh_selection_style()
+        else:
+            self.selection_style_changed.emit({"type": "document"})
+
+    def _annotation_item_at_view_pos(self, view_pos: QPoint) -> QGraphicsItem | None:
+        """
+        Returns the annotation under a view position, ignoring chrome overlays.
+
+        Args:
+            view_pos: View coordinate to inspect.
+
+        Returns:
+            QGraphicsItem | None: Drawable annotation item or None.
+        """
+
+        hit_item = self.itemAt(view_pos)
+        if hit_item is None or hit_item is self._video_item:
+            return None
+        if hit_item is self._resize_overlay_item:
+            return self._resize_overlay_target
+        if not str(hit_item.data(ITEM_ROLE_ID) or ""):
+            return None
+        return hit_item
+
+    def _handle_select_mouse_press(self, event: QMouseEvent) -> None:
+        """
+        Applies explicit single-click selection before default view drag handling.
+
+        Args:
+            event: Mouse press event.
+
+        Returns:
+            None
+        """
+
+        self.setFocus()
+        modifiers = event.modifiers()
+        if modifiers & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        ):
+            super().mousePressEvent(event)
+            return
+
+        hit_item = self._annotation_item_at_view_pos(event.position().toPoint())
+        if hit_item is None:
+            self._scene.clearSelection()
+            self._clear_resize_overlay()
+            super().mousePressEvent(event)
+            return
+
+        self._scene.clearSelection()
+        hit_item.setSelected(True)
+        self._scene.setFocusItem(hit_item)
+        super().mousePressEvent(event)
+        if not hit_item.isSelected():
+            hit_item.setSelected(True)
+        self._on_selection_changed()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """
@@ -668,6 +942,9 @@ class VideoCanvas(QGraphicsView):
         """
 
         if event.button() != Qt.MouseButton.LeftButton or self._tool == Tool.SELECT:
+            if event.button() == Qt.MouseButton.LeftButton and self._tool == Tool.SELECT:
+                self._handle_select_mouse_press(event)
+                return
             super().mousePressEvent(event)
             return
 
@@ -684,6 +961,27 @@ class VideoCanvas(QGraphicsView):
                     0.0,
                     text=text,
                 )
+            return
+
+        if self._tool == Tool.STEP:
+            from src.annotation_shapes import StepBadgeItem
+
+            badge = StepBadgeItem(self._next_step_number())
+            badge.setPen(create_pen(self._style))
+            badge.setBrush(self._style.fill_color)
+            badge.setPos(
+                scene_pos.x() - badge.rect().width() / 2.0,
+                scene_pos.y() - badge.rect().height() / 2.0,
+            )
+            bounds = badge.sceneBoundingRect()
+            self._finalize_annotation(
+                Tool.STEP,
+                bounds.x(),
+                bounds.y(),
+                bounds.width(),
+                bounds.height(),
+                payload={"step_number": badge.step_number()},
+            )
             return
 
         if self._tool == Tool.CALLOUT:
@@ -725,6 +1023,8 @@ class VideoCanvas(QGraphicsView):
         """
 
         if self._drag_start is None or self._preview_item is None:
+            if self._tool == Tool.SELECT:
+                self._sync_resize_overlay_with_target()
             super().mouseMoveEvent(event)
             return
 
@@ -744,6 +1044,16 @@ class VideoCanvas(QGraphicsView):
 
         if self._drag_start is None:
             super().mouseReleaseEvent(event)
+            if self._tool == Tool.SELECT:
+                if self._sync_visible_items_to_models():
+                    self.content_changed.emit()
+                selected = [
+                    item
+                    for item in self._scene.selectedItems()
+                    if item is not self._resize_overlay_item
+                ]
+                if len(selected) == 1 and self._can_resize_item(selected[0]):
+                    self._sync_resize_overlay_with_target(selected[0])
             return
 
         scene_pos = self.mapToScene(event.position().toPoint())
@@ -766,10 +1076,12 @@ class VideoCanvas(QGraphicsView):
         if width < 3 or height < 3:
             return
         payload: dict = {}
-        if self._tool == Tool.HIGHLIGHT:
-            payload = {}
         if self._tool == Tool.SPOTLIGHT:
             payload = {"focus_mode": "ellipse", "dim_alpha": 150}
+        if self._tool == Tool.RECT:
+            payload["corner_radius"] = self._rect_corner_radius
+        if self._style.stroke_style:
+            payload["stroke_style"] = self._style.stroke_style
         self._finalize_annotation(self._tool, x, y, width, height, payload=payload)
 
     def _create_preview_item(self, scene_pos) -> QGraphicsItem | None:
@@ -785,7 +1097,11 @@ class VideoCanvas(QGraphicsView):
 
         pen = create_pen(self._style)
         if self._tool == Tool.RECT:
-            item = QGraphicsRectItem(QRectF(scene_pos, scene_pos))
+            item = PathShapeItem(
+                "rect",
+                QRectF(scene_pos, scene_pos),
+                corner_radius=self._rect_corner_radius,
+            )
             item.setPen(pen)
             item.setBrush(self._style.fill_color)
             return item
@@ -802,7 +1118,7 @@ class VideoCanvas(QGraphicsView):
             if self._tool == Tool.HIGHLIGHT:
                 fill = QColor(255, 235, 59, 110)
                 stroke_pen = create_stroke_pen(QColor(0, 0, 0, 0), 0.0)
-            elif self._tool in {Tool.CROSS, Tool.CHECKMARK}:
+            elif self._tool in STAMP_MARK_TYPES:
                 fill = self._style.stroke_color
                 stroke_pen = create_stroke_pen(QColor(0, 0, 0, 0), 0.0)
             item = PathShapeItem(self._tool, QRectF(scene_pos, scene_pos))
@@ -878,10 +1194,13 @@ class VideoCanvas(QGraphicsView):
         start_ms = self._position_ms
         end_ms = min(duration, start_ms + DEFAULT_ANNOTATION_DURATION_MS)
         fill_color = self._style.fill_color
-        if annotation_type == Tool.HIGHLIGHT:
-            fill_color = QColor(255, 235, 59, 110)
-        elif annotation_type in {Tool.CROSS, Tool.CHECKMARK}:
+        if annotation_type in STAMP_MARK_TYPES:
             fill_color = self._style.stroke_color
+        payload_data = dict(payload or {})
+        if annotation_type == Tool.RECT:
+            payload_data.setdefault("corner_radius", self._rect_corner_radius)
+        if self._style.stroke_style:
+            payload_data.setdefault("stroke_style", self._style.stroke_style)
         annotation = VideoAnnotationModel(
             annotation_type=annotation_type,
             start_ms=start_ms,
@@ -909,10 +1228,12 @@ class VideoCanvas(QGraphicsView):
             font_bold=self._style.font_bold,
             font_italic=self._style.font_italic,
             font_underline=self._style.font_underline,
-            payload=dict(payload or {}),
+            payload=dict(payload_data),
         )
         self._annotations.append(annotation)
+        self._pending_selection_id = annotation.annotation_id
         self._rebuild_visible_items()
+        self._last_action_label = _DRAW_ACTION_LABELS.get(annotation_type, "Edit")
         self.annotation_created.emit(annotation)
         self.content_changed.emit()
 
@@ -991,3 +1312,353 @@ class VideoCanvas(QGraphicsView):
             bounds.height(),
             payload={"points": points_to_payload(points)},
         )
+
+    def _sync_visible_items_to_models(self) -> bool:
+        """
+        Writes current scene geometry from visible items back to annotation models.
+
+        Returns:
+            bool: True when at least one model was updated.
+        """
+
+        models_by_id = {
+            annotation.annotation_id: annotation for annotation in self._annotations
+        }
+        changed = False
+        for item in self._visible_items.values():
+            annotation_id = str(item.data(ITEM_ROLE_ID) or "")
+            if not annotation_id or annotation_id not in models_by_id:
+                continue
+            serialized = annotation_from_item(item)
+            if serialized is None:
+                continue
+            model = models_by_id[annotation_id]
+            if (
+                model.x != serialized.x
+                or model.y != serialized.y
+                or model.width != serialized.width
+                or model.height != serialized.height
+                or model.text != serialized.text
+                or model.payload != serialized.payload
+            ):
+                model.x = serialized.x
+                model.y = serialized.y
+                model.width = serialized.width
+                model.height = serialized.height
+                model.text = serialized.text
+                model.payload = dict(serialized.payload)
+                changed = True
+        return changed
+
+    def _on_selection_changed(self) -> None:
+        """
+        Shows resize handles for a single selected annotation in Select mode.
+
+        Returns:
+            None
+        """
+
+        if self._rebuilding_visible_items:
+            return
+
+        if self._tool != Tool.SELECT:
+            self._clear_resize_overlay()
+            return
+
+        selected = [
+            item
+            for item in self._scene.selectedItems()
+            if item is not self._resize_overlay_item
+        ]
+        if len(selected) != 1:
+            self._clear_resize_overlay()
+            return
+        item = selected[0]
+        if self._can_resize_item(item):
+            self._sync_resize_overlay_with_target(item)
+        else:
+            self._clear_resize_overlay()
+        self._refresh_selection_style()
+
+    def _can_resize_item(self, item: QGraphicsItem) -> bool:
+        """
+        Checks whether one annotation supports interactive resize handles.
+
+        Args:
+            item: Scene item to evaluate.
+
+        Returns:
+            bool: True when resize handles should be shown.
+        """
+
+        annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
+        return annotation_type in (SHAPE_RECT_TYPES | SHAPE_LINE_TYPES | {Tool.TEXT, Tool.CALLOUT})
+
+    def _target_geometry_rect(self, item: QGraphicsItem) -> QRectF:
+        """
+        Returns geometry bounds for one annotation without pen inflation artifacts.
+
+        Args:
+            item: Scene item.
+
+        Returns:
+            QRectF: Geometry rectangle in scene coordinates.
+        """
+
+        annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
+        if annotation_type in SHAPE_RECT_TYPES:
+            return item.mapRectToScene(item.rect()).normalized()
+        if annotation_type in SHAPE_LINE_TYPES:
+            line = item.line()
+            p1 = item.mapToScene(line.p1())
+            p2 = item.mapToScene(line.p2())
+            return QRectF(p1, p2).normalized()
+        return item.sceneBoundingRect().normalized()
+
+    def _item_scene_rect(self, item: QGraphicsItem) -> QRectF:
+        """
+        Returns a normalized scene-space geometry rectangle for one item.
+
+        Args:
+            item: Scene item.
+
+        Returns:
+            QRectF: Normalized scene rectangle.
+        """
+
+        rect = self._target_geometry_rect(item).normalized()
+        if rect.width() < 2:
+            rect.setWidth(2)
+        if rect.height() < 2:
+            rect.setHeight(2)
+        return rect
+
+    def _sync_resize_overlay_with_target(self, target: QGraphicsItem | None = None) -> None:
+        """
+        Aligns interactive resize handles to the current selected target item.
+
+        Args:
+            target: Optional explicit selected item.
+
+        Returns:
+            None
+        """
+
+        if self._updating_resize_overlay:
+            return
+        if target is None:
+            selected = [
+                item
+                for item in self._scene.selectedItems()
+                if item is not self._resize_overlay_item
+            ]
+            if len(selected) != 1:
+                self._clear_resize_overlay()
+                return
+            target = selected[0]
+        if not self._can_resize_item(target):
+            self._clear_resize_overlay()
+            return
+
+        target_rect = self._item_scene_rect(target)
+        if self._resize_overlay_item is None:
+            overlay = CropSelectionItem(target_rect)
+            overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+            overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
+            overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+            overlay.set_always_show_handles(True)
+            overlay.set_aspect_ratio_lock_enabled(True)
+            overlay.set_interior_interactive(False)
+            overlay.on_geometry_changed = self._apply_resize_overlay_to_target
+            overlay.setZValue(1400)
+            self._scene.addItem(overlay)
+            self._resize_overlay_item = overlay
+        else:
+            self._updating_resize_overlay = True
+            self._resize_overlay_item.set_interior_interactive(False)
+            self._resize_overlay_item.setPos(target_rect.topLeft())
+            self._resize_overlay_item.setRect(
+                QRectF(0.0, 0.0, target_rect.width(), target_rect.height())
+            )
+            self._updating_resize_overlay = False
+        self._resize_overlay_target = target
+
+    def _clear_resize_overlay(self) -> None:
+        """
+        Removes interactive resize handles from the scene.
+
+        Returns:
+            None
+        """
+
+        if self._resize_overlay_item is not None and self._resize_overlay_item.scene() is self._scene:
+            self._scene.removeItem(self._resize_overlay_item)
+        self._resize_overlay_item = None
+        self._resize_overlay_target = None
+
+    def _apply_resize_overlay_to_target(self) -> None:
+        """
+        Applies resize-handle geometry changes back to the selected target item.
+
+        Returns:
+            None
+        """
+
+        if self._updating_resize_overlay:
+            return
+        if self._resize_overlay_item is None or self._resize_overlay_target is None:
+            return
+        target = self._resize_overlay_target
+        if target.scene() is not self._scene:
+            self._clear_resize_overlay()
+            return
+
+        old_rect = self._target_geometry_rect(target)
+        new_rect = self._resize_overlay_item.scene_rect().normalized()
+        if new_rect.width() < 2 or new_rect.height() < 2:
+            return
+        if not self._resize_target_to_rect(target, old_rect, new_rect):
+            return
+        if self._sync_visible_items_to_models():
+            self.content_changed.emit()
+
+    def _resize_target_to_rect(
+        self,
+        target: QGraphicsItem,
+        old_rect: QRectF,
+        new_rect: QRectF,
+    ) -> bool:
+        """
+        Resizes one target annotation to a new scene-space rectangle.
+
+        Args:
+            target: Target annotation item.
+            old_rect: Previous scene-space item rectangle.
+            new_rect: New scene-space item rectangle from overlay.
+
+        Returns:
+            bool: True when resize was applied.
+        """
+
+        annotation_type = str(target.data(ITEM_ROLE_TYPE) or "")
+
+        if annotation_type in SHAPE_RECT_TYPES:
+            target.setPos(new_rect.topLeft())
+            target.setRect(QRectF(0.0, 0.0, new_rect.width(), new_rect.height()))
+            return True
+
+        if annotation_type in SHAPE_LINE_TYPES:
+            line = target.line()
+            p1_scene = target.mapToScene(line.p1())
+            p2_scene = target.mapToScene(line.p2())
+            old_width = max(0.0001, old_rect.width())
+            old_height = max(0.0001, old_rect.height())
+            old_width_is_degenerate = old_rect.width() < 0.0002
+            old_height_is_degenerate = old_rect.height() < 0.0002
+
+            def map_point(point: QPointF) -> QPointF:
+                if old_width_is_degenerate:
+                    ratio_x = 0.5
+                else:
+                    ratio_x = (point.x() - old_rect.x()) / old_width
+                if old_height_is_degenerate:
+                    ratio_y = 0.5
+                else:
+                    ratio_y = (point.y() - old_rect.y()) / old_height
+                return QPointF(
+                    new_rect.x() + (new_rect.width() * ratio_x),
+                    new_rect.y() + (new_rect.height() * ratio_y),
+                )
+
+            mapped_p1 = map_point(p1_scene)
+            mapped_p2 = map_point(p2_scene)
+            target.setPos(0.0, 0.0)
+            target.setLine(
+                mapped_p1.x(),
+                mapped_p1.y(),
+                mapped_p2.x(),
+                mapped_p2.y(),
+            )
+            return True
+
+        if annotation_type in {Tool.TEXT, Tool.CALLOUT}:
+            font = target.font()
+            point_size = font.pointSize()
+            if point_size <= 0:
+                point_size = 16
+            scale_x = new_rect.width() / max(0.0001, old_rect.width())
+            scale_y = new_rect.height() / max(0.0001, old_rect.height())
+            scale = max(0.1, (scale_x + scale_y) / 2.0)
+            font.setPointSize(max(1, int(round(point_size * scale))))
+            target.setFont(font)
+            target.setPos(new_rect.topLeft())
+            return True
+
+        return False
+
+    def delete_selected_annotations(self) -> bool:
+        """
+        Removes all currently selected annotation models from the timeline.
+
+        Returns:
+            bool: True when at least one annotation was deleted.
+        """
+
+        selected = [
+            item
+            for item in self._scene.selectedItems()
+            if item is not self._resize_overlay_item and item is not self._video_item
+        ]
+        if not selected:
+            return False
+
+        ids_to_remove = {
+            str(item.data(ITEM_ROLE_ID) or "")
+            for item in selected
+            if item.data(ITEM_ROLE_ID) and not bool(item.data(ITEM_ROLE_LOCKED) or False)
+        }
+        if not ids_to_remove:
+            return False
+
+        remaining = [
+            annotation
+            for annotation in self._annotations
+            if annotation.annotation_id not in ids_to_remove
+        ]
+        if len(remaining) == len(self._annotations):
+            return False
+
+        self._annotations[:] = remaining
+        self._clear_resize_overlay()
+        self._rebuild_visible_items()
+        return True
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """
+        Handles keyboard shortcuts for poly draw, delete, and cancel.
+
+        Args:
+            event: Key press event.
+
+        Returns:
+            None
+        """
+
+        if event.key() == Qt.Key.Key_Escape:
+            if self._poly_points:
+                self._cancel_poly_draw()
+                event.accept()
+                return
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if self._tool in POLY_DRAW_TOOLS and self._poly_points:
+                self._finalize_poly_draw()
+                event.accept()
+                return
+        if event.key() == Qt.Key.Key_Delete:
+            if self.delete_selected_annotations():
+                self._last_action_label = "Delete selection"
+                self.annotations_removed.emit()
+                self.content_changed.emit()
+                event.accept()
+                return
+        super().keyPressEvent(event)

@@ -6,10 +6,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QActionGroup, QColor
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
-    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -31,54 +30,11 @@ from src.annotation_items import StyleState
 from src.constants import APP_NAME
 from src.flow_layout import FlowLayoutWidget
 from src.timeline_widget import TimelineWidget
-from src.video_canvas import Tool, VideoCanvas
+from src.video_canvas import VideoCanvas
 from src.video_models import VideoAnnotationModel
 from src.video_recorder import OverlaySegment, build_export_command
 from src.video_storage import build_video_project_model, save_video_project
-
-_TOOL_CATEGORIES: list[tuple[str, list[tuple[str, str]]]] = [
-    (
-        "Select",
-        [
-            (Tool.SELECT, "Select"),
-        ],
-    ),
-    (
-        "Shapes",
-        [
-            (Tool.RECT, "Rectangle"),
-            (Tool.ELLIPSE, "Ellipse"),
-            (Tool.TRIANGLE, "Triangle"),
-            (Tool.STAR, "Star"),
-            (Tool.POLYGON, "Polygon"),
-        ],
-    ),
-    (
-        "Lines",
-        [
-            (Tool.LINE, "Line"),
-            (Tool.POLYLINE, "Polyline"),
-            (Tool.ARROW, "Arrow"),
-            (Tool.DOUBLE_ARROW, "Double Arrow"),
-            (Tool.BENT_ARROW, "Bent Arrow"),
-        ],
-    ),
-    (
-        "Marks",
-        [
-            (Tool.CROSS, "Cross"),
-            (Tool.CHECKMARK, "Checkmark"),
-            (Tool.SPOTLIGHT, "Spotlight"),
-        ],
-    ),
-    (
-        "Text",
-        [
-            (Tool.TEXT, "Text"),
-            (Tool.CALLOUT, "Callout"),
-        ],
-    ),
-]
+from src.video_vector_toolbar import VideoVectorToolbar
 
 
 class VideoEditorWindow(QMainWindow):
@@ -126,10 +82,17 @@ class VideoEditorWindow(QMainWindow):
         self.canvas.set_style(self._style)
         self.canvas.set_annotations(self._annotations)
         self.canvas.load_video(video_path)
+
+        self._vector_toolbar = VideoVectorToolbar(self)
+        toolbar_widget = self._vector_toolbar.build()
+
         self.canvas.duration_changed.connect(self._on_duration_changed)
         self.canvas.position_changed.connect(self._on_position_changed)
         self.canvas.annotation_created.connect(self._on_annotation_created)
-        self.canvas.content_changed.connect(self._mark_dirty)
+        self.canvas.annotations_removed.connect(self._on_annotations_removed)
+        self.canvas.tool_changed.connect(self._on_canvas_tool_changed)
+        self.canvas.content_changed.connect(self._on_canvas_content_changed)
+        self.canvas.selection_style_changed.connect(self._vector_toolbar.on_selection_style_changed)
         self.canvas.zoom_changed.connect(self._on_zoom_changed)
 
         self.timeline = TimelineWidget()
@@ -141,19 +104,12 @@ class VideoEditorWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        self._toolbar_host = FlowLayoutWidget(
-            central,
-            horizontal_spacing=4,
-            vertical_spacing=4,
-            margin=4,
-        )
-        layout.addWidget(self._toolbar_host, 0)
+        layout.addWidget(toolbar_widget, 0)
         layout.addWidget(self.canvas, 3)
         layout.addWidget(self.timeline, 1)
         self.setCentralWidget(central)
 
         self._build_menu()
-        self._build_toolbar()
         self.setStatusBar(QStatusBar(self))
         self.statusBar().showMessage("Ready")
 
@@ -177,41 +133,42 @@ class VideoEditorWindow(QMainWindow):
         export_action.triggered.connect(self.export_mp4)
         file_menu.addAction(export_action)
 
-    def _build_toolbar(self) -> None:
+    def style_state(self) -> StyleState:
         """
-        Builds the wrapping drawing-tool, playback, and zoom controls.
+        Returns the active draw style for new video annotations.
 
         Returns:
-            None
+            StyleState: Current style state.
+        """
+
+        return self._style
+
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        """
+        Forwards toolbar button events to the vector toolbar controller.
+
+        Returns:
+            bool: True when the event was consumed.
+        """
+
+        if self._vector_toolbar.handle_event_filter(watched, event):
+            return True
+        return super().eventFilter(watched, event)
+
+    def build_playback_zoom_strip_widgets(self, parent: QWidget) -> list[QWidget]:
+        """
+        Builds Playback and Zoom groups for the shared tool strip.
+
+        Args:
+            parent: Parent flow strip widget.
+
+        Returns:
+            list[QWidget]: Playback and zoom category boxes.
         """
 
         strip_widgets: list[QWidget] = []
-        tool_group = QActionGroup(self)
-        tool_group.setExclusive(True)
-        for category_title, tools in _TOOL_CATEGORIES:
-            category_box = QGroupBox(category_title, self._toolbar_host)
-            category_box.setObjectName("toolCategoryBox")
-            category_box.setSizePolicy(
-                QSizePolicy.Policy.Maximum,
-                QSizePolicy.Policy.Maximum,
-            )
-            category_layout = QHBoxLayout(category_box)
-            category_layout.setContentsMargins(4, 10, 4, 4)
-            category_layout.setSpacing(4)
-            for tool_id, label in tools:
-                action = QAction(label, self)
-                action.setCheckable(True)
-                action.triggered.connect(
-                    lambda _checked=False, t=tool_id: self.canvas.set_tool(t)
-                )
-                tool_group.addAction(action)
-                button = QToolButton(category_box)
-                button.setDefaultAction(action)
-                category_layout.addWidget(button)
-            strip_widgets.append(category_box)
-        tool_group.actions()[0].setChecked(True)
 
-        playback_box = QGroupBox("Playback", self._toolbar_host)
+        playback_box = QGroupBox("Playback", parent)
         playback_box.setObjectName("toolCategoryBox")
         playback_box.setSizePolicy(
             QSizePolicy.Policy.Maximum,
@@ -244,7 +201,7 @@ class VideoEditorWindow(QMainWindow):
         playback_layout.addWidget(sound_button)
         strip_widgets.append(playback_box)
 
-        zoom_box = QGroupBox("Zoom", self._toolbar_host)
+        zoom_box = QGroupBox("Zoom", parent)
         zoom_box.setObjectName("toolCategoryBox")
         zoom_box.setSizePolicy(
             QSizePolicy.Policy.Maximum,
@@ -281,8 +238,31 @@ class VideoEditorWindow(QMainWindow):
         self.zoom_reset_button.clicked.connect(self.canvas.reset_zoom)
         zoom_layout.addWidget(self.zoom_reset_button)
         strip_widgets.append(zoom_box)
+        return strip_widgets
 
-        self._toolbar_host.set_flow_widgets(strip_widgets)
+    def _on_canvas_tool_changed(self, tool_id: str) -> None:
+        """
+        Keeps toolbar visuals aligned with programmatic canvas tool changes.
+
+        Args:
+            tool_id: New canvas tool identifier.
+
+        Returns:
+            None
+        """
+
+        self._vector_toolbar.sync_tool_from_canvas(tool_id)
+
+    def _on_canvas_content_changed(self) -> None:
+        """
+        Applies one-shot tool behavior and marks the tab dirty.
+
+        Returns:
+            None
+        """
+
+        self._vector_toolbar.on_content_changed()
+        self._mark_dirty()
 
     def _on_zoom_changed(self, zoom_factor: float) -> None:
         """
@@ -389,6 +369,17 @@ class VideoEditorWindow(QMainWindow):
 
         Args:
             _annotation: Newly created annotation (already appended in-place).
+
+        Returns:
+            None
+        """
+
+        self.timeline.refresh()
+        self._mark_dirty()
+
+    def _on_annotations_removed(self) -> None:
+        """
+        Refreshes the timeline after one or more annotations were deleted.
 
         Returns:
             None

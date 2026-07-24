@@ -10,7 +10,7 @@ from pathlib import Path
 
 try:
     from PySide6.QtGui import QColor, QPixmap
-    from PySide6.QtWidgets import QGroupBox, QToolButton
+    from PySide6.QtWidgets import QGroupBox, QToolButton, QWidget
 
     from src.editor_window import EditorWindow
     from src.flow_layout import FlowLayoutWidget
@@ -89,15 +89,18 @@ class TestEditorToolbarFlow(unittest.TestCase):
 
     def test_video_editor_toolbar_uses_flow_layout(self) -> None:
         """
-        Ensures the video editor toolbar host wraps controls with FlowLayoutWidget.
+        Ensures the video editor toolbar uses the same flow strip layout as the image editor.
         """
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             source = Path(tmp_dir) / "source.mp4"
             source.write_bytes(b"not-a-real-video")
             editor = VideoEditorWindow(str(source), 320, 240)
-            self.assertIsInstance(editor._toolbar_host, FlowLayoutWidget)
-            category_boxes = editor._toolbar_host.findChildren(QGroupBox, "toolCategoryBox")
+            toolbar = editor.findChild(QWidget, "editorToolbar")
+            self.assertIsNotNone(toolbar)
+            strip = editor.findChild(FlowLayoutWidget, "editorToolStrip")
+            self.assertIsNotNone(strip)
+            category_boxes = editor.findChildren(QGroupBox, "toolCategoryBox")
             self.assertGreaterEqual(len(category_boxes), 4)
             titles = {box.title() for box in category_boxes}
             self.assertIn("Shapes", titles)
@@ -109,6 +112,7 @@ class TestEditorToolbarFlow(unittest.TestCase):
                     [],
                     f"Category '{box.title()}' should not wrap tools internally",
                 )
-            narrow = editor._toolbar_host.heightForWidth(200)
-            wide = editor._toolbar_host.heightForWidth(1600)
+            assert strip is not None
+            narrow = strip.heightForWidth(200)
+            wide = strip.heightForWidth(1600)
             self.assertGreater(narrow, wide)
