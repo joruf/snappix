@@ -137,6 +137,48 @@ class TestVideoEditorExport(unittest.TestCase):
             self.assertFalse(editor.canvas.is_audio_muted())
             self.assertEqual(editor.sound_action.text(), "Sound: On")
 
+    def test_flush_recovery_snapshot_writes_sfpv_project(self) -> None:
+        """
+        Ensures video tabs auto-save annotations and embedded video to recovery files.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            source_video = tmp_root / "source.mp4"
+            source_video.write_bytes(b"fake-video-bytes")
+            recovery_path = tmp_root / "recovery.sfpv"
+
+            editor = VideoEditorWindow(str(source_video), 320, 240)
+            editor.set_recovery_path(str(recovery_path))
+            editor.canvas.duration_ms = MagicMock(return_value=1500)
+            editor._annotations.append(
+                VideoAnnotationModel(
+                    annotation_type="rect",
+                    start_ms=0,
+                    end_ms=1000,
+                    x=1.0,
+                    y=2.0,
+                    width=10.0,
+                    height=12.0,
+                    stroke_rgba=[255, 0, 0, 255],
+                    fill_rgba=[255, 0, 0, 80],
+                    stroke_width=2.0,
+                )
+            )
+
+            with patch(
+                "src.session_recovery.ensure_tab_recovery_path",
+                side_effect=lambda path: path,
+            ):
+                editor.flush_recovery_snapshot()
+
+            self.assertTrue(recovery_path.is_file())
+            from src.video_storage import load_video_project
+
+            model, extracted_video = load_video_project(recovery_path, tmp_root / "extract")
+            self.assertEqual(len(model.annotations), 1)
+            self.assertTrue(extracted_video.is_file())
+
     def test_run_export_raises_on_ffmpeg_failure(self) -> None:
         """
         Ensures a non-zero ffmpeg exit code raises with stderr detail.

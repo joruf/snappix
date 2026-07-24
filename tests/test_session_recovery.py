@@ -74,6 +74,32 @@ class TestSessionRecovery(unittest.TestCase):
             self.assertEqual(loaded[1].title, "Second")
             self.assertEqual(loaded[1].source_path, "/tmp/b.sfp")
 
+    def test_save_and_load_editor_session_preserves_video_kind(self) -> None:
+        """
+        Ensures video tabs are tagged in the session manifest and restored with kind=video.
+        """
+
+        from src.constants import VIDEO_PROJECT_FILE_EXTENSION
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            video_path = str(Path(temp_dir) / f"tab-video{VIDEO_PROJECT_FILE_EXTENSION}")
+            Path(video_path).write_text("video", encoding="utf-8")
+            tabs = [
+                EditorSessionTab(
+                    title="Recording",
+                    recovery_path=video_path,
+                    source_path="",
+                    kind="video",
+                )
+            ]
+
+            with patch("src.session_recovery._session_root_dir", return_value=Path(temp_dir)):
+                save_editor_session(tabs)
+                loaded = load_editor_session()
+
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0].kind, "video")
+
     def test_save_editor_session_keeps_previous_manifest_when_no_tabs_remain(self) -> None:
         """
         Ensures an empty tab list does not overwrite the last saved session manifest.

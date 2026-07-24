@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 try:
-    from PySide6.QtCore import QRect
+    from PySide6.QtCore import QPoint, QRect
 
     from src.video_recorder import (
         OverlaySegment,
@@ -200,6 +200,7 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         mock_process = MagicMock()
         mock_process.pid = 4242
         mock_process.poll.side_effect = poll_return_values or [0]
+        mock_process.wait.return_value = 0
         with patch("src.video_recorder.has_ffmpeg", return_value=True), patch(
             "subprocess.Popen", return_value=mock_process
         ):
@@ -207,6 +208,9 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
                 QRect(0, 0, 640, 480), Path("/tmp/rec.mp4"), record_microphone=False
             )
         self.assertTrue(started)
+        segment_path = recorder._segment_paths[0]  # pylint: disable=protected-access
+        segment_path.parent.mkdir(parents=True, exist_ok=True)
+        segment_path.write_bytes(b"fake-video")
         return recorder, mock_process
 
     def test_pause_sends_sigstop(self) -> None:
@@ -271,6 +275,21 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         with patch("os.kill"):
             recorder.stop()
         self.assertEqual(received, ["/tmp/rec.mp4"])
+
+    def test_relocate_starts_new_segment_at_new_position(self) -> None:
+        """
+        Ensures relocate() finalizes the current segment and starts another one.
+        """
+
+        recorder, mock_process = self._make_recorder_with_mock_process()
+        with patch("subprocess.Popen", return_value=mock_process) as popen_mock:
+            moved = recorder.relocate(QRect(200, 120, 640, 480))
+        self.assertTrue(moved)
+        self.assertNotEqual(recorder.clamped_rect.topLeft(), QPoint(0, 0))
+        self.assertEqual(recorder.clamped_rect.size(), QRect(0, 0, 640, 480).size())
+        self.assertEqual(len(recorder._segment_paths), 2)  # pylint: disable=protected-access
+        self.assertEqual(popen_mock.call_count, 1)
+        mock_process.wait.assert_called()
 
     def test_start_without_ffmpeg_emits_failed(self) -> None:
         """

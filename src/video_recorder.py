@@ -7,11 +7,12 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
 
-from PySide6.QtCore import QObject, QRect, QTimer, Signal
+from PySide6.QtCore import QObject, QRect, Signal
 
 
 class RecordingState:
@@ -49,6 +50,67 @@ def clamp_region_to_even_dimensions(rect: QRect) -> QRect:
     width = rect.width() - (rect.width() % 2)
     height = rect.height() - (rect.height() % 2)
     return QRect(rect.x(), rect.y(), max(2, width), max(2, height))
+
+
+def clamp_rect_to_virtual_desktop(rect: QRect) -> QRect:
+    """
+    Keeps one rectangle fully inside the combined virtual desktop bounds.
+
+    Args:
+        rect: Requested region in absolute screen coordinates.
+
+    Returns:
+        QRect: Clamped region with the same size as ``rect``.
+    """
+
+    try:
+        from PySide6.QtGui import QGuiApplication
+    except ModuleNotFoundError:
+        return rect
+
+    screens = QGuiApplication.screens()
+    if not screens:
+        return rect
+
+    virtual = QRect()
+    for screen in screens:
+        virtual = virtual.united(screen.geometry())
+
+    max_x = virtual.x() + max(0, virtual.width() - rect.width())
+    max_y = virtual.y() + max(0, virtual.height() - rect.height())
+    return QRect(
+        max(virtual.x(), min(rect.x(), max_x)),
+        max(virtual.y(), min(rect.y(), max_y)),
+        rect.width(),
+        rect.height(),
+    )
+
+
+def build_concat_command(list_path: Path, output_path: Path) -> list[str]:
+    """
+    Builds an ffmpeg concat command for one list of segment files.
+
+    Args:
+        list_path: Text file listing segment paths for the concat demuxer.
+        output_path: Final merged MP4 output path.
+
+    Returns:
+        list[str]: ffmpeg argv-style command.
+    """
+
+    return [
+        "ffmpeg",
+        "-y",
+        "-f",
+        "concat",
+        "-safe",
+        "0",
+        "-i",
+        str(list_path),
+        "-c",
+        "copy",
+        str(output_path),
+    ]
 
 
 def build_record_command(
@@ -213,7 +275,11 @@ class VideoRecorder(QObject):
 
         super().__init__()
         self._process: subprocess.Popen | None = None
-        self._output_path: Path | None = None
+        self._final_output_path: Path | None = None
+        self._segments_dir: Path | None = None
+        self._segment_paths: list[Path] = []
+        self._record_microphone = False
+        self._framerate = 30
         self._state = RecordingState.IDLE
         self._clamped_rect: QRect | None = None
 
@@ -268,12 +334,51 @@ class VideoRecorder(QObject):
 
         clamped_rect = clamp_region_to_even_dimensions(rect)
         self._clamped_rect = clamped_rect
-        output_path.parent.mkdir(parents=True, exist_ok=True)
+        self._final_output_path = output_path
+        self._segments_dir = output_path.parent / f".{output_path.stem}_segments"
+        self._segments_dir.mkdir(parents=True, exist_ok=True)
+        self._segment_paths = []
+        self._record_microphone = record_microphone
+        self._framerate = framerate
+        if not self._launch_segment(clamped_rect):
+            self._cleanup_segments_dir()
+            self._final_output_path = None
+            self._segments_dir = None
+            self._clamped_rect = None
+            return False
+
+        self._state = RecordingState.RECORDING
+        self.state_changed.emit(self._state)
+        return True
+
+    def _segment_path(self) -> Path:
+        """
+        Returns the path for the next recording segment file.
+
+        Returns:
+            Path: Segment MP4 path inside the temporary segments directory.
+        """
+
+        assert self._segments_dir is not None
+        return self._segments_dir / f"part_{len(self._segment_paths):04d}.mp4"
+
+    def _launch_segment(self, rect: QRect) -> bool:
+        """
+        Starts ffmpeg recording one screen region into a new segment file.
+
+        Args:
+            rect: Even-dimension capture region.
+
+        Returns:
+            bool: True when ffmpeg launched successfully.
+        """
+
+        segment_path = self._segment_path()
         command = build_record_command(
-            clamped_rect,
-            output_path,
-            record_microphone=record_microphone,
-            framerate=framerate,
+            rect,
+            segment_path,
+            record_microphone=self._record_microphone,
+            framerate=self._framerate,
         )
         try:
             self._process = subprocess.Popen(
@@ -286,9 +391,147 @@ class VideoRecorder(QObject):
             self.failed.emit(f"Could not start ffmpeg: {exc}")
             return False
 
-        self._output_path = output_path
+        self._segment_paths.append(segment_path)
+        return True
+
+    def _terminate_current_process_blocking(self) -> None:
+        """
+        Stops the active ffmpeg segment and waits for it to finalize the file.
+
+        Returns:
+            None
+        """
+
+        if self._process is None:
+            return
+
+        process = self._process
+        if self._state == RecordingState.PAUSED:
+            try:
+                os.kill(process.pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass
+
+        try:
+            process.send_signal(signal.SIGINT)
+        except ProcessLookupError:
+            self._process = None
+            return
+
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+        self._process = None
+
+    def _cleanup_segments_dir(self) -> None:
+        """
+        Deletes temporary segment files created for one recording session.
+
+        Returns:
+            None
+        """
+
+        if self._segments_dir is None or not self._segments_dir.exists():
+            return
+        for segment_path in self._segment_paths:
+            if segment_path.exists():
+                segment_path.unlink(missing_ok=True)
+        for leftover in self._segments_dir.glob("*"):
+            leftover.unlink(missing_ok=True)
+        self._segments_dir.rmdir()
+
+    def _assemble_segments(self, output_path: Path) -> None:
+        """
+        Merges recorded segment files into the final output MP4.
+
+        Args:
+            output_path: Destination recording path.
+
+        Returns:
+            None
+        """
+
+        segments = [
+            segment_path
+            for segment_path in self._segment_paths
+            if segment_path.is_file() and segment_path.stat().st_size > 0
+        ]
+        if not segments:
+            raise RuntimeError("Recording produced no video data.")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if len(segments) == 1:
+            segments[0].replace(output_path)
+            return
+
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            suffix=".txt",
+            delete=False,
+        ) as list_handle:
+            for segment_path in segments:
+                list_handle.write(f"file '{segment_path.as_posix()}'\n")
+            list_path = Path(list_handle.name)
+
+        try:
+            result = subprocess.run(
+                build_concat_command(list_path, output_path),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        finally:
+            list_path.unlink(missing_ok=True)
+
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            raise RuntimeError(detail or "Could not merge recording segments.")
+
+    def relocate(self, rect: QRect) -> bool:
+        """
+        Moves the active capture region while keeping its recorded size.
+
+        Finalizes the current ffmpeg segment and starts a new one at the new
+        screen coordinates.
+
+        Args:
+            rect: Requested top-left position in absolute screen coordinates.
+
+        Returns:
+            bool: True when the recorder switched to the new region.
+        """
+
+        if self._state == RecordingState.IDLE or self._clamped_rect is None:
+            return False
+
+        preserved_size = self._clamped_rect.size()
+        clamped_rect = clamp_region_to_even_dimensions(
+            clamp_rect_to_virtual_desktop(
+                QRect(rect.x(), rect.y(), preserved_size.width(), preserved_size.height())
+            )
+        )
+        if clamped_rect == self._clamped_rect and self._process is not None:
+            return True
+
+        was_paused = self._state == RecordingState.PAUSED
+        self._terminate_current_process_blocking()
+        self._clamped_rect = clamped_rect
+        if not self._launch_segment(clamped_rect):
+            self.failed.emit("Could not move the recording region.")
+            return False
+
         self._state = RecordingState.RECORDING
         self.state_changed.emit(self._state)
+        if was_paused:
+            self.pause()
         return True
 
     def pause(self) -> None:
@@ -329,70 +572,37 @@ class VideoRecorder(QObject):
         """
         Stops the active recording and finalizes the output file.
 
-        Emits ``finished`` with the output path once ffmpeg exits cleanly, or
-        ``failed`` if the process could not be found/terminated.
+        Emits ``finished`` with the output path once segments are merged, or
+        ``failed`` if the recording could not be finalized.
 
         Returns:
             None
         """
 
-        if self._process is None:
+        if self._process is None and not self._segment_paths:
             return
 
-        process = self._process
-        output_path = self._output_path
-
-        if self._state == RecordingState.PAUSED:
-            # A stopped process holds signals pending until continued, so resume
-            # first or the following SIGINT would only be delivered on wake-up.
-            try:
-                os.kill(process.pid, signal.SIGCONT)
-            except ProcessLookupError:
-                pass
-
-        try:
-            process.send_signal(signal.SIGINT)
-        except ProcessLookupError:
-            pass
-
-        self._process = None
-        self._output_path = None
+        output_path = self._final_output_path
+        self._terminate_current_process_blocking()
         self._state = RecordingState.IDLE
         self.state_changed.emit(self._state)
 
-        self._poll_for_exit(process, output_path, elapsed_ms=0)
-
-    def _poll_for_exit(
-        self,
-        process: subprocess.Popen,
-        output_path: Path | None,
-        *,
-        elapsed_ms: int,
-    ) -> None:
-        """
-        Polls one ffmpeg process for exit without blocking the Qt event loop.
-
-        Args:
-            process: ffmpeg subprocess to await.
-            output_path: Output file path to report once the process exits.
-            elapsed_ms: Milliseconds waited so far, used to escalate to
-                terminate()/kill() if ffmpeg does not exit after SIGINT.
-
-        Returns:
-            None
-        """
-
-        return_code = process.poll()
-        if return_code is None:
-            if elapsed_ms >= 10_000:
-                process.kill()
-            elif elapsed_ms >= 5_000:
-                process.terminate()
-            QTimer.singleShot(
-                100,
-                lambda: self._poll_for_exit(process, output_path, elapsed_ms=elapsed_ms + 100),
-            )
+        if output_path is None:
             return
 
-        if output_path is not None:
-            self.finished.emit(str(output_path))
+        try:
+            self._assemble_segments(output_path)
+        except RuntimeError as exc:
+            self.failed.emit(str(exc))
+            self._cleanup_segments_dir()
+            self._final_output_path = None
+            self._segments_dir = None
+            self._segment_paths = []
+            self._clamped_rect = None
+            return
+
+        self._cleanup_segments_dir()
+        self._final_output_path = None
+        self._segments_dir = None
+        self._segment_paths = []
+        self.finished.emit(str(output_path))

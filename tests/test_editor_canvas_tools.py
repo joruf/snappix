@@ -317,3 +317,25 @@ class TestEditorCanvasTools(unittest.TestCase):
             if isinstance(candidate, StepBadgeItem)
         )
         self.assertEqual(step_numbers, [1, 2, 3, 4])
+
+    def test_poly_preview_includes_cursor_before_next_click(self) -> None:
+        """
+        Ensures multi-point tools show a rubber-band line to the cursor while drawing.
+        """
+
+        from src.shape_items import PolyPathItem
+
+        canvas = EditorCanvas()
+        canvas.set_tool(Tool.POLYGON)
+        canvas._poly_draw_points = [QPointF(10.0, 20.0)]  # pylint: disable=protected-access
+        canvas._poly_preview_item = PolyPathItem(Tool.POLYGON, canvas._poly_draw_points)  # pylint: disable=protected-access
+
+        canvas._update_poly_preview(QPointF(80.0, 90.0))  # pylint: disable=protected-access
+
+        preview = canvas._poly_preview_item  # pylint: disable=protected-access
+        self.assertEqual(preview.points(), [QPointF(10.0, 20.0), QPointF(80.0, 90.0)])
+        self.assertEqual(canvas._poly_draw_points, [QPointF(10.0, 20.0)])  # pylint: disable=protected-access
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
-from src.constants import APP_FILE_EXTENSION
+from src.constants import APP_FILE_EXTENSION, VIDEO_PROJECT_FILE_EXTENSION
 
 
 @dataclass(slots=True)
@@ -24,11 +24,13 @@ class EditorSessionTab:
         title: Tab title shown in the editor host.
         recovery_path: Auto-save project file for the tab.
         source_path: Optional user project path when the tab was saved before.
+        kind: Tab content type, ``image`` or ``video``.
     """
 
     title: str
     recovery_path: str
     source_path: str = ""
+    kind: str = "image"
 
 
 def _session_root_dir() -> Path:
@@ -77,6 +79,35 @@ def create_tab_recovery_path() -> str:
     return str(session_dir / f"tab-{uuid4().hex}{APP_FILE_EXTENSION}")
 
 
+def create_video_tab_recovery_path() -> str:
+    """
+    Allocates one unique recovery project path for a new video editor tab.
+
+    Returns:
+        str: Writable recovery video project file path.
+    """
+
+    session_dir = _session_root_dir()
+    session_dir.mkdir(parents=True, exist_ok=True)
+    return str(session_dir / f"tab-{uuid4().hex}{VIDEO_PROJECT_FILE_EXTENSION}")
+
+
+def tab_kind_from_recovery_path(recovery_path: str) -> str:
+    """
+    Infers the editor tab kind from one recovery file path.
+
+    Args:
+        recovery_path: Recovery project file path.
+
+    Returns:
+        str: ``video`` for ``.sfpv`` files, otherwise ``image``.
+    """
+
+    if recovery_path.strip().lower().endswith(VIDEO_PROJECT_FILE_EXTENSION):
+        return "video"
+    return "image"
+
+
 def ensure_tab_recovery_path(existing_path: str) -> str:
     """
     Ensures one tab recovery path remains writable.
@@ -96,13 +127,15 @@ def ensure_tab_recovery_path(existing_path: str) -> str:
         return create_tab_recovery_path()
 
     target = Path(normalized)
+    suffix = target.suffix.lower()
+    recreate = create_video_tab_recovery_path if suffix == VIDEO_PROJECT_FILE_EXTENSION else create_tab_recovery_path
     try:
         target.parent.mkdir(parents=True, exist_ok=True)
     except OSError:
-        return create_tab_recovery_path()
+        return recreate()
 
     if target.parent != _session_root_dir():
-        return create_tab_recovery_path()
+        return recreate()
     return str(target)
 
 
@@ -170,6 +203,7 @@ def save_editor_session(tabs: list[EditorSessionTab]) -> None:
                 "title": tab.title,
                 "recovery_path": tab.recovery_path,
                 "source_path": tab.source_path,
+                "kind": tab.kind,
             }
             for tab in tabs
             if tab.recovery_path.strip()
@@ -216,6 +250,8 @@ def load_editor_session() -> list[EditorSessionTab]:
                 title=str(entry.get("title", "Recovered Session")).strip() or "Recovered Session",
                 recovery_path=recovery_path,
                 source_path=str(entry.get("source_path", "")).strip(),
+                kind=str(entry.get("kind", tab_kind_from_recovery_path(recovery_path))).strip()
+                or tab_kind_from_recovery_path(recovery_path),
             )
         )
     return tabs

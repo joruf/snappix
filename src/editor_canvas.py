@@ -1729,6 +1729,11 @@ class EditorCanvas(QGraphicsView):
             current = self.mapToScene(event.position().toPoint())
             self._update_path_preview(current)
             return
+        if self._tool in POLY_DRAW_TOOLS and self._poly_draw_points:
+            current = self.mapToScene(event.position().toPoint())
+            self._update_poly_preview(current)
+            event.accept()
+            return
         if self._tool in {Tool.BRUSH, Tool.ERASER} and self._brush_painting and self._brush_last_pos is not None:
             if not (event.buttons() & Qt.MouseButton.LeftButton):
                 # Button state lost without a clean release — finish safely.
@@ -3131,6 +3136,22 @@ class EditorCanvas(QGraphicsView):
         self._poly_draw_points.append(scene_pos)
         if self._poly_preview_item is not None:
             self._poly_preview_item.set_points(self._poly_draw_points)
+
+    def _update_poly_preview(self, cursor_scene_pos: QPointF) -> None:
+        """
+        Shows a rubber-band segment from the last committed vertex to the cursor.
+
+        Args:
+            cursor_scene_pos: Current cursor position in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        if not self._poly_draw_points or self._poly_preview_item is None:
+            return
+        preview_points = list(self._poly_draw_points) + [cursor_scene_pos]
+        self._poly_preview_item.set_points(preview_points)
 
     def _cancel_poly_draw(self) -> None:
         """

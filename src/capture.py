@@ -11,10 +11,12 @@ from dataclasses import dataclass
 from shutil import which
 from typing import Callable
 
-from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QElapsedTimer, QTimer, Signal
 from PySide6.QtGui import (
     QColor,
     QCursor,
+    QFont,
+    QFontMetrics,
     QGuiApplication,
     QIcon,
     QLinearGradient,
@@ -23,6 +25,7 @@ from PySide6.QtGui import (
     QPainterPath,
     QPen,
     QPixmap,
+    QRegion,
     QShortcut,
     QKeySequence,
 )
@@ -696,8 +699,57 @@ class RegionCaptureOverlay(QWidget):
 
 RECORDING_BORDER_THICKNESS = 4
 RECORDING_BORDER_BLINK_MS = 600
+RECORDING_TIMER_BAND_HEIGHT = 32
 RECORDING_BORDER_ACTIVE_COLOR = QColor(231, 76, 60, 255)
 RECORDING_BORDER_PAUSED_COLOR = QColor(243, 156, 18, 255)
+
+
+def clamp_capture_rect_to_desktop(rect: QRect) -> QRect:
+    """
+    Keeps one capture rectangle fully inside the combined virtual desktop bounds.
+
+    Args:
+        rect: Requested capture region in absolute screen coordinates.
+
+    Returns:
+        QRect: Clamped region with the same size as ``rect``.
+    """
+
+    screens = QGuiApplication.screens()
+    if not screens:
+        return rect
+
+    virtual = QRect()
+    for screen in screens:
+        virtual = virtual.united(screen.geometry())
+
+    max_x = virtual.x() + max(0, virtual.width() - rect.width())
+    max_y = virtual.y() + max(0, virtual.height() - rect.height())
+    return QRect(
+        max(virtual.x(), min(rect.x(), max_x)),
+        max(virtual.y(), min(rect.y(), max_y)),
+        rect.width(),
+        rect.height(),
+    )
+
+
+def recording_overlay_geometry(capture_rect: QRect) -> QRect:
+    """
+    Returns the outer overlay geometry surrounding one capture rectangle.
+
+    Args:
+        capture_rect: Recorded region in absolute virtual-desktop coordinates.
+
+    Returns:
+        QRect: Overlay geometry including border margin and timer band.
+    """
+
+    return capture_rect.adjusted(
+        -RECORDING_BORDER_THICKNESS,
+        -RECORDING_BORDER_THICKNESS - RECORDING_TIMER_BAND_HEIGHT,
+        RECORDING_BORDER_THICKNESS,
+        RECORDING_BORDER_THICKNESS,
+    )
 
 
 class RecordingBorderOverlay(QWidget):
@@ -709,6 +761,8 @@ class RecordingBorderOverlay(QWidget):
     capture itself -- it is purely a visual indicator for the user.
     """
 
+    region_moved = Signal(QRect)
+
     def __init__(self, capture_rect: QRect) -> None:
         """
         Initializes the border overlay around one screen-recording region.
@@ -718,26 +772,111 @@ class RecordingBorderOverlay(QWidget):
         """
 
         super().__init__()
+        self._capture_rect = QRect(capture_rect)
         self._paused = False
         self._blink_on = True
+        self._accumulated_ms = 0
+        self._recording_active = True
+        self._session_timer = QElapsedTimer()
+        self._session_timer.start()
+        self._dragging = False
+        self._drag_start_global = QPoint()
+        self._drag_capture_origin = QPoint()
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowTransparentForInput
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
-        outer_rect = capture_rect.adjusted(
-            -RECORDING_BORDER_THICKNESS,
-            -RECORDING_BORDER_THICKNESS,
-            RECORDING_BORDER_THICKNESS,
-            RECORDING_BORDER_THICKNESS,
-        )
-        self.setGeometry(outer_rect)
+        self.setMouseTracking(True)
+        self._timer_band_height = RECORDING_TIMER_BAND_HEIGHT
+        self.set_capture_rect(self._capture_rect)
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._on_blink_tick)
         self._timer.start(RECORDING_BORDER_BLINK_MS)
+        self._display_timer = QTimer(self)
+        self._display_timer.timeout.connect(self.update)
+        self._display_timer.start(250)
+
+    def capture_rect(self) -> QRect:
+        """
+        Returns the current recorded region in screen coordinates.
+
+        Returns:
+            QRect: Active capture rectangle.
+        """
+
+        return QRect(self._capture_rect)
+
+    def set_capture_rect(self, capture_rect: QRect) -> None:
+        """
+        Moves the overlay to surround a new capture rectangle.
+
+        Args:
+            capture_rect: New recorded region in absolute screen coordinates.
+
+        Returns:
+            None
+        """
+
+        self._capture_rect = clamp_capture_rect_to_desktop(QRect(capture_rect))
+        self.setGeometry(recording_overlay_geometry(self._capture_rect))
+        self._update_input_mask()
+        self.update()
+
+    def _inner_capture_rect(self) -> QRect:
+        """
+        Returns the pass-through hole matching the recorded pixels.
+
+        Returns:
+            QRect: Inner rectangle in widget coordinates.
+        """
+
+        return QRect(
+            RECORDING_BORDER_THICKNESS,
+            self._timer_band_height + RECORDING_BORDER_THICKNESS,
+            self._capture_rect.width(),
+            self._capture_rect.height(),
+        )
+
+    def _update_input_mask(self) -> None:
+        """
+        Limits mouse input to the border frame and timer band.
+
+        Returns:
+            None
+        """
+
+        outer = QRegion(0, 0, self.width(), self.height())
+        inner = QRegion(self._inner_capture_rect())
+        self.setMask(outer.subtracted(inner))
+
+    def _current_elapsed_ms(self) -> int:
+        """
+        Returns elapsed recording time excluding paused intervals.
+
+        Returns:
+            int: Elapsed time in milliseconds.
+        """
+
+        total = self._accumulated_ms
+        if self._recording_active:
+            total += self._session_timer.elapsed()
+        return total
+
+    def _format_elapsed(self) -> str:
+        """
+        Formats the elapsed recording time as minutes and seconds.
+
+        Returns:
+            str: Time string in M:SS format.
+        """
+
+        total_seconds = self._current_elapsed_ms() // 1000
+        minutes = total_seconds // 60
+        seconds = total_seconds % 60
+        return f"{minutes}:{seconds:02d}"
 
     def set_paused(self, paused: bool) -> None:
         """
@@ -750,6 +889,13 @@ class RecordingBorderOverlay(QWidget):
             None
         """
 
+        if paused and not self._paused:
+            if self._recording_active:
+                self._accumulated_ms += self._session_timer.elapsed()
+                self._recording_active = False
+        elif not paused and self._paused:
+            self._session_timer.restart()
+            self._recording_active = True
         self._paused = paused
         self._blink_on = True
         self.update()
@@ -767,6 +913,31 @@ class RecordingBorderOverlay(QWidget):
         self._blink_on = not self._blink_on
         self.update()
 
+    def _timer_pill_rect(self) -> QRectF:
+        """
+        Returns the elapsed-time label rectangle above the recording border.
+
+        Returns:
+            QRectF: Timer pill bounds in widget coordinates.
+        """
+
+        elapsed_text = self._format_elapsed()
+        font = QFont()
+        font.setPointSize(11)
+        font.setBold(True)
+        metrics = QFontMetrics(font)
+        text_width = metrics.horizontalAdvance(elapsed_text)
+        text_height = metrics.height()
+        inner_left = RECORDING_BORDER_THICKNESS
+        inner_width = self.width() - 2 * RECORDING_BORDER_THICKNESS
+        pill_pad_x = 8
+        pill_pad_y = 3
+        pill_width = text_width + 2 * pill_pad_x
+        pill_height = text_height + 2 * pill_pad_y
+        pill_x = inner_left + (inner_width - pill_width) / 2.0
+        pill_y = max(2.0, (self._timer_band_height - pill_height) / 2.0)
+        return QRectF(pill_x, pill_y, pill_width, pill_height)
+
     def paintEvent(self, _event) -> None:
         """
         Paints the border ring in the margin surrounding the recorded region.
@@ -775,23 +946,100 @@ class RecordingBorderOverlay(QWidget):
             None
         """
 
-        if not self._paused and not self._blink_on:
-            return
-
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        color = RECORDING_BORDER_PAUSED_COLOR if self._paused else RECORDING_BORDER_ACTIVE_COLOR
-        painter.setPen(QPen(color, RECORDING_BORDER_THICKNESS))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        half = RECORDING_BORDER_THICKNESS / 2.0
-        painter.drawRect(
-            QRectF(
-                half,
-                half,
-                self.width() - RECORDING_BORDER_THICKNESS,
-                self.height() - RECORDING_BORDER_THICKNESS,
+
+        if self._paused or self._blink_on:
+            color = RECORDING_BORDER_PAUSED_COLOR if self._paused else RECORDING_BORDER_ACTIVE_COLOR
+            painter.setPen(QPen(color, RECORDING_BORDER_THICKNESS))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            half = RECORDING_BORDER_THICKNESS / 2.0
+            border_top = float(self._timer_band_height) + half
+            painter.drawRect(
+                QRectF(
+                    half,
+                    border_top,
+                    self.width() - RECORDING_BORDER_THICKNESS,
+                    self.height() - self._timer_band_height - RECORDING_BORDER_THICKNESS,
+                )
             )
+
+        elapsed_text = self._format_elapsed()
+        font = QFont()
+        font.setPointSize(11)
+        font.setBold(True)
+        painter.setFont(font)
+        metrics = painter.fontMetrics()
+        pill_rect = self._timer_pill_rect()
+        pill_pad_x = 8
+        pill_pad_y = 3
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(0, 0, 0, 170))
+        painter.drawRoundedRect(pill_rect, 4, 4)
+        text_color = RECORDING_BORDER_PAUSED_COLOR if self._paused else QColor(255, 255, 255)
+        painter.setPen(text_color)
+        painter.drawText(
+            int(pill_rect.x() + pill_pad_x),
+            int(pill_rect.y() + pill_pad_y + metrics.ascent()),
+            elapsed_text,
         )
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """
+        Starts dragging the capture region from the border frame.
+
+        Args:
+            event: Mouse press event.
+
+        Returns:
+            None
+        """
+
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._dragging = True
+        self._drag_start_global = event.globalPosition().toPoint()
+        self._drag_capture_origin = self._capture_rect.topLeft()
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+        event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """
+        Updates the overlay position while dragging the border frame.
+
+        Args:
+            event: Mouse move event.
+
+        Returns:
+            None
+        """
+
+        if self._dragging:
+            delta = event.globalPosition().toPoint() - self._drag_start_global
+            moved_rect = QRect(self._drag_capture_origin + delta, self._capture_rect.size())
+            self.set_capture_rect(moved_rect)
+            event.accept()
+            return
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """
+        Commits one capture-region move after a border drag.
+
+        Args:
+            event: Mouse release event.
+
+        Returns:
+            None
+        """
+
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self._dragging:
+            self._dragging = False
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
+            self.region_moved.emit(self.capture_rect())
+            event.accept()
 
     def closeEvent(self, event) -> None:
         """
@@ -805,6 +1053,7 @@ class RecordingBorderOverlay(QWidget):
         """
 
         self._timer.stop()
+        self._display_timer.stop()
         super().closeEvent(event)
 
 

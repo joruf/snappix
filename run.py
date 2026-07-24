@@ -872,6 +872,7 @@ class AppController:
         self._recording_rect = self._video_recorder.clamped_rect
         self._recording_in_progress = True
         self._recording_border_overlay = RecordingBorderOverlay(self._recording_rect)
+        self._recording_border_overlay.region_moved.connect(self._on_recording_region_moved)
         self._recording_border_overlay.show()
         if self._tray_available and self.tray_icon.isVisible():
             self.tray_icon.showMessage(
@@ -895,6 +896,27 @@ class AppController:
             self._video_recorder.resume()
         else:
             self._video_recorder.pause()
+
+    def _on_recording_region_moved(self, rect) -> None:
+        """
+        Repositions the active ffmpeg capture region after a border drag.
+
+        Args:
+            rect: Requested capture rectangle in absolute screen coordinates.
+
+        Returns:
+            None
+        """
+
+        previous_rect = self._recording_rect
+        if not self._video_recorder.relocate(rect):
+            if self._recording_border_overlay is not None and previous_rect is not None:
+                self._recording_border_overlay.set_capture_rect(previous_rect)
+            return
+
+        self._recording_rect = self._video_recorder.clamped_rect
+        if self._recording_border_overlay is not None and self._recording_rect is not None:
+            self._recording_border_overlay.set_capture_rect(self._recording_rect)
 
     def stop_video_recording(self) -> None:
         """
@@ -989,7 +1011,17 @@ class AppController:
         height = rect.height() if rect is not None else 0
         self._create_video_editor_tab(output_path, width, height, "Recording")
 
-    def _create_video_editor_tab(self, video_path: str, width: int, height: int, title: str):
+    def _create_video_editor_tab(
+        self,
+        video_path: str,
+        width: int,
+        height: int,
+        title: str,
+        *,
+        recovery_path: str = "",
+        source_path: str = "",
+        persist_session: bool = True,
+    ):
         """
         Creates one video editor tab for a recorded video and focuses the editor host.
 
@@ -998,14 +1030,19 @@ class AppController:
             width: Video width in pixels.
             height: Video height in pixels.
             title: Tab title text.
+            recovery_path: Optional existing recovery project path.
+            source_path: Optional user project path for the tab.
+            persist_session: When True, flush and persist the editor session.
 
         Returns:
             VideoEditorWindow: Created video editor instance.
         """
 
+        from src.session_recovery import create_video_tab_recovery_path
         from src.video_editor_window import VideoEditorWindow
 
         editor = VideoEditorWindow(video_path, width, height)
+        editor.set_recovery_path(recovery_path or create_video_tab_recovery_path())
         editor.setWindowIcon(self._editor_icon)
         editor.set_minimize_to_tray_on_close(False)
         editor.setParent(self.editor_tabs)
@@ -1015,7 +1052,11 @@ class AppController:
         editor.show()
         editor.destroyed.connect(lambda *_: self._on_video_editor_closed(editor))
         self.video_editors.append(editor)
+        if source_path:
+            editor._current_project_path = source_path
         self._show_editor_host()
+        if persist_session:
+            self._save_editor_session()
         return editor
 
     def _on_video_editor_closed(self, editor) -> None:
@@ -1033,6 +1074,7 @@ class AppController:
             return
         if editor in self.video_editors:
             self.video_editors.remove(editor)
+        self._save_editor_session()
         try:
             tab_index = self.editor_tabs.indexOf(editor)
             if tab_index >= 0:
@@ -1629,16 +1671,12 @@ class AppController:
             list: Serializable editor session tabs.
         """
 
-        from src.session_recovery import EditorSessionTab, ensure_tab_recovery_path
+        from src.session_recovery import EditorSessionTab, ensure_tab_recovery_path, tab_kind_from_recovery_path
 
         tabs: list[EditorSessionTab] = []
         for tab_index in range(self.editor_tabs.count()):
             editor = self.editor_tabs.widget(tab_index)
             if editor is None:
-                continue
-            if editor in self.video_editors:
-                # Video editor tabs intentionally don't participate in
-                # crash-recovery/session-restore (see _create_video_editor_tab).
                 continue
             try:
                 self._flush_editor_tab_recovery(editor)
@@ -1646,7 +1684,8 @@ class AppController:
                 recovery_path = ensure_tab_recovery_path(editor.recovery_path())
                 editor.set_recovery_path(recovery_path)
                 source_path = getattr(editor, "_current_project_path", "")
-            except RuntimeError:
+                kind = "video" if editor in self.video_editors else "image"
+            except (RuntimeError, AttributeError):
                 continue
             if not recovery_path:
                 continue
@@ -1655,6 +1694,7 @@ class AppController:
                     title=title,
                     recovery_path=recovery_path,
                     source_path=str(source_path or ""),
+                    kind=kind or tab_kind_from_recovery_path(recovery_path),
                 )
             )
         return tabs
@@ -1685,6 +1725,7 @@ class AppController:
             load_legacy_recovery_tab,
         )
         from src.storage import base64_png_to_pixmap, load_project
+        from src.video_storage import load_video_project
 
         if not EditorWindow.has_recovery_snapshot():
             return
@@ -1700,6 +1741,34 @@ class AppController:
 
         restored_count = 0
         for tab_entry in session_tabs:
+            if tab_entry.kind == "video":
+                try:
+                    extract_root = Path(tab_entry.recovery_path).parent / "video-assets"
+                    project_model, video_path = load_video_project(
+                        tab_entry.recovery_path,
+                        extract_root / Path(tab_entry.recovery_path).stem,
+                    )
+                except Exception as exc:
+                    self._QMessageBox.warning(
+                        self.capture_panel,
+                        "Recovery",
+                        f"Video recovery snapshot could not be loaded:\n{exc}",
+                    )
+                    continue
+
+                editor = self._create_video_editor_tab(
+                    str(video_path),
+                    project_model.video_width,
+                    project_model.video_height,
+                    tab_entry.title,
+                    recovery_path=tab_entry.recovery_path,
+                    source_path=tab_entry.source_path,
+                    persist_session=False,
+                )
+                editor.load_video_project_model(project_model, tab_entry.source_path)
+                restored_count += 1
+                continue
+
             try:
                 recovered_model = load_project(tab_entry.recovery_path)
             except Exception as exc:
@@ -2058,6 +2127,7 @@ class AppController:
             return
         if editor in self.editors:
             self.editors.remove(editor)
+        self._save_editor_session()
         try:
             tab_index = self.editor_tabs.indexOf(editor)
             if tab_index >= 0:
@@ -2133,7 +2203,10 @@ class AppController:
         self.editor_tabs.removeTab(index)
         if tab_widget in self.editors:
             self.editors.remove(tab_widget)
+        if tab_widget in self.video_editors:
+            self.video_editors.remove(tab_widget)
         tab_widget.deleteLater()
+        self._save_editor_session()
         self._handle_empty_editor_tabs()
 
     def _close_current_editor_tab(self) -> None:

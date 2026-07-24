@@ -31,9 +31,13 @@ from src.constants import APP_NAME
 from src.flow_layout import FlowLayoutWidget
 from src.timeline_widget import TimelineWidget
 from src.video_canvas import VideoCanvas
-from src.video_models import VideoAnnotationModel
+from src.video_models import VideoAnnotationModel, VideoProjectModel
 from src.video_recorder import OverlaySegment, build_export_command
-from src.video_storage import build_video_project_model, save_video_project
+from src.video_storage import (
+    build_video_project_model,
+    load_video_project,
+    save_video_project,
+)
 from src.video_vector_toolbar import VideoVectorToolbar
 
 
@@ -63,6 +67,8 @@ class VideoEditorWindow(QMainWindow):
         self._video_height = video_height
         self._minimize_to_tray_on_close = True
         self._current_project_path = ""
+        self._recovery_path = ""
+        self._autosave_flushing = False
         self._is_playing = False
         self._annotations: list[VideoAnnotationModel] = []
         self._style = StyleState(
@@ -100,18 +106,37 @@ class VideoEditorWindow(QMainWindow):
         self.timeline.seek_requested.connect(self.canvas.set_position)
         self.timeline.annotation_time_changed.connect(self._on_annotation_time_changed)
 
+        timeline_pan_left = QToolButton()
+        timeline_pan_left.setText("◀")
+        timeline_pan_left.setToolTip("Jump timeline one page earlier")
+        timeline_pan_left.clicked.connect(self.timeline.pan_left)
+
+        timeline_pan_right = QToolButton()
+        timeline_pan_right.setText("▶")
+        timeline_pan_right.setToolTip("Jump timeline one page later")
+        timeline_pan_right.clicked.connect(self.timeline.pan_right)
+
+        timeline_row = QWidget()
+        timeline_layout = QHBoxLayout(timeline_row)
+        timeline_layout.setContentsMargins(4, 0, 4, 0)
+        timeline_layout.setSpacing(4)
+        timeline_layout.addWidget(timeline_pan_left)
+        timeline_layout.addWidget(self.timeline, 1)
+        timeline_layout.addWidget(timeline_pan_right)
+
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(toolbar_widget, 0)
         layout.addWidget(self.canvas, 3)
-        layout.addWidget(self.timeline, 1)
+        layout.addWidget(timeline_row, 1)
         self.setCentralWidget(central)
 
         self._build_menu()
         self.setStatusBar(QStatusBar(self))
         self.statusBar().showMessage("Ready")
+        self._autosave_timer = self.startTimer(30_000)
 
     def _build_menu(self) -> None:
         """
@@ -349,6 +374,138 @@ class VideoEditorWindow(QMainWindow):
         """
 
         self.timeline.set_duration(duration_ms)
+        if duration_ms > 0:
+            self.flush_recovery_snapshot()
+
+    def _build_project_model(self) -> VideoProjectModel:
+        """
+        Builds the serializable project model for the current editor state.
+
+        Returns:
+            VideoProjectModel: Current video project snapshot.
+        """
+
+        return build_video_project_model(
+            video_path=self._video_path,
+            video_width=self._video_width,
+            video_height=self._video_height,
+            duration_ms=self.canvas.duration_ms(),
+            framerate=30.0,
+            annotation_models=self._annotations,
+        )
+
+    def load_video_project_model(
+        self,
+        project_model: VideoProjectModel,
+        source_path: str = "",
+    ) -> None:
+        """
+        Loads one parsed video project into the current editor tab.
+
+        Args:
+            project_model: Parsed project model.
+            source_path: Optional user-facing project path for manual saves.
+
+        Returns:
+            None
+        """
+
+        self._video_width = project_model.video_width
+        self._video_height = project_model.video_height
+        self._annotations = list(project_model.annotations)
+        self.canvas.set_video_size(self._video_width, self._video_height)
+        self.canvas.set_annotations(self._annotations)
+        self.canvas.load_video(self._video_path)
+        self.timeline.set_annotations(self._annotations)
+        if project_model.duration_ms > 0:
+            self.timeline.set_duration(project_model.duration_ms)
+        self._current_project_path = source_path.strip()
+        self.canvas.refresh_visible_items()
+        self.timeline.refresh()
+
+    def set_recovery_path(self, path: str) -> None:
+        """
+        Sets the auto-save target path for this video editor tab.
+
+        Args:
+            path: Recovery project file path.
+
+        Returns:
+            None
+        """
+
+        self._recovery_path = path.strip()
+
+    def recovery_path(self) -> str:
+        """
+        Returns the auto-save target path for this video editor tab.
+
+        Returns:
+            str: Recovery project file path.
+        """
+
+        return self._recovery_path
+
+    def flush_recovery_snapshot(self) -> None:
+        """
+        Persists the current tab state to its recovery project file.
+
+        Returns:
+            None
+        """
+
+        if not self._recovery_path:
+            return
+        if self._autosave_flushing:
+            return
+        if self.canvas.duration_ms() <= 0:
+            return
+
+        from shiboken6 import isValid
+
+        if not isValid(self):
+            return
+        canvas = getattr(self, "canvas", None)
+        if canvas is None or not isValid(canvas):
+            return
+
+        from src.session_recovery import ensure_tab_recovery_path
+
+        self._autosave_flushing = True
+        try:
+            self._recovery_path = ensure_tab_recovery_path(self._recovery_path)
+            model = self._build_project_model()
+            try:
+                save_video_project(self._recovery_path, model, self._video_path)
+            except OSError:
+                return
+
+            if self._current_project_path and self._current_project_path != self._recovery_path:
+                try:
+                    save_video_project(self._current_project_path, model, self._video_path)
+                except OSError:
+                    return
+        except RuntimeError:
+            return
+        finally:
+            self._autosave_flushing = False
+
+    def timerEvent(self, event) -> None:  # noqa: N802 - Qt API name
+        """
+        Runs periodic auto-save every 30 seconds.
+
+        Args:
+            event: Timer event from Qt.
+
+        Returns:
+            None
+        """
+
+        if event.timerId() != self._autosave_timer:
+            super().timerEvent(event)
+            return
+
+        self.flush_recovery_snapshot()
 
     def _on_position_changed(self, position_ms: int) -> None:
         """
@@ -408,6 +565,7 @@ class VideoEditorWindow(QMainWindow):
         """
 
         self.content_changed.emit()
+        self.flush_recovery_snapshot()
 
     def has_annotations(self) -> bool:
         """
@@ -469,6 +627,11 @@ class VideoEditorWindow(QMainWindow):
         if not self.confirm_close_if_needed():
             event.ignore()
             return
+        self.flush_recovery_snapshot()
+        autosave_timer = getattr(self, "_autosave_timer", 0)
+        if autosave_timer:
+            self.killTimer(autosave_timer)
+            self._autosave_timer = 0
         super().closeEvent(event)
 
     def save_project(self) -> None:
@@ -489,14 +652,7 @@ class VideoEditorWindow(QMainWindow):
         if not path:
             return
 
-        model = build_video_project_model(
-            video_path=self._video_path,
-            video_width=self._video_width,
-            video_height=self._video_height,
-            duration_ms=self.canvas.duration_ms(),
-            framerate=30.0,
-            annotation_models=self._annotations,
-        )
+        model = self._build_project_model()
         try:
             save_video_project(path, model, self._video_path)
         except OSError as exc:

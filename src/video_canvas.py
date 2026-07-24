@@ -1023,6 +1023,11 @@ class VideoCanvas(QGraphicsView):
         """
 
         if self._drag_start is None or self._preview_item is None:
+            if self._tool in POLY_DRAW_TOOLS and self._poly_points:
+                scene_pos = self.mapToScene(event.position().toPoint())
+                self._update_poly_preview(scene_pos)
+                event.accept()
+                return
             if self._tool == Tool.SELECT:
                 self._sync_resize_overlay_with_target()
             super().mouseMoveEvent(event)
@@ -1264,6 +1269,22 @@ class VideoCanvas(QGraphicsView):
             self._poly_preview.set_points(self._poly_points)
         # Finish on returning close to the first point for polygons, or keep collecting.
         # Double-click is handled separately.
+
+    def _update_poly_preview(self, cursor_scene_pos: QPointF) -> None:
+        """
+        Shows a rubber-band segment from the last committed vertex to the cursor.
+
+        Args:
+            cursor_scene_pos: Current cursor position in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        if not self._poly_points or self._poly_preview is None:
+            return
+        preview_points = list(self._poly_points) + [cursor_scene_pos]
+        self._poly_preview.set_points(preview_points)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
         """

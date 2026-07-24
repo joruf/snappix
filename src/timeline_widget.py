@@ -6,8 +6,8 @@ Snappix video editor.
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen
-from PySide6.QtWidgets import QWidget
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QWheelEvent
+from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from src.annotation_items import list_to_color
 from src.video_models import VideoAnnotationModel
@@ -18,6 +18,10 @@ ROW_HEIGHT = 30
 ROW_SPACING = 4
 EDGE_HIT_PX = 6
 MIN_ANNOTATION_DURATION_MS = 100
+MIN_VIEW_DURATION_MS = 500
+DEFAULT_VISIBLE_PAGES = 5
+ZOOM_WHEEL_FACTOR = 1.15
+CTRL_NAV_THRESHOLD_PX = 48
 
 DRAG_MODE_PLAYHEAD = "playhead"
 DRAG_MODE_MOVE = "move"
@@ -42,6 +46,7 @@ class TimelineWidget(QWidget):
 
         super().__init__()
         self.setMinimumHeight(RULER_HEIGHT + ROW_HEIGHT + ROW_SPACING)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         self.setMouseTracking(True)
         self._duration_ms = 0
         self._position_ms = 0
@@ -52,6 +57,9 @@ class TimelineWidget(QWidget):
         self._drag_anchor_ms = 0
         self._drag_orig_start = 0
         self._drag_orig_end = 0
+        self._view_start_ms = 0
+        self._view_duration_ms = 1
+        self._ctrl_nav_anchor_x: int | None = None
 
     def set_duration(self, duration_ms: int) -> None:
         """
@@ -65,8 +73,62 @@ class TimelineWidget(QWidget):
         """
 
         self._duration_ms = max(1, duration_ms)
+        self.reset_view()
         self._resize_for_row_count()
         self.update()
+
+    def reset_view(self) -> None:
+        """
+        Resets pan/zoom so the first page of the timeline is visible.
+
+        Returns:
+            None
+        """
+
+        self._view_start_ms = 0
+        self._view_duration_ms = self._default_page_duration_ms()
+        self._clamp_view()
+
+    def can_pan_left(self) -> bool:
+        """
+        Returns whether the visible range can shift earlier in time.
+
+        Returns:
+            bool: True when the view is not already at the start.
+        """
+
+        return self._view_start_ms > 0
+
+    def can_pan_right(self) -> bool:
+        """
+        Returns whether the visible range can shift later in time.
+
+        Returns:
+            bool: True when the view is not already at the end.
+        """
+
+        max_start = max(0, self._duration_ms - self._view_duration_ms)
+        return self._view_start_ms < max_start
+
+    def pan_left(self) -> None:
+        """
+        Jumps one page toward earlier times.
+
+        Returns:
+            None
+        """
+
+        self._jump_by_pages(-1)
+
+    def pan_right(self) -> None:
+        """
+        Jumps one page toward later times.
+
+        Returns:
+            None
+        """
+
+        self._jump_by_pages(1)
 
     def set_position(self, position_ms: int) -> None:
         """
@@ -118,6 +180,19 @@ class TimelineWidget(QWidget):
 
         return self._selected_id
 
+    def _default_page_duration_ms(self) -> int:
+        """
+        Returns the default visible page duration for one loaded video.
+
+        Returns:
+            int: Page duration in milliseconds.
+        """
+
+        if self._duration_ms <= MIN_VIEW_DURATION_MS:
+            return self._duration_ms
+        page_ms = max(MIN_VIEW_DURATION_MS, self._duration_ms // DEFAULT_VISIBLE_PAGES)
+        return min(self._duration_ms, page_ms)
+
     def _resize_for_row_count(self) -> None:
         """
         Grows the widget's minimum height to fit all annotation rows.
@@ -130,6 +205,16 @@ class TimelineWidget(QWidget):
         height = RULER_HEIGHT + row_count * (ROW_HEIGHT + ROW_SPACING) + ROW_SPACING
         self.setMinimumHeight(max(RULER_HEIGHT + ROW_HEIGHT + ROW_SPACING, height))
 
+    def _content_width(self) -> int:
+        """
+        Returns the horizontal extent used for timeline rendering.
+
+        Returns:
+            int: Total widget content width in pixels.
+        """
+
+        return max(LABEL_WIDTH + 1, self.width())
+
     def _track_area_rect(self) -> QRect:
         """
         Returns the rectangle available for the ms-to-pixel track area.
@@ -139,6 +224,43 @@ class TimelineWidget(QWidget):
         """
 
         return QRect(LABEL_WIDTH, 0, max(1, self.width() - LABEL_WIDTH), self.height())
+
+    def _clamp_view(self) -> None:
+        """
+        Clamps the visible time range to valid bounds.
+
+        Returns:
+            None
+        """
+
+        self._view_duration_ms = max(
+            MIN_VIEW_DURATION_MS,
+            min(self._duration_ms, self._view_duration_ms),
+        )
+        max_start = max(0, self._duration_ms - self._view_duration_ms)
+        self._view_start_ms = max(0, min(max_start, self._view_start_ms))
+
+    def _tick_interval_ms(self, visible_ms: int) -> int:
+        """
+        Picks a readable ruler tick spacing for one visible time span.
+
+        Args:
+            visible_ms: Visible timeline duration in milliseconds.
+
+        Returns:
+            int: Tick interval in milliseconds.
+        """
+
+        target_ticks = 10
+        raw = max(1, visible_ms // target_ticks)
+        magnitude = 1
+        while magnitude * 10 <= raw:
+            magnitude *= 10
+        for step in (1, 2, 5, 10):
+            interval = step * magnitude
+            if interval >= raw:
+                return interval
+        return magnitude * 10
 
     def _ms_to_x(self, ms: int) -> int:
         """
@@ -152,7 +274,7 @@ class TimelineWidget(QWidget):
         """
 
         track = self._track_area_rect()
-        ratio = max(0.0, min(1.0, ms / self._duration_ms))
+        ratio = (ms - self._view_start_ms) / max(1, self._view_duration_ms)
         return track.x() + int(ratio * track.width())
 
     def _x_to_ms(self, x: int) -> int:
@@ -168,8 +290,77 @@ class TimelineWidget(QWidget):
 
         track = self._track_area_rect()
         ratio = (x - track.x()) / max(1, track.width())
-        ratio = max(0.0, min(1.0, ratio))
-        return int(ratio * self._duration_ms)
+        ms = self._view_start_ms + ratio * self._view_duration_ms
+        return int(max(0, min(self._duration_ms, ms)))
+
+    def _jump_by_pages(self, pages: int) -> None:
+        """
+        Jumps the visible window by whole pages.
+
+        Args:
+            pages: Number of pages to move (negative = earlier).
+
+        Returns:
+            None
+        """
+
+        if pages == 0:
+            return
+        step_ms = self._view_duration_ms
+        max_start = max(0, self._duration_ms - self._view_duration_ms)
+        new_start = self._view_start_ms + pages * step_ms
+        self._view_start_ms = max(0, min(max_start, new_start))
+        self.update()
+
+    def _zoom_at_x(self, x: int, factor: float) -> None:
+        """
+        Zooms the timeline in or out while keeping one anchor time fixed.
+
+        Args:
+            x: Anchor x coordinate in widget space.
+            factor: Multiplier applied to the visible duration (>1 zooms out).
+
+        Returns:
+            None
+        """
+
+        track = self._track_area_rect()
+        if track.width() <= 0:
+            return
+        anchor_ms = self._x_to_ms(x)
+        ratio = (x - track.x()) / track.width()
+        new_duration = int(self._view_duration_ms * factor)
+        new_duration = max(MIN_VIEW_DURATION_MS, min(self._duration_ms, new_duration))
+        new_start = int(anchor_ms - ratio * new_duration)
+        self._view_duration_ms = new_duration
+        self._view_start_ms = new_start
+        self._clamp_view()
+        self.update()
+
+    def _handle_ctrl_navigation(self, pos_x: int) -> None:
+        """
+        Jumps timeline pages while Ctrl is held and the mouse moves horizontally.
+
+        Args:
+            pos_x: Current mouse x coordinate in widget space.
+
+        Returns:
+            None
+        """
+
+        if self._ctrl_nav_anchor_x is None:
+            self._ctrl_nav_anchor_x = pos_x
+            return
+
+        delta_x = pos_x - self._ctrl_nav_anchor_x
+        while delta_x >= CTRL_NAV_THRESHOLD_PX:
+            self._jump_by_pages(1)
+            self._ctrl_nav_anchor_x += CTRL_NAV_THRESHOLD_PX
+            delta_x -= CTRL_NAV_THRESHOLD_PX
+        while delta_x <= -CTRL_NAV_THRESHOLD_PX:
+            self._jump_by_pages(-1)
+            self._ctrl_nav_anchor_x -= CTRL_NAV_THRESHOLD_PX
+            delta_x += CTRL_NAV_THRESHOLD_PX
 
     def _row_rect(self, index: int) -> QRect:
         """
@@ -183,7 +374,7 @@ class TimelineWidget(QWidget):
         """
 
         top = RULER_HEIGHT + index * (ROW_HEIGHT + ROW_SPACING) + ROW_SPACING
-        return QRect(0, top, self.width(), ROW_HEIGHT)
+        return QRect(0, top, self._content_width(), ROW_HEIGHT)
 
     def _bar_rect(self, index: int, annotation: VideoAnnotationModel) -> QRect:
         """
@@ -213,15 +404,22 @@ class TimelineWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        content_width = self._content_width()
         track = self._track_area_rect()
-        painter.fillRect(0, 0, self.width(), RULER_HEIGHT, QColor(40, 40, 40))
+        painter.fillRect(0, 0, content_width, RULER_HEIGHT, QColor(40, 40, 40))
         painter.setPen(QPen(QColor(150, 150, 150)))
-        tick_count = 10
-        for tick in range(tick_count + 1):
-            ms = int(self._duration_ms * tick / tick_count)
-            x = self._ms_to_x(ms)
-            painter.drawLine(x, RULER_HEIGHT - 6, x, RULER_HEIGHT)
-            painter.drawText(x + 2, RULER_HEIGHT - 8, f"{ms / 1000:.1f}s")
+        view_end_ms = self._view_start_ms + self._view_duration_ms
+        tick_interval = self._tick_interval_ms(self._view_duration_ms)
+        first_tick = (
+            ((self._view_start_ms + tick_interval - 1) // tick_interval) * tick_interval
+        )
+        tick_ms = first_tick
+        while tick_ms <= view_end_ms:
+            x = self._ms_to_x(tick_ms)
+            if track.x() <= x <= track.x() + track.width():
+                painter.drawLine(x, RULER_HEIGHT - 6, x, RULER_HEIGHT)
+                painter.drawText(x + 2, RULER_HEIGHT - 8, f"{tick_ms / 1000:.1f}s")
+            tick_ms += tick_interval
 
         for index, annotation in enumerate(self._annotations):
             row = self._row_rect(index)
@@ -287,7 +485,12 @@ class TimelineWidget(QWidget):
 
         if event.button() != Qt.MouseButton.LeftButton:
             return
+
         pos = event.position().toPoint()
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if pos.x() >= LABEL_WIDTH:
+                self._ctrl_nav_anchor_x = pos.x()
+            return
 
         if pos.y() < RULER_HEIGHT:
             self._drag_mode = DRAG_MODE_PLAYHEAD
@@ -320,6 +523,14 @@ class TimelineWidget(QWidget):
 
         pos = event.position().toPoint()
 
+        if (
+            self._drag_mode == ""
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+            and pos.x() >= LABEL_WIDTH
+        ):
+            self._handle_ctrl_navigation(pos.x())
+            return
+
         if self._drag_mode == DRAG_MODE_PLAYHEAD:
             self.seek_requested.emit(self._x_to_ms(pos.x()))
             return
@@ -345,6 +556,9 @@ class TimelineWidget(QWidget):
             self.update()
             return
 
+        if self._ctrl_nav_anchor_x is not None:
+            self._ctrl_nav_anchor_x = None
+
         cursor = Qt.CursorShape.ArrowCursor
         hit = self._hit_test(pos)
         if hit is not None:
@@ -368,3 +582,36 @@ class TimelineWidget(QWidget):
 
         self._drag_mode = ""
         self._drag_annotation = None
+        self._ctrl_nav_anchor_x = None
+        self.unsetCursor()
+
+    def wheelEvent(self, event: QWheelEvent) -> None:
+        """
+        Zooms with Ctrl+wheel on the track area.
+
+        Args:
+            event: Wheel event.
+
+        Returns:
+            None
+        """
+
+        pos = event.position().toPoint()
+        if pos.x() < LABEL_WIDTH:
+            return
+
+        track = self._track_area_rect()
+        if track.width() <= 0:
+            return
+
+        if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
+            return
+
+        delta = event.angleDelta().y()
+        if delta == 0:
+            delta = event.angleDelta().x()
+        if delta == 0:
+            return
+        factor = ZOOM_WHEEL_FACTOR if delta < 0 else 1.0 / ZOOM_WHEEL_FACTOR
+        self._zoom_at_x(pos.x(), factor)
+        event.accept()
