@@ -77,6 +77,16 @@ class TimelineWidget(QWidget):
         self._resize_for_row_count()
         self.update()
 
+    def duration_ms(self) -> int:
+        """
+        Returns the total timeline duration.
+
+        Returns:
+            int: Duration in milliseconds.
+        """
+
+        return self._duration_ms
+
     def reset_view(self) -> None:
         """
         Resets pan/zoom so the first page of the timeline is visible.

@@ -293,6 +293,7 @@ class VideoCanvas(QGraphicsView):
         self._annotations: list[VideoAnnotationModel] = []
         self._visible_items: dict[str, QGraphicsItem] = {}
         self._position_ms = 0
+        self._cached_duration_ms = 0
         self._drag_start = None
         self._preview_item: QGraphicsItem | None = None
         self._poly_points: list = []
@@ -632,7 +633,10 @@ class VideoCanvas(QGraphicsView):
             int: Duration in milliseconds.
         """
 
-        return self._player.duration()
+        player_duration = self._player.duration()
+        if player_duration > 0:
+            return player_duration
+        return self._cached_duration_ms
 
     def set_position(self, ms: int) -> None:
         """
@@ -728,6 +732,8 @@ class VideoCanvas(QGraphicsView):
             None
         """
 
+        if ms > 0:
+            self._cached_duration_ms = ms
         self.duration_changed.emit(ms)
 
     def _on_media_status_changed(self, status) -> None:

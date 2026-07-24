@@ -75,7 +75,14 @@ def save_video_project(path: str | Path, model: VideoProjectModel, source_video_
     manifest = model.to_dict()
     manifest["video_path_in_archive"] = _VIDEO_ASSET_ARCNAME
 
-    video_bytes = Path(source_video_path).read_bytes()
+    source_path = Path(source_video_path)
+    if source_path.is_file():
+        video_bytes = source_path.read_bytes()
+    elif output_path.is_file():
+        with zipfile.ZipFile(output_path, "r") as existing:
+            video_bytes = existing.read(_VIDEO_ASSET_ARCNAME)
+    else:
+        raise OSError(f"Source video not found: {source_video_path}")
 
     with zipfile.ZipFile(output_path, "w") as archive:
         archive.writestr("manifest.json", json.dumps(manifest, indent=2))

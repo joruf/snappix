@@ -179,6 +179,31 @@ class TestVideoEditorExport(unittest.TestCase):
             self.assertEqual(len(model.annotations), 1)
             self.assertTrue(extracted_video.is_file())
 
+    def test_force_flush_uses_cached_duration_when_player_reports_zero(self) -> None:
+        """
+        Ensures shutdown recovery still writes .sfpv when QMediaPlayer duration is gone.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            source_video = tmp_root / "source.mp4"
+            source_video.write_bytes(b"fake-video-bytes")
+            recovery_path = tmp_root / "recovery.sfpv"
+
+            editor = VideoEditorWindow(str(source_video), 320, 240)
+            editor.set_recovery_path(str(recovery_path))
+            editor._cached_duration_ms = 1800
+            editor.timeline.set_duration(1800)
+            editor.canvas.duration_ms = MagicMock(return_value=0)
+
+            with patch(
+                "src.session_recovery.ensure_tab_recovery_path",
+                side_effect=lambda path: path,
+            ):
+                editor.flush_recovery_snapshot(force=True)
+
+            self.assertTrue(recovery_path.is_file())
+
     def test_run_export_raises_on_ffmpeg_failure(self) -> None:
         """
         Ensures a non-zero ffmpeg exit code raises with stderr detail.

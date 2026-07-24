@@ -4,6 +4,7 @@ Video editor window/tab chrome for Snappix.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, Signal
@@ -68,6 +69,8 @@ class VideoEditorWindow(QMainWindow):
         self._minimize_to_tray_on_close = True
         self._current_project_path = ""
         self._recovery_path = ""
+        self._cached_duration_ms = 0
+        self._session_video_source_path = ""
         self._autosave_flushing = False
         self._is_playing = False
         self._annotations: list[VideoAnnotationModel] = []
@@ -375,7 +378,75 @@ class VideoEditorWindow(QMainWindow):
 
         self.timeline.set_duration(duration_ms)
         if duration_ms > 0:
+            self._cached_duration_ms = duration_ms
             self.flush_recovery_snapshot()
+
+    def prepare_recovery_assets(self) -> None:
+        """
+        Copies the source video into session storage for reliable auto-save.
+
+        Returns:
+            None
+        """
+
+        self._ensure_session_video_source()
+
+    def _effective_duration_ms(self) -> int:
+        """
+        Returns the best-known video duration for persistence.
+
+        Returns:
+            int: Duration in milliseconds.
+        """
+
+        return max(
+            self._cached_duration_ms,
+            self.canvas.duration_ms(),
+            self.timeline.duration_ms(),
+        )
+
+    def _ensure_session_video_source(self) -> str:
+        """
+        Ensures the tab references a session-local copy of the source video.
+
+        Returns:
+            str: Path to the video file used for project saves.
+        """
+
+        if self._session_video_source_path:
+            session_source = Path(self._session_video_source_path)
+            if session_source.is_file():
+                return str(session_source)
+
+        source = Path(self._video_path)
+        if not self._recovery_path:
+            return self._video_path if source.is_file() else ""
+
+        from src.session_recovery import session_video_sources_dir
+
+        sources_dir = session_video_sources_dir()
+        sources_dir.mkdir(parents=True, exist_ok=True)
+        target = sources_dir / f"{Path(self._recovery_path).stem}.mp4"
+        if source.is_file():
+            try:
+                if not target.is_file() or target.stat().st_size != source.stat().st_size:
+                    shutil.copy2(source, target)
+            except OSError:
+                if target.is_file():
+                    self._session_video_source_path = str(target)
+                    self._video_path = str(target)
+                    return str(target)
+                return self._video_path if source.is_file() else ""
+            self._session_video_source_path = str(target)
+            self._video_path = str(target)
+            return str(target)
+
+        if target.is_file():
+            self._session_video_source_path = str(target)
+            self._video_path = str(target)
+            return str(target)
+
+        return self._video_path if source.is_file() else ""
 
     def _build_project_model(self) -> VideoProjectModel:
         """
@@ -389,7 +460,7 @@ class VideoEditorWindow(QMainWindow):
             video_path=self._video_path,
             video_width=self._video_width,
             video_height=self._video_height,
-            duration_ms=self.canvas.duration_ms(),
+            duration_ms=max(1, self._effective_duration_ms()),
             framerate=30.0,
             annotation_models=self._annotations,
         )
@@ -418,6 +489,7 @@ class VideoEditorWindow(QMainWindow):
         self.canvas.load_video(self._video_path)
         self.timeline.set_annotations(self._annotations)
         if project_model.duration_ms > 0:
+            self._cached_duration_ms = project_model.duration_ms
             self.timeline.set_duration(project_model.duration_ms)
         self._current_project_path = source_path.strip()
         self.canvas.refresh_visible_items()
@@ -446,9 +518,12 @@ class VideoEditorWindow(QMainWindow):
 
         return self._recovery_path
 
-    def flush_recovery_snapshot(self) -> None:
+    def flush_recovery_snapshot(self, *, force: bool = False) -> None:
         """
         Persists the current tab state to its recovery project file.
+
+        Args:
+            force: When True, persist even if the media player no longer reports duration.
 
         Returns:
             None
@@ -458,31 +533,40 @@ class VideoEditorWindow(QMainWindow):
             return
         if self._autosave_flushing:
             return
-        if self.canvas.duration_ms() <= 0:
+
+        duration_ms = self._effective_duration_ms()
+        if duration_ms <= 0 and not force:
             return
 
         from shiboken6 import isValid
 
-        if not isValid(self):
-            return
-        canvas = getattr(self, "canvas", None)
-        if canvas is None or not isValid(canvas):
-            return
+        if not force:
+            if not isValid(self):
+                return
+            canvas = getattr(self, "canvas", None)
+            if canvas is None or not isValid(canvas):
+                return
 
         from src.session_recovery import ensure_tab_recovery_path
+
+        video_source = self._ensure_session_video_source()
+        recovery_path = Path(self._recovery_path)
+        if not video_source and not recovery_path.is_file():
+            return
 
         self._autosave_flushing = True
         try:
             self._recovery_path = ensure_tab_recovery_path(self._recovery_path)
             model = self._build_project_model()
+            save_source = video_source or str(recovery_path)
             try:
-                save_video_project(self._recovery_path, model, self._video_path)
+                save_video_project(self._recovery_path, model, save_source)
             except OSError:
                 return
 
             if self._current_project_path and self._current_project_path != self._recovery_path:
                 try:
-                    save_video_project(self._current_project_path, model, self._video_path)
+                    save_video_project(self._current_project_path, model, save_source)
                 except OSError:
                     return
         except RuntimeError:
@@ -627,7 +711,7 @@ class VideoEditorWindow(QMainWindow):
         if not self.confirm_close_if_needed():
             event.ignore()
             return
-        self.flush_recovery_snapshot()
+        self.flush_recovery_snapshot(force=True)
         autosave_timer = getattr(self, "_autosave_timer", 0)
         if autosave_timer:
             self.killTimer(autosave_timer)

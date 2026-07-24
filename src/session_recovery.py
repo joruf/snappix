@@ -44,6 +44,17 @@ def _session_root_dir() -> Path:
     return Path(tempfile.gettempdir()) / "snappix-session"
 
 
+def session_video_sources_dir() -> Path:
+    """
+    Returns the directory used for stable video source copies during recovery.
+
+    Returns:
+        Path: Writable directory for session video sources.
+    """
+
+    return _session_root_dir() / "video-sources"
+
+
 def session_manifest_path() -> Path:
     """
     Returns the path of the editor session manifest file.

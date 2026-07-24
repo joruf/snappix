@@ -4,7 +4,9 @@ Regression tests for editor session recovery across mixed tab types.
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 try:
@@ -67,6 +69,37 @@ class TestCollectEditorSessionTabsMixedTabs(unittest.TestCase):
         self.assertEqual(len(tabs), 2)
         self.assertEqual(tabs[0].kind, "image")
         self.assertEqual(tabs[1].kind, "video")
+
+    def test_collect_persists_video_tab_when_recovery_file_is_written(self) -> None:
+        """
+        Ensures mixed session collection writes and keeps video tabs with .sfpv files.
+        """
+
+        from run import AppController
+        from src.video_editor_window import VideoEditorWindow
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            source_video = tmp_root / "source.mp4"
+            source_video.write_bytes(b"video-bytes")
+            recovery_path = tmp_root / "tab-video.sfpv"
+
+            controller = object.__new__(AppController)
+            controller.editor_tabs = QTabWidget()
+            controller.video_editors = []
+
+            editor = VideoEditorWindow(str(source_video), 320, 240)
+            editor.set_recovery_path(str(recovery_path))
+            editor._cached_duration_ms = 1500
+            editor.canvas.duration_ms = MagicMock(return_value=1500)
+            controller.editor_tabs.addTab(editor, "Recording")
+
+            with patch("src.session_recovery.ensure_tab_recovery_path", side_effect=lambda path: path):
+                tabs = controller._collect_editor_session_tabs()
+
+            self.assertEqual(len(tabs), 1)
+            self.assertEqual(tabs[0].kind, "video")
+            self.assertTrue(Path(tabs[0].recovery_path).is_file())
 
 
 if __name__ == "__main__":

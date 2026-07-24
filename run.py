@@ -1043,6 +1043,7 @@ class AppController:
 
         editor = VideoEditorWindow(video_path, width, height)
         editor.set_recovery_path(recovery_path or create_video_tab_recovery_path())
+        editor.prepare_recovery_assets()
         editor.setWindowIcon(self._editor_icon)
         editor.set_minimize_to_tray_on_close(False)
         editor.setParent(self.editor_tabs)
@@ -1658,9 +1659,14 @@ class AppController:
             None
         """
 
+        from src.video_editor_window import VideoEditorWindow
+
         try:
-            editor.flush_recovery_snapshot()
-        except RuntimeError:
+            if isinstance(editor, VideoEditorWindow):
+                editor.flush_recovery_snapshot(force=True)
+            else:
+                editor.flush_recovery_snapshot()
+        except (RuntimeError, TypeError):
             return
 
     def _collect_editor_session_tabs(self) -> list:
@@ -1672,6 +1678,7 @@ class AppController:
         """
 
         from src.session_recovery import EditorSessionTab, ensure_tab_recovery_path, tab_kind_from_recovery_path
+        from src.video_editor_window import VideoEditorWindow
 
         tabs: list[EditorSessionTab] = []
         for tab_index in range(self.editor_tabs.count()):
@@ -1684,11 +1691,23 @@ class AppController:
                 recovery_path = ensure_tab_recovery_path(editor.recovery_path())
                 editor.set_recovery_path(recovery_path)
                 source_path = getattr(editor, "_current_project_path", "")
-                kind = "video" if editor in self.video_editors else "image"
+                kind = (
+                    "video"
+                    if isinstance(editor, VideoEditorWindow)
+                    or tab_kind_from_recovery_path(recovery_path) == "video"
+                    else "image"
+                )
             except (RuntimeError, AttributeError):
                 continue
             if not recovery_path:
                 continue
+            if isinstance(editor, VideoEditorWindow):
+                recovery_file = Path(recovery_path)
+                try:
+                    if not recovery_file.is_file() or recovery_file.stat().st_size <= 0:
+                        continue
+                except OSError:
+                    continue
             tabs.append(
                 EditorSessionTab(
                     title=title,

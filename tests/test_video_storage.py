@@ -116,6 +116,43 @@ class TestVideoStorage(unittest.TestCase):
             self.assertTrue(restored_video_path.exists())
             self.assertEqual(restored_video_path.read_bytes(), video_bytes)
 
+    def test_save_reuses_existing_archive_video_when_source_missing(self) -> None:
+        """
+        Ensures updating one recovery project can keep the embedded video asset
+        when the original source file was removed from disk.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            source_video = tmp_root / "source.mp4"
+            source_video.write_bytes(b"embedded-video-bytes")
+
+            model = build_video_project_model(
+                video_path=source_video,
+                video_width=320,
+                video_height=240,
+                duration_ms=1000,
+                framerate=30.0,
+                annotation_models=[],
+            )
+            project_path = tmp_root / "project.sfpv"
+            save_video_project(project_path, model, source_video)
+            source_video.unlink()
+
+            updated = build_video_project_model(
+                video_path=source_video,
+                video_width=320,
+                video_height=240,
+                duration_ms=2000,
+                framerate=30.0,
+                annotation_models=[],
+            )
+            save_video_project(project_path, updated, source_video)
+
+            restored_model, restored_video_path = load_video_project(project_path, tmp_root / "extract")
+            self.assertEqual(restored_model.duration_ms, 2000)
+            self.assertEqual(restored_video_path.read_bytes(), b"embedded-video-bytes")
+
 
 if __name__ == "__main__":
     unittest.main()
