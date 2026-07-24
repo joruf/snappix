@@ -19,8 +19,20 @@ DEFAULT_TOOL_STROKE_WIDTHS: dict[str, int] = {
     "eraser": 16,
     "rect": 4,
     "ellipse": 4,
+    "triangle": 4,
+    "round_rect": 4,
+    "star": 4,
+    "highlight": 0,
+    "spotlight": 2,
+    "cross": 0,
+    "checkmark": 0,
     "line": 3,
     "arrow": 3,
+    "double_arrow": 3,
+    "polyline": 3,
+    "polygon": 3,
+    "bent_arrow": 3,
+    "callout": 2,
     "text": 2,
 }
 WIDTH_AWARE_TOOLS = frozenset(DEFAULT_TOOL_STROKE_WIDTHS.keys())
@@ -36,8 +48,17 @@ HARDNESS_AWARE_TOOLS = frozenset(DEFAULT_TOOL_BRUSH_HARDNESS.keys())
 DEFAULT_TOOL_STROKE_STYLES: dict[str, str] = {
     "rect": "solid",
     "ellipse": "solid",
+    "triangle": "solid",
+    "round_rect": "solid",
+    "star": "solid",
+    "highlight": "solid",
+    "spotlight": "solid",
     "line": "solid",
     "arrow": "solid",
+    "double_arrow": "solid",
+    "polyline": "solid",
+    "polygon": "solid",
+    "bent_arrow": "solid",
 }
 STYLE_AWARE_TOOLS = frozenset(DEFAULT_TOOL_STROKE_STYLES.keys())
 VALID_STROKE_STYLES = frozenset({"solid", "dash", "dot", "dash_dot"})

@@ -391,3 +391,43 @@ def apply_linux_window_identity(
         apply_x11_wm_class(widget, wm_instance, wm_class)
     except (AttributeError, OSError, RuntimeError, TypeError, ValueError):
         return
+
+
+def clamp_window_size_to_available(
+    preferred_width: int,
+    preferred_height: int,
+    available_width: int,
+    available_height: int,
+    *,
+    margin: int = 24,
+    min_width: int = 480,
+    min_height: int = 360,
+    default_width: int = 1240,
+    default_height: int = 860,
+) -> tuple[int, int]:
+    """
+    Clamps a preferred window size so it fits inside a monitor work area.
+
+    Args:
+        preferred_width: Desired window width in pixels.
+        preferred_height: Desired window height in pixels.
+        available_width: Monitor work-area width in pixels.
+        available_height: Monitor work-area height in pixels.
+        margin: Reserved pixels for decorations/taskbars.
+        min_width: Lower bound used on tiny displays.
+        min_height: Lower bound used on tiny displays.
+        default_width: Fallback width when preferred width is unset.
+        default_height: Fallback height when preferred height is unset.
+
+    Returns:
+        tuple[int, int]: Width and height that fit on the monitor.
+    """
+
+    max_width = max(min_width, available_width - margin)
+    max_height = max(min_height, available_height - margin)
+    width = preferred_width if preferred_width > 0 else default_width
+    height = preferred_height if preferred_height > 0 else default_height
+    if width < 900 or height < 600:
+        width = max(width, min(default_width, int(available_width * 0.72)))
+        height = max(height, min(default_height, int(available_height * 0.78)))
+    return min(width, max_width), min(height, max_height)

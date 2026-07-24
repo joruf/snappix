@@ -84,7 +84,7 @@ class TestBuildRecordCommand(unittest.TestCase):
 
     def test_command_with_microphone(self) -> None:
         """
-        Ensures a pulse audio input and AAC encoding are added when enabled.
+        Ensures a pulse audio input and higher-quality AAC encoding are added.
         """
 
         rect = QRect(0, 0, 640, 480)
@@ -94,6 +94,12 @@ class TestBuildRecordCommand(unittest.TestCase):
         self.assertIn("pulse", command)
         self.assertIn("default", command)
         self.assertIn("aac", command)
+        self.assertIn("192k", command)
+        self.assertIn("48000", command)
+        self.assertIn("-ac", command)
+        # Stereo capture for clearer playback than the previous mono track.
+        ac_index = command.index("-ac")
+        self.assertEqual(command[ac_index + 1], "2")
 
 
 class TestBuildExportCommand(unittest.TestCase):
@@ -101,14 +107,31 @@ class TestBuildExportCommand(unittest.TestCase):
     Verifies ffmpeg command construction for burned-in annotation export.
     """
 
-    def test_command_without_overlays_copies_video(self) -> None:
+    def test_command_without_overlays_reencodes_audio(self) -> None:
         """
-        Ensures an export with no overlay segments re-encodes without a filter graph.
+        Ensures an export with no overlay segments re-encodes video and audio.
         """
 
         command = build_export_command(Path("/tmp/in.mp4"), [], Path("/tmp/out.mp4"))
         self.assertNotIn("-filter_complex", command)
         self.assertIn(str(Path("/tmp/out.mp4")), command)
+        self.assertIn("aac", command)
+        self.assertIn("192k", command)
+        self.assertNotIn("-an", command)
+
+    def test_command_without_audio_strips_sound(self) -> None:
+        """
+        Ensures include_audio=False drops the audio track with -an.
+        """
+
+        command = build_export_command(
+            Path("/tmp/in.mp4"),
+            [],
+            Path("/tmp/out.mp4"),
+            include_audio=False,
+        )
+        self.assertIn("-an", command)
+        self.assertNotIn("aac", command)
 
     def test_command_with_overlays_builds_filter_graph(self) -> None:
         """
@@ -127,6 +150,25 @@ class TestBuildExportCommand(unittest.TestCase):
         self.assertIn("between(t,1.5,3.0)", filter_complex)
         self.assertEqual(command.count("/tmp/a.png"), 1)
         self.assertEqual(command.count("/tmp/b.png"), 1)
+        self.assertIn("0:a?", command)
+        self.assertIn("192k", command)
+
+    def test_command_with_overlays_can_omit_audio(self) -> None:
+        """
+        Ensures overlay export can strip audio when requested.
+        """
+
+        segments = [
+            OverlaySegment(png_path=Path("/tmp/a.png"), start_s=0.0, end_s=1.0),
+        ]
+        command = build_export_command(
+            Path("/tmp/in.mp4"),
+            segments,
+            Path("/tmp/out.mp4"),
+            include_audio=False,
+        )
+        self.assertIn("-an", command)
+        self.assertNotIn("0:a?", command)
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for recorder lifecycle tests")

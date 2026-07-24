@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QRectF, QSizeF, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter
-from PySide6.QtMultimedia import QMediaPlayer
+from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
@@ -17,8 +17,22 @@ from PySide6.QtWidgets import (
     QInputDialog,
 )
 
-from src.annotation_items import ArrowItem, StrokeLineItem, StyleState, create_pen, list_to_color
-from src.annotation_shapes import StyledTextItem
+from src.annotation_items import (
+    ArrowItem,
+    DoubleArrowItem,
+    StrokeLineItem,
+    StyleState,
+    create_pen,
+    list_to_color,
+)
+from src.annotation_shapes import TEXT_STYLE_BUBBLE, StyledTextItem
+from src.shape_items import (
+    PATH_SHAPE_KINDS,
+    PathShapeItem,
+    PolyPathItem,
+    SpotlightItem,
+    points_from_payload,
+)
 from src.video_models import VideoAnnotationModel
 
 DEFAULT_ANNOTATION_DURATION_MS = 3000
@@ -32,12 +46,37 @@ class Tool:
     SELECT = "select"
     RECT = "rect"
     ELLIPSE = "ellipse"
+    TRIANGLE = "triangle"
+    ROUND_RECT = "round_rect"
+    STAR = "star"
+    HIGHLIGHT = "highlight"
+    SPOTLIGHT = "spotlight"
+    CROSS = "cross"
+    CHECKMARK = "checkmark"
     LINE = "line"
     ARROW = "arrow"
+    DOUBLE_ARROW = "double_arrow"
+    POLYLINE = "polyline"
+    POLYGON = "polygon"
+    BENT_ARROW = "bent_arrow"
+    CALLOUT = "callout"
     TEXT = "text"
 
 
-DRAG_TOOLS = frozenset({Tool.RECT, Tool.ELLIPSE, Tool.LINE, Tool.ARROW})
+DRAG_RECT_TOOLS = frozenset(
+    {
+        Tool.RECT,
+        Tool.ELLIPSE,
+        Tool.TRIANGLE,
+        Tool.STAR,
+        Tool.SPOTLIGHT,
+        Tool.CROSS,
+        Tool.CHECKMARK,
+    }
+)
+DRAG_LINE_TOOLS = frozenset({Tool.LINE, Tool.ARROW, Tool.DOUBLE_ARROW})
+POLY_DRAW_TOOLS = frozenset({Tool.POLYLINE, Tool.POLYGON, Tool.BENT_ARROW})
+DRAG_TOOLS = DRAG_RECT_TOOLS | DRAG_LINE_TOOLS
 
 
 def _style_for_annotation(annotation: VideoAnnotationModel) -> StyleState:
@@ -89,6 +128,43 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
         item.setPen(pen)
         item.setBrush(style.fill_color)
         return item
+    if annotation.annotation_type in PATH_SHAPE_KINDS:
+        item = PathShapeItem(annotation.annotation_type, rect)
+        item.setPen(pen)
+        if annotation.annotation_type == Tool.HIGHLIGHT:
+            item.setBrush(list_to_color(annotation.fill_rgba) if annotation.fill_rgba else QColor(255, 235, 59, 110))
+        elif annotation.annotation_type in {Tool.CROSS, Tool.CHECKMARK}:
+            item.setBrush(style.stroke_color)
+        else:
+            item.setBrush(style.fill_color)
+        return item
+    if annotation.annotation_type == Tool.SPOTLIGHT:
+        item = SpotlightItem(
+            QRectF(0.0, 0.0, annotation.width, annotation.height),
+            focus_mode=str(annotation.payload.get("focus_mode", "ellipse")),
+            dim_alpha=int(annotation.payload.get("dim_alpha", 150)),
+        )
+        item.setPen(pen)
+        item.setPos(annotation.x, annotation.y)
+        return item
+    if annotation.annotation_type in POLY_DRAW_TOOLS:
+        points = points_from_payload(annotation.payload)
+        if len(points) < 2:
+            return None
+        item = PolyPathItem(annotation.annotation_type, points)
+        item.setPen(pen)
+        item.setBrush(style.fill_color if annotation.annotation_type == Tool.POLYGON else QColor(0, 0, 0, 0))
+        return item
+    if annotation.annotation_type == Tool.DOUBLE_ARROW:
+        line_item = DoubleArrowItem()
+        line_item.setLine(
+            annotation.x,
+            annotation.y,
+            annotation.x + annotation.width,
+            annotation.y + annotation.height,
+        )
+        line_item.setPen(pen)
+        return line_item
     if annotation.annotation_type in (Tool.LINE, Tool.ARROW):
         line_item = ArrowItem() if annotation.annotation_type == Tool.ARROW else StrokeLineItem()
         line_item.setLine(
@@ -99,9 +175,13 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
         )
         line_item.setPen(pen)
         return line_item
-    if annotation.annotation_type == Tool.TEXT:
+    if annotation.annotation_type in (Tool.TEXT, Tool.CALLOUT):
+        text_style = str(annotation.payload.get("text_style", ""))
+        if annotation.annotation_type == Tool.CALLOUT and not text_style:
+            text_style = TEXT_STYLE_BUBBLE
         text_item = StyledTextItem(
             annotation.text,
+            text_style=text_style or "plain",
             text_color=style.text_color,
             stroke_color=style.stroke_color,
             fill_color=style.fill_color,
@@ -144,6 +224,11 @@ class VideoCanvas(QGraphicsView):
         self._scene.addItem(self._video_item)
 
         self._player = QMediaPlayer(self)
+        self._audio_output = QAudioOutput(self)
+        # Playback starts muted; the video editor exposes an explicit Sound toggle.
+        self._audio_output.setMuted(True)
+        self._audio_output.setVolume(1.0)
+        self._player.setAudioOutput(self._audio_output)
         self._player.setVideoOutput(self._video_item)
         self._player.positionChanged.connect(self._on_position_changed)
         self._player.durationChanged.connect(self._on_duration_changed)
@@ -167,6 +252,8 @@ class VideoCanvas(QGraphicsView):
         self._position_ms = 0
         self._drag_start = None
         self._preview_item: QGraphicsItem | None = None
+        self._poly_points: list = []
+        self._poly_preview: PolyPathItem | None = None
         self._first_frame_forced = False
         self._zoom_factor = 1.0
         self._initial_view_pending = True
@@ -436,6 +523,41 @@ class VideoCanvas(QGraphicsView):
 
         self._player.setPosition(ms)
 
+    def is_audio_muted(self) -> bool:
+        """
+        Returns whether playback audio is currently muted.
+
+        Returns:
+            bool: True when muted.
+        """
+
+        return bool(self._audio_output.isMuted())
+
+    def set_audio_muted(self, muted: bool) -> None:
+        """
+        Mutes or unmutes playback audio.
+
+        Args:
+            muted: True to mute, False to enable sound.
+
+        Returns:
+            None
+        """
+
+        self._audio_output.setMuted(bool(muted))
+
+    def toggle_audio_muted(self) -> bool:
+        """
+        Toggles playback mute and returns the new muted state.
+
+        Returns:
+            bool: True when audio is muted after the toggle.
+        """
+
+        muted = not self.is_audio_muted()
+        self.set_audio_muted(muted)
+        return muted
+
     def play(self) -> None:
         """
         Starts or resumes playback.
@@ -564,6 +686,28 @@ class VideoCanvas(QGraphicsView):
                 )
             return
 
+        if self._tool == Tool.CALLOUT:
+            text, accepted = QInputDialog.getText(self, "Insert Callout", "Text:")
+            if accepted and text:
+                self._finalize_annotation(
+                    Tool.CALLOUT,
+                    scene_pos.x(),
+                    scene_pos.y(),
+                    0.0,
+                    0.0,
+                    text=text,
+                    payload={"text_style": TEXT_STYLE_BUBBLE},
+                )
+            return
+
+        if self._tool in POLY_DRAW_TOOLS:
+            self._append_poly_point(scene_pos)
+            return
+
+        if self._tool not in DRAG_TOOLS:
+            super().mousePressEvent(event)
+            return
+
         self._drag_start = scene_pos
         self._preview_item = self._create_preview_item(scene_pos)
         if self._preview_item is not None:
@@ -613,7 +757,7 @@ class VideoCanvas(QGraphicsView):
         y = min(start.y(), scene_pos.y())
         width = abs(scene_pos.x() - start.x())
         height = abs(scene_pos.y() - start.y())
-        if self._tool in (Tool.LINE, Tool.ARROW):
+        if self._tool in DRAG_LINE_TOOLS:
             self._finalize_annotation(
                 self._tool, start.x(), start.y(), scene_pos.x() - start.x(), scene_pos.y() - start.y()
             )
@@ -621,7 +765,12 @@ class VideoCanvas(QGraphicsView):
 
         if width < 3 or height < 3:
             return
-        self._finalize_annotation(self._tool, x, y, width, height)
+        payload: dict = {}
+        if self._tool == Tool.HIGHLIGHT:
+            payload = {}
+        if self._tool == Tool.SPOTLIGHT:
+            payload = {"focus_mode": "ellipse", "dim_alpha": 150}
+        self._finalize_annotation(self._tool, x, y, width, height, payload=payload)
 
     def _create_preview_item(self, scene_pos) -> QGraphicsItem | None:
         """
@@ -645,8 +794,32 @@ class VideoCanvas(QGraphicsView):
             item.setPen(pen)
             item.setBrush(self._style.fill_color)
             return item
-        if self._tool in (Tool.LINE, Tool.ARROW):
-            line_item = ArrowItem() if self._tool == Tool.ARROW else StrokeLineItem()
+        if self._tool in PATH_SHAPE_KINDS:
+            from src.annotation_items import create_stroke_pen
+
+            fill = self._style.fill_color
+            stroke_pen = pen
+            if self._tool == Tool.HIGHLIGHT:
+                fill = QColor(255, 235, 59, 110)
+                stroke_pen = create_stroke_pen(QColor(0, 0, 0, 0), 0.0)
+            elif self._tool in {Tool.CROSS, Tool.CHECKMARK}:
+                fill = self._style.stroke_color
+                stroke_pen = create_stroke_pen(QColor(0, 0, 0, 0), 0.0)
+            item = PathShapeItem(self._tool, QRectF(scene_pos, scene_pos))
+            item.setPen(stroke_pen)
+            item.setBrush(fill)
+            return item
+        if self._tool == Tool.SPOTLIGHT:
+            item = SpotlightItem(QRectF(scene_pos, scene_pos), focus_mode="ellipse")
+            item.setPen(pen)
+            return item
+        if self._tool in DRAG_LINE_TOOLS:
+            if self._tool == Tool.DOUBLE_ARROW:
+                line_item = DoubleArrowItem()
+            elif self._tool == Tool.ARROW:
+                line_item = ArrowItem()
+            else:
+                line_item = StrokeLineItem()
             line_item.setLine(scene_pos.x(), scene_pos.y(), scene_pos.x(), scene_pos.y())
             line_item.setPen(pen)
             return line_item
@@ -666,7 +839,10 @@ class VideoCanvas(QGraphicsView):
         if self._drag_start is None or self._preview_item is None:
             return
         start = self._drag_start
-        if isinstance(self._preview_item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+        if isinstance(
+            self._preview_item,
+            (QGraphicsRectItem, QGraphicsEllipseItem, PathShapeItem, SpotlightItem),
+        ):
             rect = QRectF(start, scene_pos).normalized()
             self._preview_item.setRect(rect)
         elif isinstance(self._preview_item, StrokeLineItem):
@@ -681,6 +857,7 @@ class VideoCanvas(QGraphicsView):
         height: float,
         *,
         text: str = "",
+        payload: dict | None = None,
     ) -> None:
         """
         Creates and registers one new time-ranged annotation at the current playhead.
@@ -700,6 +877,11 @@ class VideoCanvas(QGraphicsView):
         duration = max(1, self.duration_ms())
         start_ms = self._position_ms
         end_ms = min(duration, start_ms + DEFAULT_ANNOTATION_DURATION_MS)
+        fill_color = self._style.fill_color
+        if annotation_type == Tool.HIGHLIGHT:
+            fill_color = QColor(255, 235, 59, 110)
+        elif annotation_type in {Tool.CROSS, Tool.CHECKMARK}:
+            fill_color = self._style.stroke_color
         annotation = VideoAnnotationModel(
             annotation_type=annotation_type,
             start_ms=start_ms,
@@ -715,10 +897,10 @@ class VideoCanvas(QGraphicsView):
                 self._style.stroke_color.alpha(),
             ],
             fill_rgba=[
-                self._style.fill_color.red(),
-                self._style.fill_color.green(),
-                self._style.fill_color.blue(),
-                self._style.fill_color.alpha(),
+                fill_color.red(),
+                fill_color.green(),
+                fill_color.blue(),
+                fill_color.alpha(),
             ],
             stroke_width=self._style.stroke_width,
             text=text,
@@ -727,8 +909,85 @@ class VideoCanvas(QGraphicsView):
             font_bold=self._style.font_bold,
             font_italic=self._style.font_italic,
             font_underline=self._style.font_underline,
+            payload=dict(payload or {}),
         )
         self._annotations.append(annotation)
         self._rebuild_visible_items()
         self.annotation_created.emit(annotation)
         self.content_changed.emit()
+
+    def _append_poly_point(self, scene_pos) -> None:
+        """
+        Adds one vertex while drawing a polyline, polygon, or bent arrow.
+
+        Args:
+            scene_pos: Vertex in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        from src.shape_items import bounding_rect_from_points, points_to_payload
+
+        if not self._poly_points:
+            self._poly_points = [scene_pos]
+            self._poly_preview = PolyPathItem(self._tool, self._poly_points)
+            self._poly_preview.setPen(create_pen(self._style))
+            self._poly_preview.setBrush(
+                self._style.fill_color if self._tool == Tool.POLYGON else QColor(0, 0, 0, 0)
+            )
+            self._scene.addItem(self._poly_preview)
+            return
+        self._poly_points.append(scene_pos)
+        if self._poly_preview is not None:
+            self._poly_preview.set_points(self._poly_points)
+        # Finish on returning close to the first point for polygons, or keep collecting.
+        # Double-click is handled separately.
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        """
+        Finalizes an in-progress multi-point video annotation.
+
+        Args:
+            event: Mouse double-click event.
+
+        Returns:
+            None
+        """
+
+        if event.button() == Qt.MouseButton.LeftButton and self._tool in POLY_DRAW_TOOLS:
+            self._finalize_poly_draw()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _finalize_poly_draw(self) -> None:
+        """
+        Commits the in-progress multi-point video annotation.
+
+        Returns:
+            None
+        """
+
+        from src.shape_items import bounding_rect_from_points, points_to_payload
+
+        points = list(self._poly_points)
+        kind = self._tool
+        if self._poly_preview is not None and self._poly_preview.scene() is self._scene:
+            self._scene.removeItem(self._poly_preview)
+        self._poly_preview = None
+        self._poly_points = []
+        min_points = 3 if kind == Tool.POLYGON else 2
+        if len(points) >= 2 and (points[-1] - points[-2]).manhattanLength() < 0.5:
+            points = points[:-1]
+        if len(points) < min_points:
+            return
+        bounds = bounding_rect_from_points(points)
+        self._finalize_annotation(
+            kind,
+            bounds.x(),
+            bounds.y(),
+            bounds.width(),
+            bounds.height(),
+            payload={"points": points_to_payload(points)},
+        )

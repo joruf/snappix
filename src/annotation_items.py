@@ -413,6 +413,88 @@ class ArrowItem(StrokeLineItem):
         painter.drawPath(head)
 
 
+class DoubleArrowItem(StrokeLineItem):
+    """
+    Draws a line with arrow heads at both ends.
+    """
+
+    def _head_at(self, tip: QPointF, direction: QPointF) -> QPainterPath:
+        """
+        Builds one filled arrow head.
+
+        Args:
+            tip: Tip position.
+            direction: Direction the head points toward.
+
+        Returns:
+            QPainterPath: Closed arrow-head triangle.
+        """
+
+        from src.shape_items import build_arrow_head
+
+        size = max(8.0, float(self.pen().widthF()) * 3.0)
+        return build_arrow_head(tip, direction, size=size)
+
+    def _arrow_heads(self) -> list[QPainterPath]:
+        """
+        Builds arrow heads for both endpoints.
+
+        Returns:
+            list[QPainterPath]: Head paths (may be empty).
+        """
+
+        line = self.line()
+        length = float(line.length())
+        if length < 1.0:
+            return []
+        dx = float(line.dx())
+        dy = float(line.dy())
+        return [
+            self._head_at(line.p1(), QPointF(-dx, -dy)),
+            self._head_at(line.p2(), QPointF(dx, dy)),
+        ]
+
+    def shape(self) -> QPainterPath:
+        """
+        Returns clickable geometry for the shaft and both arrow heads.
+
+        Returns:
+            QPainterPath: Combined hit area.
+        """
+
+        path = super().shape()
+        for head in self._arrow_heads():
+            if not head.isEmpty():
+                path.addPath(head)
+        return path
+
+    def paint(
+        self,
+        painter: QPainter,
+        option,
+        widget=None,
+    ) -> None:
+        """
+        Paints the double-headed arrow.
+
+        Args:
+            painter: Painter used by Qt.
+            option: Style option from Qt.
+            widget: Optional target widget.
+
+        Returns:
+            None
+        """
+
+        super().paint(painter, option, widget)
+        pen = self.pen()
+        painter.setPen(pen)
+        painter.setBrush(pen.color())
+        for head in self._arrow_heads():
+            if not head.isEmpty():
+                painter.drawPath(head)
+
+
 def color_to_list(color: QColor) -> list[int]:
     """
     Converts QColor into RGBA integer components.
@@ -551,6 +633,9 @@ def apply_stored_pen_style(pen: QPen, payload: dict) -> QPen:
         QPen: Updated pen.
     """
 
+    # Width 0 uses NoPen; restoring a named dash style would re-enable a hairline.
+    if pen.style() == Qt.PenStyle.NoPen:
+        return pen
     stroke_style = normalize_stroke_style(str(payload.get("stroke_style", STROKE_STYLE_SOLID)))
     pen.setStyle(stroke_style_to_qt(stroke_style))
     return pen
@@ -594,6 +679,15 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
         annotation_from_step_item,
         annotation_from_styled_text_item,
     )
+    from src.shape_items import (
+        PATH_SHAPE_KINDS,
+        SHAPE_POLY_TYPES,
+        PathShapeItem,
+        PolyPathItem,
+        SpotlightItem,
+        bounding_rect_from_points,
+        points_to_payload,
+    )
 
     annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
     if annotation_type == "step" and isinstance(item, StepBadgeItem):
@@ -609,6 +703,27 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
         return model
 
     if annotation_type in {"rect", "ellipse"}:
+        if annotation_type == "rect" and isinstance(item, PathShapeItem):
+            rect = item.rect().translated(item.pos())
+            pen = item.pen()
+            brush = item.brush()
+            payload = {
+                "stroke_style": _stroke_style_from_pen(pen),
+                "corner_radius": item.corner_radius(),
+                "z_index": item.zValue(),
+            }
+            merge_transform_into_payload(item, payload)
+            return AnnotationModel(
+                annotation_type="rect",
+                x=rect.x(),
+                y=rect.y(),
+                width=rect.width(),
+                height=rect.height(),
+                stroke_rgba=color_to_list(pen.color()),
+                fill_rgba=color_to_list(brush.color()),
+                stroke_width=pen_stroke_width(pen),
+                payload=payload,
+            )
         shape_item = cast(QGraphicsRectItem | QGraphicsEllipseItem, item)
         rect = shape_item.rect().translated(shape_item.pos())
         pen = shape_item.pen()
@@ -630,7 +745,74 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
             payload=payload,
         )
 
-    if annotation_type in {"line", "arrow"}:
+    if annotation_type == "spotlight" and isinstance(item, SpotlightItem):
+        rect = item.rect().translated(item.pos())
+        pen = item.pen()
+        brush = item.brush()
+        payload = {
+            "focus_mode": item.focus_mode(),
+            "dim_alpha": item.dim_alpha(),
+            "z_index": item.zValue(),
+        }
+        merge_transform_into_payload(item, payload)
+        return AnnotationModel(
+            annotation_type="spotlight",
+            x=rect.x(),
+            y=rect.y(),
+            width=rect.width(),
+            height=rect.height(),
+            stroke_rgba=color_to_list(pen.color()),
+            fill_rgba=color_to_list(brush.color()),
+            stroke_width=pen_stroke_width(pen),
+            payload=payload,
+        )
+
+    if annotation_type in PATH_SHAPE_KINDS and isinstance(item, PathShapeItem):
+        rect = item.rect().translated(item.pos())
+        pen = item.pen()
+        brush = item.brush()
+        payload = {
+            "stroke_style": _stroke_style_from_pen(pen),
+            "z_index": item.zValue(),
+        }
+        merge_transform_into_payload(item, payload)
+        return AnnotationModel(
+            annotation_type=annotation_type,
+            x=rect.x(),
+            y=rect.y(),
+            width=rect.width(),
+            height=rect.height(),
+            stroke_rgba=color_to_list(pen.color()),
+            fill_rgba=color_to_list(brush.color()),
+            stroke_width=pen_stroke_width(pen),
+            payload=payload,
+        )
+
+    if annotation_type in SHAPE_POLY_TYPES and isinstance(item, PolyPathItem):
+        local_points = item.points()
+        scene_points = [item.mapToScene(point) for point in local_points]
+        bounds = bounding_rect_from_points(scene_points)
+        pen = item.pen()
+        brush = item.brush()
+        payload = {
+            "points": points_to_payload(scene_points),
+            "stroke_style": _stroke_style_from_pen(pen),
+            "z_index": item.zValue(),
+        }
+        merge_transform_into_payload(item, payload)
+        return AnnotationModel(
+            annotation_type=annotation_type,
+            x=bounds.x(),
+            y=bounds.y(),
+            width=bounds.width(),
+            height=bounds.height(),
+            stroke_rgba=color_to_list(pen.color()),
+            fill_rgba=color_to_list(brush.color()),
+            stroke_width=pen_stroke_width(pen),
+            payload=payload,
+        )
+
+    if annotation_type in {"line", "arrow", "double_arrow"}:
         line_item = cast(QGraphicsLineItem, item)
         line = line_item.line()
         pen = line_item.pen()
@@ -748,8 +930,17 @@ def add_annotation_to_scene(
         apply_payload_transform(item, annotation.payload)
         return item
     if annotation.annotation_type == "rect":
-        item = scene.addRect(rect, pen, fill)
+        from src.shape_items import PathShapeItem
+
+        item = PathShapeItem(
+            "rect",
+            rect,
+            corner_radius=float(annotation.payload.get("corner_radius", 0.0)),
+        )
+        item.setPen(apply_stored_pen_style(pen, annotation.payload))
+        item.setBrush(fill)
         configure_graphics_item(item, "rect")
+        scene.addItem(item)
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
         apply_payload_transform(item, annotation.payload)
         return item
@@ -785,6 +976,74 @@ def add_annotation_to_scene(
         item.setZValue(float(annotation.payload.get("z_index", 0.0)))
         apply_payload_transform(item, annotation.payload)
         return item
+    if annotation.annotation_type == "double_arrow":
+        item = DoubleArrowItem(
+            annotation.x,
+            annotation.y,
+            annotation.x + annotation.width,
+            annotation.y + annotation.height,
+        )
+        item.setPen(apply_stored_pen_style(pen, annotation.payload))
+        configure_graphics_item(item, "double_arrow")
+        scene.addItem(item)
+        item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
+        return item
+
+    from src.shape_items import (
+        PATH_SHAPE_KINDS,
+        SHAPE_POLY_TYPES,
+        PathShapeItem,
+        PolyPathItem,
+        SpotlightItem,
+        points_from_payload,
+    )
+
+    if annotation.annotation_type in PATH_SHAPE_KINDS:
+        item = PathShapeItem(annotation.annotation_type, rect)
+        item.setPen(apply_stored_pen_style(pen, annotation.payload))
+        item.setBrush(fill)
+        configure_graphics_item(item, annotation.annotation_type)
+        scene.addItem(item)
+        item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
+        return item
+
+    if annotation.annotation_type == "spotlight":
+        item = SpotlightItem(
+            QRectF(0.0, 0.0, annotation.width, annotation.height),
+            focus_mode=str(annotation.payload.get("focus_mode", "ellipse")),
+            dim_alpha=int(
+                annotation.payload.get(
+                    "dim_alpha",
+                    annotation.fill_rgba[3] if len(annotation.fill_rgba) == 4 else 150,
+                )
+            ),
+        )
+        item.setPen(pen)
+        item.setPos(annotation.x, annotation.y)
+        configure_graphics_item(item, "spotlight")
+        scene.addItem(item)
+        item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
+        return item
+
+    if annotation.annotation_type in SHAPE_POLY_TYPES:
+        points = points_from_payload(annotation.payload)
+        if len(points) < 2:
+            return None
+        item = PolyPathItem(annotation.annotation_type, points)
+        item.setPen(apply_stored_pen_style(pen, annotation.payload))
+        if annotation.annotation_type == "polygon":
+            item.setBrush(fill)
+        else:
+            item.setBrush(QColor(0, 0, 0, 0))
+        configure_graphics_item(item, annotation.annotation_type)
+        scene.addItem(item)
+        item.setZValue(float(annotation.payload.get("z_index", 0.0)))
+        apply_payload_transform(item, annotation.payload)
+        return item
+
     if annotation.annotation_type == "text":
         item = scene.addText(annotation.text)
         font = QFont(item.font())

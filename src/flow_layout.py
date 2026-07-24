@@ -427,18 +427,25 @@ class FlowLayoutWidget(QWidget):
 
     def sizeHint(self) -> QSize:
         """
-        Returns the preferred size for the current or fallback width.
+        Returns the preferred size without locking a large horizontal width.
+
+        Uses the current width only to compute height-for-width. Advertising the
+        current width as preferred size would prevent parent layouts from
+        shrinking the window after the toolbar has been laid out wide.
 
         Returns:
-            QSize: Preferred size.
+            QSize: Preferred size with flexible width.
         """
 
         width = self.width() if self.width() > 0 else 320
-        return QSize(width, self.heightForWidth(width))
+        return QSize(0, self.heightForWidth(width))
 
     def minimumSizeHint(self) -> QSize:
         """
         Returns the minimum size hint for the flow container.
+
+        Width stays flexible so wrapping toolbars do not force a wide window;
+        height matches one row of the tallest child.
 
         Returns:
             QSize: Minimum size hint.

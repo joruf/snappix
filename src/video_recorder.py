@@ -86,7 +86,18 @@ def build_record_command(
         f"{display}+{rect.x()},{rect.y()}",
     ]
     if record_microphone:
-        command += ["-f", "pulse", "-i", "default", "-ac", "1"]
+        # Pulse default source; 48 kHz stereo AAC is a modest quality bump over
+        # the previous 128k mono encode (still light enough for screen captures).
+        command += [
+            "-f",
+            "pulse",
+            "-i",
+            "default",
+            "-ac",
+            "2",
+            "-ar",
+            "48000",
+        ]
 
     command += [
         "-c:v",
@@ -99,7 +110,7 @@ def build_record_command(
         "yuv420p",
     ]
     if record_microphone:
-        command += ["-c:a", "aac", "-b:a", "128k"]
+        command += ["-c:a", "aac", "-b:a", "192k"]
     command += ["-movflags", "+faststart", str(output_path)]
     return command
 
@@ -124,6 +135,8 @@ def build_export_command(
     source_video: Path,
     overlay_segments: list[OverlaySegment],
     output_path: Path,
+    *,
+    include_audio: bool = True,
 ) -> list[str]:
     """
     Builds the ffmpeg command line that burns timed PNG overlays into a video.
@@ -132,6 +145,8 @@ def build_export_command(
         source_video: Path to the raw recorded video.
         overlay_segments: Time-bounded transparent annotation-layer PNGs to composite.
         output_path: Destination MP4 file path.
+        include_audio: When True, keep/re-encode the source audio track; when False,
+            drop audio entirely (``-an``).
 
     Returns:
         list[str]: Complete ffmpeg command line arguments (argv-style, no shell).
@@ -141,8 +156,16 @@ def build_export_command(
     for segment in overlay_segments:
         command += ["-i", str(segment.png_path)]
 
+    # Re-encode AAC on export so older 128k mono recordings also benefit from the
+    # higher bitrate/sample-rate when the user keeps audio in the output.
+    audio_encode_args = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
+
     if not overlay_segments:
-        command += ["-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-c:a", "copy"]
+        command += ["-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p"]
+        if include_audio:
+            command += audio_encode_args
+        else:
+            command.append("-an")
         command.append(str(output_path))
         return command
 
@@ -163,18 +186,14 @@ def build_export_command(
         filter_complex,
         "-map",
         "[vout]",
-        "-map",
-        "0:a?",
-        "-c:v",
-        "libx264",
-        "-crf",
-        "18",
-        "-pix_fmt",
-        "yuv420p",
-        "-c:a",
-        "copy",
-        str(output_path),
     ]
+    if include_audio:
+        command += ["-map", "0:a?"]
+        command += ["-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p"]
+        command += audio_encode_args
+    else:
+        command += ["-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-an"]
+    command.append(str(output_path))
     return command
 
 

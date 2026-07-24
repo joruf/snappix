@@ -502,6 +502,15 @@ class AppController:
                 super().__init__()
                 self.setObjectName("editorHost")
                 self._minimize_to_tray_on_close = True
+                # Explicit chrome so minimize/maximize/close stay available on Linux WMs.
+                self.setWindowFlags(
+                    Qt.WindowType.Window
+                    | Qt.WindowType.WindowTitleHint
+                    | Qt.WindowType.WindowSystemMenuHint
+                    | Qt.WindowType.WindowMinimizeButtonHint
+                    | Qt.WindowType.WindowMaximizeButtonHint
+                    | Qt.WindowType.WindowCloseButtonHint
+                )
 
             def set_minimize_to_tray_on_close(self, enabled: bool) -> None:
                 self._minimize_to_tray_on_close = enabled
@@ -2059,24 +2068,48 @@ class AppController:
 
     def _ensure_editor_host_geometry(self) -> None:
         """
-        Ensures editor host window opens with usable geometry.
+        Ensures the editor host fits on the monitor where it will appear.
+
+        Clamps width/height to the available screen work area and keeps the
+        window frame inside that area so it never opens larger than the display.
 
         Returns:
             None
         """
 
         from PySide6.QtGui import QGuiApplication
+        from src.platform import clamp_window_size_to_available
 
-        if self.editor_host.width() >= 900 and self.editor_host.height() >= 600:
-            return
-        screen = QGuiApplication.primaryScreen()
+        screen = self.editor_host.screen()
         if screen is None:
-            self.editor_host.resize(1240, 860)
+            screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            self.editor_host.resize(
+                min(1240, self.editor_host.width() or 1240),
+                min(860, self.editor_host.height() or 860),
+            )
             return
+
         available = screen.availableGeometry()
-        width = max(1080, int(available.width() * 0.72))
-        height = max(680, int(available.height() * 0.78))
+        preferred_width = self.editor_host.width() if self.editor_host.width() > 0 else 1240
+        preferred_height = self.editor_host.height() if self.editor_host.height() > 0 else 860
+        width, height = clamp_window_size_to_available(
+            preferred_width,
+            preferred_height,
+            available.width(),
+            available.height(),
+        )
         self.editor_host.resize(width, height)
+
+        frame = self.editor_host.frameGeometry()
+        x = frame.x()
+        y = frame.y()
+        if x < available.x() or y < available.y() or not self.editor_host.isVisible():
+            x = available.x() + max(0, (available.width() - frame.width()) // 2)
+            y = available.y() + max(0, (available.height() - frame.height()) // 2)
+        x = min(max(x, available.x()), available.x() + available.width() - frame.width())
+        y = min(max(y, available.y()), available.y() + available.height() - frame.height())
+        self.editor_host.move(x, y)
     def _close_editor_tab_by_index(self, index: int) -> None:
         """
         Closes one editor tab and disposes its resources.

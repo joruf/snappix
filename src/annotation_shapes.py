@@ -67,6 +67,8 @@ class StepBadgeItem(QGraphicsEllipseItem):
         label_font.setPointSize(14)
         self._label.setFont(label_font)
         self._label.setDefaultTextColor(QColor(255, 255, 255, 255))
+        self.setPen(QPen(QColor(255, 255, 255, 240), 2.0))
+        self.setBrush(QBrush(QColor(231, 76, 60, 240)))
         self._center_label()
         _configure_graphics_item(self, "step")
 
@@ -127,8 +129,8 @@ class StepBadgeItem(QGraphicsEllipseItem):
             None
         """
 
-        painter.setPen(QPen(QColor(255, 255, 255, 240), 2.0))
-        painter.setBrush(QBrush(QColor(231, 76, 60, 240)))
+        painter.setPen(self.pen())
+        painter.setBrush(self.brush())
         painter.drawEllipse(self.rect())
 
 
@@ -464,7 +466,18 @@ class StyledTextItem(QGraphicsItem):
             self._text_rect.bottom() + padding,
         )
         if self._text_style == TEXT_STYLE_BUBBLE:
-            self._bounds = self._bounds.adjusted(0.0, 0.0, 0.0, 14.0)
+            # Reserve space below the padded text box for the speech-bubble tail.
+            self._bounds = self._bounds.adjusted(0.0, 0.0, 0.0, self._bubble_tail_height())
+
+    def _bubble_tail_height(self) -> float:
+        """
+        Returns the speech-bubble tail height in local pixels.
+
+        Returns:
+            float: Tail height.
+        """
+
+        return 14.0
 
     def _draw_multiline_text(self, painter: QPainter) -> None:
         """
@@ -501,18 +514,23 @@ class StyledTextItem(QGraphicsItem):
             return path
 
         radius = max(2.0, min(self._corner_radius, min(rect.width(), rect.height()) * 0.5))
-        tail_width = min(18.0, rect.width() * 0.22)
-        tail_height = 14.0
-        bubble_rect = rect.adjusted(0.0, 0.0, 0.0, -tail_height)
-        path = QPainterPath()
-        path.addRoundedRect(bubble_rect, radius, radius)
-        tail_left = bubble_rect.left() + bubble_rect.width() * 0.2
-        tail_tip = QPointF(tail_left + tail_width * 0.5, bubble_rect.bottom() + tail_height)
-        path.lineTo(tail_left + tail_width, bubble_rect.bottom())
-        path.lineTo(tail_tip)
-        path.lineTo(tail_left, bubble_rect.bottom())
-        path.closeSubpath()
-        return path
+        tail_height = self._bubble_tail_height()
+        tail_width = min(18.0, max(10.0, rect.width() * 0.22))
+        body = QPainterPath()
+        body.addRoundedRect(rect, radius, radius)
+
+        tail_left = rect.left() + rect.width() * 0.22
+        tail_right = min(rect.right() - 2.0, tail_left + tail_width)
+        tail_mid = (tail_left + tail_right) * 0.5
+        tip = QPointF(tail_mid + tail_width * 0.15, rect.bottom() + tail_height)
+        # Keep the tail base slightly inside the rounded body so the union seals.
+        base_y = rect.bottom() - 1.0
+        tail = QPainterPath()
+        tail.moveTo(tail_left, base_y)
+        tail.lineTo(tip)
+        tail.lineTo(tail_right, base_y)
+        tail.closeSubpath()
+        return body.united(tail)
 
 
 def annotation_from_step_item(item: StepBadgeItem) -> AnnotationModel:
@@ -602,6 +620,23 @@ def add_step_to_scene(scene: QGraphicsScene, annotation: AnnotationModel) -> Ste
     step_number = int(annotation.payload.get("step_number", annotation.text or "1"))
     item = StepBadgeItem(step_number, max(annotation.width, annotation.height, 36.0))
     item.setPos(annotation.x, annotation.y)
+    if len(annotation.stroke_rgba) == 4:
+        stroke = QColor(
+            int(annotation.stroke_rgba[0]),
+            int(annotation.stroke_rgba[1]),
+            int(annotation.stroke_rgba[2]),
+            int(annotation.stroke_rgba[3]),
+        )
+        width = max(1.0, float(annotation.stroke_width or 2.0))
+        item.setPen(QPen(stroke, width))
+    if len(annotation.fill_rgba) == 4:
+        fill = QColor(
+            int(annotation.fill_rgba[0]),
+            int(annotation.fill_rgba[1]),
+            int(annotation.fill_rgba[2]),
+            int(annotation.fill_rgba[3]),
+        )
+        item.setBrush(QBrush(fill))
     scene.addItem(item)
     return item
 

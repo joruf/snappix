@@ -127,10 +127,11 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
     ToolHelpEntry(
         tool=Tool.RECT,
         name="Rectangle",
-        tooltip_blurb="draw a rectangle; tool menu: Width + Style",
+        tooltip_blurb="draw a rectangle; tool menu: Width, Style, Radius",
         description=(
             "Draws a rectangle annotation on top of the screenshot. "
-            "Open the tool menu for Width and line Style (solid/dash/dot)."
+            "Open the tool menu for Width, line Style, and corner Radius "
+            "(0 = sharp corners)."
         ),
     ),
     ToolHelpEntry(
@@ -143,12 +144,42 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
         ),
     ),
     ToolHelpEntry(
+        tool=Tool.TRIANGLE,
+        name="Triangle",
+        tooltip_blurb="draw a triangle; tool menu: Width + Style",
+        description="Draws a triangle annotation for warnings and directional callouts.",
+    ),
+    ToolHelpEntry(
+        tool=Tool.STAR,
+        name="Star",
+        tooltip_blurb="draw a star badge; tool menu: Width + Style",
+        description="Draws a star badge to draw attention to an area.",
+    ),
+    ToolHelpEntry(
+        tool=Tool.POLYGON,
+        name="Polygon",
+        tooltip_blurb="click points to draw a polygon; Enter/double-click finishes",
+        description=(
+            "Draws a free polygon by clicking vertices. "
+            "Double-click or press Enter to close; Esc cancels."
+        ),
+    ),
+    ToolHelpEntry(
         tool=Tool.LINE,
         name="Line",
         tooltip_blurb="draw a straight line; tool menu: Width + Style",
         description=(
             "Draws a straight line annotation. "
             "Open the tool menu for Width and line Style (solid/dash/dot)."
+        ),
+    ),
+    ToolHelpEntry(
+        tool=Tool.POLYLINE,
+        name="Polyline",
+        tooltip_blurb="click points for a bent path; Enter/double-click finishes",
+        description=(
+            "Draws an open multi-segment path by clicking points. "
+            "Double-click or press Enter to finish; Esc cancels."
         ),
     ),
     ToolHelpEntry(
@@ -161,10 +192,52 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
         ),
     ),
     ToolHelpEntry(
+        tool=Tool.DOUBLE_ARROW,
+        name="Double Arrow",
+        tooltip_blurb="draw a double-headed arrow; tool menu: Width + Style",
+        description="Draws a double-headed arrow useful for distances and relationships.",
+    ),
+    ToolHelpEntry(
+        tool=Tool.BENT_ARROW,
+        name="Bent Arrow",
+        tooltip_blurb="click points for a bent arrow; Enter/double-click finishes",
+        description=(
+            "Draws a multi-segment arrow that can bend around objects. "
+            "Double-click or press Enter to finish; Esc cancels."
+        ),
+    ),
+    ToolHelpEntry(
+        tool=Tool.SPOTLIGHT,
+        name="Spotlight",
+        tooltip_blurb="dim surroundings and keep a focus area bright",
+        description="Dims the surrounding screenshot while keeping a dragged focus region bright.",
+    ),
+    ToolHelpEntry(
+        tool=Tool.CROSS,
+        name="Cross",
+        tooltip_blurb="draw an X mark",
+        description="Draws an X / cross mark to indicate errors or rejected items.",
+    ),
+    ToolHelpEntry(
+        tool=Tool.CHECKMARK,
+        name="Checkmark",
+        tooltip_blurb="draw a checkmark",
+        description="Draws a checkmark to indicate success or approved items.",
+    ),
+    ToolHelpEntry(
         tool=Tool.TEXT,
         name="Text",
         tooltip_blurb="insert a text annotation",
         description="Inserts a text annotation. Use the Text tool menu for font, size, style, and spacing.",
+    ),
+    ToolHelpEntry(
+        tool=Tool.CALLOUT,
+        name="Callout",
+        tooltip_blurb="insert a speech-bubble callout",
+        description=(
+            "Inserts text inside a speech bubble callout. "
+            "The Bubble style under Text uses the same container."
+        ),
     ),
     ToolHelpEntry(
         tool=Tool.FILL_BG,

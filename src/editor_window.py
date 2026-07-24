@@ -49,6 +49,7 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QDoubleSpinBox,
+    QGroupBox,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -76,6 +77,7 @@ from src.constants import (
     APP_NAME,
     build_about_dialog_html,
 )
+from src.flow_layout import FlowLayoutWidget
 from src.config import (
     EXPORT_PRESET_DOCS,
     EXPORT_PRESET_LIGHTWEIGHT,
@@ -141,8 +143,20 @@ from src.tool_reference_dialog import ToolReferenceDialog
 _SELECTION_TYPE_LABELS: dict[str, str] = {
     "rect": "Rectangle",
     "ellipse": "Ellipse",
+    "triangle": "Triangle",
+    "round_rect": "Rounded Rectangle",
+    "star": "Star",
+    "highlight": "Highlight",
+    "spotlight": "Spotlight",
+    "cross": "Cross",
+    "checkmark": "Checkmark",
     "line": "Line",
     "arrow": "Arrow",
+    "double_arrow": "Double Arrow",
+    "polyline": "Polyline",
+    "polygon": "Polygon",
+    "bent_arrow": "Bent Arrow",
+    "callout": "Callout",
     "text": "Text",
     "image": "Image",
     "step": "Step",
@@ -157,6 +171,68 @@ _STROKE_STYLE_LABELS: dict[str, str] = {
 }
 _CANVAS_CLIPBOARD_MIME = "application/x-snappix-canvas"
 _ANNOTATIONS_CLIPBOARD_MIME = "application/x-snappix-annotations"
+
+# Style-tab color targets available for annotation types / drawing tools.
+_COLOR_TARGETS_STROKE_FILL = frozenset({"stroke", "fill"})
+_COLOR_TARGETS_STROKE = frozenset({"stroke"})
+_COLOR_TARGETS_FILL = frozenset({"fill"})
+_COLOR_TARGETS_TEXT = frozenset({"text", "stroke", "fill"})
+_COLOR_TARGETS_BY_SELECTION: dict[str, frozenset[str]] = {
+    "rect": _COLOR_TARGETS_STROKE_FILL,
+    "ellipse": _COLOR_TARGETS_STROKE_FILL,
+    "triangle": _COLOR_TARGETS_STROKE_FILL,
+    "round_rect": _COLOR_TARGETS_STROKE_FILL,
+    "star": _COLOR_TARGETS_STROKE_FILL,
+    "highlight": _COLOR_TARGETS_STROKE_FILL,
+    "polygon": _COLOR_TARGETS_STROKE_FILL,
+    "spotlight": _COLOR_TARGETS_STROKE_FILL,
+    "cross": _COLOR_TARGETS_STROKE_FILL,
+    "checkmark": _COLOR_TARGETS_STROKE_FILL,
+    "step": _COLOR_TARGETS_STROKE_FILL,
+    "line": _COLOR_TARGETS_STROKE,
+    "arrow": _COLOR_TARGETS_STROKE,
+    "double_arrow": _COLOR_TARGETS_STROKE,
+    "polyline": _COLOR_TARGETS_STROKE,
+    "bent_arrow": _COLOR_TARGETS_STROKE,
+    "text": _COLOR_TARGETS_TEXT,
+    "callout": _COLOR_TARGETS_TEXT,
+}
+_COLOR_TARGETS_BY_TOOL: dict[str, frozenset[str]] = {
+    Tool.RECT: _COLOR_TARGETS_STROKE_FILL,
+    Tool.ELLIPSE: _COLOR_TARGETS_STROKE_FILL,
+    Tool.TRIANGLE: _COLOR_TARGETS_STROKE_FILL,
+    Tool.STAR: _COLOR_TARGETS_STROKE_FILL,
+    Tool.POLYGON: _COLOR_TARGETS_STROKE_FILL,
+    Tool.SPOTLIGHT: _COLOR_TARGETS_STROKE_FILL,
+    Tool.CROSS: _COLOR_TARGETS_STROKE_FILL,
+    Tool.CHECKMARK: _COLOR_TARGETS_STROKE_FILL,
+    Tool.STEP: _COLOR_TARGETS_STROKE_FILL,
+    Tool.LINE: _COLOR_TARGETS_STROKE,
+    Tool.POLYLINE: _COLOR_TARGETS_STROKE,
+    Tool.ARROW: _COLOR_TARGETS_STROKE,
+    Tool.DOUBLE_ARROW: _COLOR_TARGETS_STROKE,
+    Tool.BENT_ARROW: _COLOR_TARGETS_STROKE,
+    Tool.BRUSH: _COLOR_TARGETS_STROKE,
+    Tool.BUCKET: _COLOR_TARGETS_FILL,
+    Tool.FILL_BG: _COLOR_TARGETS_FILL,
+    Tool.EYEDROPPER: _COLOR_TARGETS_STROKE_FILL,
+    Tool.TEXT: _COLOR_TARGETS_TEXT,
+    Tool.CALLOUT: _COLOR_TARGETS_TEXT,
+}
+# Tools that edit existing content: Style colors follow the selection, not the tool.
+_COLOR_SELECTION_CONTEXT_TOOLS = frozenset(
+    {
+        Tool.SELECT,
+        Tool.SELECT_RECT,
+        Tool.SELECT_ELLIPSE,
+        Tool.SELECT_PATH,
+        Tool.MAGIC_WAND,
+        Tool.CROP,
+        Tool.OCR,
+        Tool.BLUR,
+        Tool.ERASER,
+    }
+)
 
 
 def _format_rgba_color(rgba: list[Any]) -> str:
@@ -408,6 +484,12 @@ class EditorWindow(QMainWindow):
         self._syncing_history_list = False
         self._syncing_layer_panel = False
         self._palette_buttons: list[QPushButton] = []
+        self._color_target_widgets: dict[str, list[QWidget]] = {
+            "stroke": [],
+            "fill": [],
+            "text": [],
+        }
+        self._color_group_gaps: dict[str, QWidget] = {}
         self._active_tool = Tool.SELECT
         self._locked_tool: str | None = None
         self._one_shot_tool: str | None = None
@@ -427,6 +509,7 @@ class EditorWindow(QMainWindow):
         self._text_line_spacing = 1.2
         self._text_box_padding = 10.0
         self._text_corner_radius = 6.0
+        self._rect_corner_radius = 0.0
         self._shortcut_actions: dict[str, QAction] = {}
         self._editor_shortcut_overrides: dict[str, str] = {}
         self._tool_stroke_widths: dict[str, int] = normalize_tool_stroke_widths(None)
@@ -437,6 +520,7 @@ class EditorWindow(QMainWindow):
         self._tool_hardness_sliders: dict[str, QSlider] = {}
         self._tool_hardness_labels: dict[str, QLabel] = {}
         self._tool_style_combos: dict[str, QComboBox] = {}
+        self._tool_radius_spins: dict[str, QDoubleSpinBox] = {}
 
         container = QWidget(self)
         self.setCentralWidget(container)
@@ -502,101 +586,175 @@ class EditorWindow(QMainWindow):
             QColor("#000000"),
         ]
 
-        strip = QWidget(bar)
+        strip = FlowLayoutWidget(
+            bar,
+            horizontal_spacing=6,
+            vertical_spacing=4,
+            margin=2,
+        )
         strip.setObjectName("editorToolStrip")
-        strip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        strip_layout = QHBoxLayout(strip)
-        strip_layout.setContentsMargins(2, 0, 2, 0)
-        # Keep tools readable: base gap plus extra room for menu-arrow buttons.
-        strip_layout.setSpacing(6)
-        strip_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        strip_widgets: list[QWidget] = []
 
         self._tool_buttons: dict[str, QToolButton] = {}
-        for tool_key, label in [
-            (Tool.SELECT, "Select"),
-            (Tool.SELECT_RECT, "Sel Rect"),
-            (Tool.SELECT_ELLIPSE, "Sel Ellipse"),
-            (Tool.SELECT_PATH, "Lasso"),
-            (Tool.MAGIC_WAND, "Magic Wand"),
-            (Tool.BRUSH, "Brush"),
-            (Tool.ERASER, "Eraser"),
-            (Tool.BUCKET, "Fill"),
-            (Tool.EYEDROPPER, "Color Picker"),
-            (Tool.RECT, "Rectangle"),
-            (Tool.ELLIPSE, "Circle"),
-            (Tool.LINE, "Line"),
-            (Tool.ARROW, "Arrow"),
-            (Tool.TEXT, "Text"),
-            (Tool.FILL_BG, "Bg Fill"),
-            (Tool.BLUR, "Blur"),
-            (Tool.STEP, "Step"),
-            (Tool.OCR, "OCR"),
-            (Tool.CROP, "Crop"),
-        ]:
-            button = QToolButton()
-            button.setText(label)
-            button.setCheckable(True)
-            button.setIcon(self._build_tool_icon(tool_key))
-            button.setIconSize(QSize(28, 28))
-            button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-            button.setFixedSize(38, 34)
-            button.setToolTip(label)
-            self._configure_compact_toolbar_height(button, 34)
-            button.clicked.connect(
-                lambda _checked=False, t=tool_key: self._on_tool_button_clicked(t)
+        tool_categories: list[tuple[str, list[tuple[str, str]]]] = [
+            (
+                "Select",
+                [
+                    (Tool.SELECT, "Select"),
+                    (Tool.SELECT_RECT, "Sel Rect"),
+                    (Tool.SELECT_ELLIPSE, "Sel Ellipse"),
+                    (Tool.SELECT_PATH, "Lasso"),
+                    (Tool.MAGIC_WAND, "Magic Wand"),
+                ],
+            ),
+            (
+                "Paint",
+                [
+                    (Tool.BRUSH, "Brush"),
+                    (Tool.ERASER, "Eraser"),
+                    (Tool.BUCKET, "Fill"),
+                    (Tool.EYEDROPPER, "Color Picker"),
+                ],
+            ),
+            (
+                "Shapes",
+                [
+                    (Tool.RECT, "Rectangle"),
+                    (Tool.ELLIPSE, "Circle"),
+                    (Tool.TRIANGLE, "Triangle"),
+                    (Tool.STAR, "Star"),
+                    (Tool.POLYGON, "Polygon"),
+                ],
+            ),
+            (
+                "Lines",
+                [
+                    (Tool.LINE, "Line"),
+                    (Tool.POLYLINE, "Polyline"),
+                    (Tool.ARROW, "Arrow"),
+                    (Tool.DOUBLE_ARROW, "Double Arrow"),
+                    (Tool.BENT_ARROW, "Bent Arrow"),
+                ],
+            ),
+            (
+                "Marks",
+                [
+                    (Tool.CROSS, "Cross"),
+                    (Tool.CHECKMARK, "Checkmark"),
+                    (Tool.SPOTLIGHT, "Spotlight"),
+                    (Tool.STEP, "Step"),
+                ],
+            ),
+            (
+                "Text",
+                [
+                    (Tool.TEXT, "Text"),
+                    (Tool.CALLOUT, "Callout"),
+                ],
+            ),
+            (
+                "Image",
+                [
+                    (Tool.FILL_BG, "Bg Fill"),
+                    (Tool.BLUR, "Blur"),
+                    (Tool.OCR, "OCR"),
+                    (Tool.CROP, "Crop"),
+                ],
+            ),
+        ]
+        for category_title, tools in tool_categories:
+            category_box = QGroupBox(category_title, strip)
+            category_box.setObjectName("toolCategoryBox")
+            category_box.setSizePolicy(
+                QSizePolicy.Policy.Maximum,
+                QSizePolicy.Policy.Maximum,
             )
-            button.installEventFilter(self)
-            self._tool_buttons[tool_key] = button
-            self._tool_button_order.append(tool_key)
-            self._tool_button_labels[tool_key] = label
-            self._tool_button_to_key[button] = tool_key
-            strip_layout.addWidget(button)
+            category_layout = QHBoxLayout(category_box)
+            category_layout.setContentsMargins(4, 10, 4, 4)
+            category_layout.setSpacing(4)
+            for tool_key, label in tools:
+                button = QToolButton()
+                button.setText(label)
+                button.setCheckable(True)
+                button.setIcon(self._build_tool_icon(tool_key))
+                button.setIconSize(QSize(28, 28))
+                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+                button.setFixedSize(38, 34)
+                button.setToolTip(label)
+                self._configure_compact_toolbar_height(button, 34)
+                button.clicked.connect(
+                    lambda _checked=False, t=tool_key: self._on_tool_button_clicked(t)
+                )
+                button.installEventFilter(self)
+                self._tool_buttons[tool_key] = button
+                self._tool_button_order.append(tool_key)
+                self._tool_button_labels[tool_key] = label
+                self._tool_button_to_key[button] = tool_key
+                category_layout.addWidget(button)
+            strip_widgets.append(category_box)
+
         self._tool_buttons[Tool.SELECT].setChecked(True)
         self._setup_pixel_tool_option_menus()
         self._setup_stroke_width_tool_menus()
         self._setup_text_tool_option_menu()
 
-        strip_layout.addSpacing(4)
+        help_box = QGroupBox("Help", strip)
+        help_box.setObjectName("toolCategoryBox")
+        help_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
+        help_layout = QHBoxLayout(help_box)
+        help_layout.setContentsMargins(4, 10, 4, 4)
+        help_layout.setSpacing(4)
         self.tools_help_button = QToolButton()
         self.tools_help_button.setText("?")
         self.tools_help_button.setToolTip("Open the tools reference table.")
         self.tools_help_button.setFixedSize(38, 34)
         self._configure_compact_toolbar_height(self.tools_help_button, 34)
         self.tools_help_button.clicked.connect(self.show_tools_reference)
-        strip_layout.addWidget(self.tools_help_button)
+        help_layout.addWidget(self.tools_help_button)
+        strip_widgets.append(help_box)
 
-        strip_layout.addSpacing(8)
+        history_box = QGroupBox("History", strip)
+        history_box.setObjectName("toolCategoryBox")
+        history_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
+        history_layout = QHBoxLayout(history_box)
+        history_layout.setContentsMargins(4, 10, 4, 4)
+        history_layout.setSpacing(4)
         self.history_undo_button = QPushButton("Undo")
         self.history_undo_button.clicked.connect(self.undo)
         self._configure_compact_toolbar_height(self.history_undo_button)
-        strip_layout.addWidget(self.history_undo_button)
+        history_layout.addWidget(self.history_undo_button)
         self.history_redo_button = QPushButton("Redo")
         self.history_redo_button.clicked.connect(self.redo)
         self._configure_compact_toolbar_height(self.history_redo_button)
-        strip_layout.addWidget(self.history_redo_button)
+        history_layout.addWidget(self.history_redo_button)
         self.history_list_combo = QComboBox()
         self.history_list_combo.setMinimumWidth(160)
         self.history_list_combo.setMaxVisibleItems(16)
         self.history_list_combo.currentIndexChanged.connect(self._on_history_entry_selected)
         self._configure_compact_toolbar_height(self.history_list_combo)
-        strip_layout.addWidget(self.history_list_combo)
+        history_layout.addWidget(self.history_list_combo)
         self.history_status_label = QLabel("1/1")
         self._configure_compact_toolbar_height(self.history_status_label, 22)
-        strip_layout.addWidget(self.history_status_label)
+        history_layout.addWidget(self.history_status_label)
+        strip_widgets.append(history_box)
 
-        strip_layout.addStretch(1)
-
+        zoom_box = QGroupBox("Zoom", strip)
+        zoom_box.setObjectName("toolCategoryBox")
+        zoom_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
+        zoom_layout = QHBoxLayout(zoom_box)
+        zoom_layout.setContentsMargins(4, 10, 4, 4)
+        zoom_layout.setSpacing(4)
         self.zoom_out_button = QPushButton("-")
         self.zoom_out_button.clicked.connect(self.canvas.zoom_out)
         self._configure_compact_action_button(self.zoom_out_button)
         self._configure_compact_toolbar_height(self.zoom_out_button)
-        strip_layout.addWidget(self.zoom_out_button)
+        zoom_layout.addWidget(self.zoom_out_button)
 
         self.zoom_label = QLabel("100%")
         self.zoom_label.setMinimumWidth(42)
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._configure_compact_toolbar_height(self.zoom_label, 22)
-        strip_layout.addWidget(self.zoom_label)
+        zoom_layout.addWidget(self.zoom_label)
 
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
         self.zoom_slider.setRange(10, 400)
@@ -605,46 +763,53 @@ class EditorWindow(QMainWindow):
         self.zoom_slider.setToolTip("Zoom: left smaller, right larger")
         self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
         self._configure_compact_toolbar_height(self.zoom_slider, 22)
-        strip_layout.addWidget(self.zoom_slider)
+        zoom_layout.addWidget(self.zoom_slider)
 
         self.zoom_in_button = QPushButton("+")
         self.zoom_in_button.clicked.connect(self.canvas.zoom_in)
         self._configure_compact_action_button(self.zoom_in_button)
         self._configure_compact_toolbar_height(self.zoom_in_button)
-        strip_layout.addWidget(self.zoom_in_button)
+        zoom_layout.addWidget(self.zoom_in_button)
 
         self.zoom_reset_button = QPushButton("Reset")
         self.zoom_reset_button.clicked.connect(self.canvas.reset_zoom)
         self._configure_compact_action_button(self.zoom_reset_button)
         self._configure_compact_toolbar_height(self.zoom_reset_button)
-        strip_layout.addWidget(self.zoom_reset_button)
+        zoom_layout.addWidget(self.zoom_reset_button)
+        strip_widgets.append(zoom_box)
 
+        strip.set_flow_widgets(strip_widgets)
         root_layout.addWidget(strip)
 
         self._property_tabs = QTabWidget(bar)
         self._property_tabs.setObjectName("editorPropertyTabs")
         self._property_tabs.setDocumentMode(True)
         self._property_tabs.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Maximum,
         )
+        self._fitting_property_tabs = False
         self._PROPERTY_TAB_STYLE = 0
         self._PROPERTY_TAB_ARRANGE = 1
         self._PROPERTY_TAB_EXPORT = 2
 
-        style_tab = QWidget()
-        style_layout = QHBoxLayout(style_tab)
-        style_layout.setContentsMargins(4, 0, 4, 0)
-        style_layout.setSpacing(3)
-        style_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        style_tab = FlowLayoutWidget(
+            self._property_tabs,
+            horizontal_spacing=3,
+            vertical_spacing=2,
+            margin=2,
+        )
+        style_widgets: list[QWidget] = []
+        stroke_widgets: list[QWidget] = []
+        fill_widgets: list[QWidget] = []
+        text_widgets: list[QWidget] = []
 
         self.stroke_button = QPushButton("Border")
         self.stroke_button.setFixedWidth(64)
         self.stroke_button.clicked.connect(self._choose_stroke_color)
         self._configure_compact_toolbar_height(self.stroke_button)
-        style_layout.addWidget(self.stroke_button)
-        for color in palette_colors:
-            style_layout.addWidget(self._create_palette_button(color, "stroke"))
+        stroke_widgets.append(self.stroke_button)
+        stroke_widgets.append(self._create_palette_row(palette_colors, "stroke"))
         self.stroke_alpha_slider = QSlider(Qt.Orientation.Horizontal)
         self.stroke_alpha_slider.setRange(0, 100)
         self.stroke_alpha_slider.setValue(100)
@@ -653,19 +818,21 @@ class EditorWindow(QMainWindow):
         self.stroke_alpha_slider.valueChanged.connect(self._stroke_alpha_changed)
         self.stroke_alpha_slider.sliderReleased.connect(self._stroke_alpha_committed)
         self._configure_compact_toolbar_height(self.stroke_alpha_slider, 22)
-        style_layout.addWidget(self.stroke_alpha_slider)
+        stroke_widgets.append(self.stroke_alpha_slider)
         self.stroke_alpha_label = QLabel("100%")
         self._configure_compact_toolbar_height(self.stroke_alpha_label, 22)
-        style_layout.addWidget(self.stroke_alpha_label)
+        stroke_widgets.append(self.stroke_alpha_label)
+        style_widgets.extend(stroke_widgets)
 
-        style_layout.addSpacing(6)
+        fill_gap = self._create_toolbar_gap(6)
+        self._color_group_gaps["fill"] = fill_gap
+        style_widgets.append(fill_gap)
         self.fill_button = QPushButton("Fill")
         self.fill_button.setFixedWidth(52)
         self.fill_button.clicked.connect(self._choose_fill_color)
         self._configure_compact_toolbar_height(self.fill_button)
-        style_layout.addWidget(self.fill_button)
-        for color in palette_colors:
-            style_layout.addWidget(self._create_palette_button(color, "fill"))
+        fill_widgets.append(self.fill_button)
+        fill_widgets.append(self._create_palette_row(palette_colors, "fill"))
         self.fill_alpha_slider = QSlider(Qt.Orientation.Horizontal)
         self.fill_alpha_slider.setRange(0, 100)
         self.fill_alpha_slider.setValue(31)
@@ -673,19 +840,21 @@ class EditorWindow(QMainWindow):
         self.fill_alpha_slider.setToolTip("Fill opacity")
         self.fill_alpha_slider.valueChanged.connect(self._fill_alpha_changed)
         self._configure_compact_toolbar_height(self.fill_alpha_slider, 22)
-        style_layout.addWidget(self.fill_alpha_slider)
+        fill_widgets.append(self.fill_alpha_slider)
         self.fill_alpha_label = QLabel("31%")
         self._configure_compact_toolbar_height(self.fill_alpha_label, 22)
-        style_layout.addWidget(self.fill_alpha_label)
+        fill_widgets.append(self.fill_alpha_label)
+        style_widgets.extend(fill_widgets)
 
-        style_layout.addSpacing(6)
+        text_gap = self._create_toolbar_gap(6)
+        self._color_group_gaps["text"] = text_gap
+        style_widgets.append(text_gap)
         self.text_color_button = QPushButton("Text")
         self.text_color_button.setFixedWidth(52)
         self.text_color_button.clicked.connect(self._choose_text_color)
         self._configure_compact_toolbar_height(self.text_color_button)
-        style_layout.addWidget(self.text_color_button)
-        for color in palette_colors:
-            style_layout.addWidget(self._create_palette_button(color, "text"))
+        text_widgets.append(self.text_color_button)
+        text_widgets.append(self._create_palette_row(palette_colors, "text"))
         self.text_alpha_slider = QSlider(Qt.Orientation.Horizontal)
         self.text_alpha_slider.setRange(0, 100)
         self.text_alpha_slider.setValue(100)
@@ -693,89 +862,97 @@ class EditorWindow(QMainWindow):
         self.text_alpha_slider.setToolTip("Text opacity")
         self.text_alpha_slider.valueChanged.connect(self._text_alpha_changed)
         self._configure_compact_toolbar_height(self.text_alpha_slider, 22)
-        style_layout.addWidget(self.text_alpha_slider)
+        text_widgets.append(self.text_alpha_slider)
         self.text_alpha_label = QLabel("100%")
         self._configure_compact_toolbar_height(self.text_alpha_label, 22)
-        style_layout.addWidget(self.text_alpha_label)
+        text_widgets.append(self.text_alpha_label)
+        style_widgets.extend(text_widgets)
 
-        style_layout.addStretch(1)
+        self._color_target_widgets = {
+            "stroke": stroke_widgets,
+            "fill": fill_widgets,
+            "text": text_widgets,
+        }
+        style_tab.set_flow_widgets(style_widgets)
         self._property_tabs.addTab(style_tab, "Style")
 
-        arrange_tab = QWidget()
-        arrange_layout = QHBoxLayout(arrange_tab)
-        arrange_layout.setContentsMargins(4, 0, 4, 0)
-        arrange_layout.setSpacing(3)
-        arrange_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        arrange_tab = FlowLayoutWidget(
+            self._property_tabs,
+            horizontal_spacing=3,
+            vertical_spacing=2,
+            margin=2,
+        )
+        arrange_widgets: list[QWidget] = []
         self.snap_to_grid_button = QToolButton()
         self.snap_to_grid_button.setText("Snap")
         self.snap_to_grid_button.setCheckable(True)
         self.snap_to_grid_button.clicked.connect(self._snap_toggled)
         self._configure_compact_toolbar_height(self.snap_to_grid_button)
-        arrange_layout.addWidget(self.snap_to_grid_button)
+        arrange_widgets.append(self.snap_to_grid_button)
         self.grid_visible_button = QToolButton()
         self.grid_visible_button.setText("Grid")
         self.grid_visible_button.setCheckable(True)
         self.grid_visible_button.clicked.connect(self._grid_toggled)
         self._configure_compact_toolbar_height(self.grid_visible_button)
-        arrange_layout.addWidget(self.grid_visible_button)
-        arrange_layout.addWidget(self._create_toolbar_label("Size"))
+        arrange_widgets.append(self.grid_visible_button)
+        arrange_widgets.append(self._create_toolbar_label("Size"))
         self.grid_size_combo = QComboBox()
         self.grid_size_combo.addItems(["8", "12", "16", "20", "24", "32", "40", "48"])
         self.grid_size_combo.setCurrentText("16")
         self.grid_size_combo.currentTextChanged.connect(self._grid_size_changed)
         self._configure_compact_combo(self.grid_size_combo, 52)
         self._configure_compact_toolbar_height(self.grid_size_combo)
-        arrange_layout.addWidget(self.grid_size_combo)
-        arrange_layout.addSpacing(6)
-        arrange_layout.addWidget(self._create_toolbar_label("Layer"))
+        arrange_widgets.append(self.grid_size_combo)
+        arrange_widgets.append(self._create_toolbar_gap(6))
+        arrange_widgets.append(self._create_toolbar_label("Layer"))
         self.layer_combo = QComboBox()
         self.layer_combo.setMinimumWidth(150)
         self.layer_combo.currentIndexChanged.connect(self._on_layer_combo_changed)
         self._configure_compact_toolbar_height(self.layer_combo)
-        arrange_layout.addWidget(self.layer_combo)
+        arrange_widgets.append(self.layer_combo)
         self.layer_visible_check = QCheckBox("Visible")
         self.layer_visible_check.toggled.connect(self._toggle_selected_layer_visibility)
         self._configure_compact_toolbar_height(self.layer_visible_check, 22)
-        arrange_layout.addWidget(self.layer_visible_check)
+        arrange_widgets.append(self.layer_visible_check)
         self.layer_lock_check = QCheckBox("Lock")
         self.layer_lock_check.toggled.connect(self._toggle_selected_layer_lock)
         self._configure_compact_toolbar_height(self.layer_lock_check, 22)
-        arrange_layout.addWidget(self.layer_lock_check)
+        arrange_widgets.append(self.layer_lock_check)
         self.layer_up_button = QPushButton("Up")
         self.layer_up_button.clicked.connect(self._move_selected_layer_up)
         self._configure_compact_toolbar_height(self.layer_up_button)
-        arrange_layout.addWidget(self.layer_up_button)
+        arrange_widgets.append(self.layer_up_button)
         self.layer_down_button = QPushButton("Down")
         self.layer_down_button.clicked.connect(self._move_selected_layer_down)
         self._configure_compact_toolbar_height(self.layer_down_button)
-        arrange_layout.addWidget(self.layer_down_button)
-        arrange_layout.addSpacing(6)
-        arrange_layout.addWidget(self._create_toolbar_label("X"))
+        arrange_widgets.append(self.layer_down_button)
+        arrange_widgets.append(self._create_toolbar_gap(6))
+        arrange_widgets.append(self._create_toolbar_label("X"))
         self.geometry_x_spin = QSpinBox()
         self.geometry_x_spin.setRange(-10000, 100000)
         self._configure_compact_combo(self.geometry_x_spin, 64)
-        arrange_layout.addWidget(self.geometry_x_spin)
-        arrange_layout.addWidget(self._create_toolbar_label("Y"))
+        arrange_widgets.append(self.geometry_x_spin)
+        arrange_widgets.append(self._create_toolbar_label("Y"))
         self.geometry_y_spin = QSpinBox()
         self.geometry_y_spin.setRange(-10000, 100000)
         self._configure_compact_combo(self.geometry_y_spin, 64)
-        arrange_layout.addWidget(self.geometry_y_spin)
-        arrange_layout.addWidget(self._create_toolbar_label("W"))
+        arrange_widgets.append(self.geometry_y_spin)
+        arrange_widgets.append(self._create_toolbar_label("W"))
         self.geometry_w_spin = QSpinBox()
         self.geometry_w_spin.setRange(2, 100000)
         self._configure_compact_combo(self.geometry_w_spin, 64)
-        arrange_layout.addWidget(self.geometry_w_spin)
-        arrange_layout.addWidget(self._create_toolbar_label("H"))
+        arrange_widgets.append(self.geometry_w_spin)
+        arrange_widgets.append(self._create_toolbar_label("H"))
         self.geometry_h_spin = QSpinBox()
         self.geometry_h_spin.setRange(2, 100000)
         self._configure_compact_combo(self.geometry_h_spin, 64)
-        arrange_layout.addWidget(self.geometry_h_spin)
+        arrange_widgets.append(self.geometry_h_spin)
         self.geometry_apply_button = QPushButton("Apply")
         self.geometry_apply_button.clicked.connect(self._apply_selected_geometry)
         self._configure_compact_toolbar_height(self.geometry_apply_button)
-        arrange_layout.addWidget(self.geometry_apply_button)
-        arrange_layout.addSpacing(6)
-        arrange_layout.addWidget(self._create_toolbar_label("Align"))
+        arrange_widgets.append(self.geometry_apply_button)
+        arrange_widgets.append(self._create_toolbar_gap(6))
+        arrange_widgets.append(self._create_toolbar_label("Align"))
         for mode, label in (
             ("left", "L"),
             ("center_h", "C"),
@@ -791,8 +968,8 @@ class EditorWindow(QMainWindow):
                 lambda _checked=False, align_mode=mode: self._align_selection(align_mode)
             )
             self._configure_compact_toolbar_height(button)
-            arrange_layout.addWidget(button)
-        arrange_layout.addWidget(self._create_toolbar_label("Dist"))
+            arrange_widgets.append(button)
+        arrange_widgets.append(self._create_toolbar_label("Dist"))
         self.distribute_h_button = QPushButton("H")
         self.distribute_h_button.setFixedWidth(28)
         self.distribute_h_button.setToolTip("Distribute selection horizontally (3+ items)")
@@ -800,7 +977,7 @@ class EditorWindow(QMainWindow):
             lambda: self._distribute_selection("horizontal")
         )
         self._configure_compact_toolbar_height(self.distribute_h_button)
-        arrange_layout.addWidget(self.distribute_h_button)
+        arrange_widgets.append(self.distribute_h_button)
         self.distribute_v_button = QPushButton("V")
         self.distribute_v_button.setFixedWidth(28)
         self.distribute_v_button.setToolTip("Distribute selection vertically (3+ items)")
@@ -808,37 +985,37 @@ class EditorWindow(QMainWindow):
             lambda: self._distribute_selection("vertical")
         )
         self._configure_compact_toolbar_height(self.distribute_v_button)
-        arrange_layout.addWidget(self.distribute_v_button)
-        arrange_layout.addSpacing(6)
-        arrange_layout.addWidget(self._create_toolbar_label("Rotate"))
+        arrange_widgets.append(self.distribute_v_button)
+        arrange_widgets.append(self._create_toolbar_gap(6))
+        arrange_widgets.append(self._create_toolbar_label("Rotate"))
         self.rotate_ccw_button = QPushButton("-15°")
         self.rotate_ccw_button.clicked.connect(lambda: self._rotate_selection(-15.0))
         self._configure_compact_toolbar_height(self.rotate_ccw_button)
-        arrange_layout.addWidget(self.rotate_ccw_button)
+        arrange_widgets.append(self.rotate_ccw_button)
         self.rotate_cw_button = QPushButton("+15°")
         self.rotate_cw_button.clicked.connect(lambda: self._rotate_selection(15.0))
         self._configure_compact_toolbar_height(self.rotate_cw_button)
-        arrange_layout.addWidget(self.rotate_cw_button)
+        arrange_widgets.append(self.rotate_cw_button)
         self.rotation_spin = QDoubleSpinBox()
         self.rotation_spin.setRange(-360.0, 360.0)
         self.rotation_spin.setDecimals(1)
         self.rotation_spin.setSuffix("°")
         self.rotation_spin.setFixedWidth(78)
         self._configure_compact_toolbar_height(self.rotation_spin)
-        arrange_layout.addWidget(self.rotation_spin)
+        arrange_widgets.append(self.rotation_spin)
         self.rotation_apply_button = QPushButton("Set°")
         self.rotation_apply_button.clicked.connect(self._apply_rotation_spin)
         self._configure_compact_toolbar_height(self.rotation_apply_button)
-        arrange_layout.addWidget(self.rotation_apply_button)
+        arrange_widgets.append(self.rotation_apply_button)
         self.flip_h_button = QPushButton("Flip H")
         self.flip_h_button.clicked.connect(lambda: self._flip_selection(horizontal=True))
         self._configure_compact_toolbar_height(self.flip_h_button)
-        arrange_layout.addWidget(self.flip_h_button)
+        arrange_widgets.append(self.flip_h_button)
         self.flip_v_button = QPushButton("Flip V")
         self.flip_v_button.clicked.connect(lambda: self._flip_selection(vertical=True))
         self._configure_compact_toolbar_height(self.flip_v_button)
-        arrange_layout.addWidget(self.flip_v_button)
-        arrange_layout.addWidget(self._create_toolbar_label("Skew"))
+        arrange_widgets.append(self.flip_v_button)
+        arrange_widgets.append(self._create_toolbar_label("Skew"))
         self.skew_x_spin = QDoubleSpinBox()
         self.skew_x_spin.setRange(-60.0, 60.0)
         self.skew_x_spin.setDecimals(1)
@@ -846,7 +1023,7 @@ class EditorWindow(QMainWindow):
         self.skew_x_spin.setSuffix("°")
         self.skew_x_spin.setFixedWidth(82)
         self._configure_compact_toolbar_height(self.skew_x_spin)
-        arrange_layout.addWidget(self.skew_x_spin)
+        arrange_widgets.append(self.skew_x_spin)
         self.skew_y_spin = QDoubleSpinBox()
         self.skew_y_spin.setRange(-60.0, 60.0)
         self.skew_y_spin.setDecimals(1)
@@ -854,27 +1031,29 @@ class EditorWindow(QMainWindow):
         self.skew_y_spin.setSuffix("°")
         self.skew_y_spin.setFixedWidth(82)
         self._configure_compact_toolbar_height(self.skew_y_spin)
-        arrange_layout.addWidget(self.skew_y_spin)
+        arrange_widgets.append(self.skew_y_spin)
         self.skew_apply_button = QPushButton("Skew")
         self.skew_apply_button.clicked.connect(self._apply_skew_spins)
         self._configure_compact_toolbar_height(self.skew_apply_button)
-        arrange_layout.addWidget(self.skew_apply_button)
-        arrange_layout.addStretch(1)
+        arrange_widgets.append(self.skew_apply_button)
+        arrange_tab.set_flow_widgets(arrange_widgets)
         self._property_tabs.addTab(arrange_tab, "Arrange")
 
-        export_tab = QWidget()
-        export_layout = QHBoxLayout(export_tab)
-        export_layout.setContentsMargins(4, 0, 4, 0)
-        export_layout.setSpacing(3)
-        export_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        export_layout.addWidget(self._create_toolbar_label("Preset"))
+        export_tab = FlowLayoutWidget(
+            self._property_tabs,
+            horizontal_spacing=3,
+            vertical_spacing=2,
+            margin=2,
+        )
+        export_widgets: list[QWidget] = []
+        export_widgets.append(self._create_toolbar_label("Preset"))
         self.export_preset_combo = QComboBox()
         for preset_key, preset_values in self._export_presets.items():
             self.export_preset_combo.addItem(preset_values[0], preset_key)
         self.export_preset_combo.currentIndexChanged.connect(self._on_export_preset_index_changed)
         self._configure_compact_combo(self.export_preset_combo, 110)
-        export_layout.addWidget(self.export_preset_combo)
-        export_layout.addWidget(self._create_toolbar_label("Scale"))
+        export_widgets.append(self.export_preset_combo)
+        export_widgets.append(self._create_toolbar_label("Scale"))
         self.export_scale_combo = QComboBox()
         self.export_scale_combo.addItem("@1x", 1.0)
         self.export_scale_combo.addItem("@2x", 2.0)
@@ -882,7 +1061,7 @@ class EditorWindow(QMainWindow):
         self.export_scale_combo.setCurrentIndex(0)
         self.export_scale_combo.currentIndexChanged.connect(self._on_export_scale_changed)
         self._configure_compact_combo(self.export_scale_combo, 64)
-        export_layout.addWidget(self.export_scale_combo)
+        export_widgets.append(self.export_scale_combo)
         self.export_keep_transparency_check = QCheckBox("Keep transparency")
         self.export_keep_transparency_check.setChecked(True)
         self.export_keep_transparency_check.setToolTip(
@@ -892,24 +1071,25 @@ class EditorWindow(QMainWindow):
             self._on_export_keep_transparency_toggled
         )
         self._configure_compact_toolbar_height(self.export_keep_transparency_check, 22)
-        export_layout.addWidget(self.export_keep_transparency_check)
-        export_layout.addWidget(self._create_toolbar_label("Batch"))
+        export_widgets.append(self.export_keep_transparency_check)
+        export_widgets.append(self._create_toolbar_label("Batch"))
         self.batch_profile_combo = QComboBox()
         self.batch_profile_combo.currentIndexChanged.connect(
             self._on_batch_profile_index_changed
         )
         self._configure_compact_combo(self.batch_profile_combo, 130)
-        export_layout.addWidget(self.batch_profile_combo)
+        export_widgets.append(self.batch_profile_combo)
         self.manage_batch_profiles_button = QPushButton("Manage")
         self.manage_batch_profiles_button.clicked.connect(self.manage_batch_profiles)
         self._configure_compact_toolbar_height(self.manage_batch_profiles_button)
-        export_layout.addWidget(self.manage_batch_profiles_button)
+        export_widgets.append(self.manage_batch_profiles_button)
         self.export_batch_button = QPushButton("Batch Export")
         self.export_batch_button.clicked.connect(self.export_batch_with_dialog)
         self._configure_compact_toolbar_height(self.export_batch_button)
-        export_layout.addWidget(self.export_batch_button)
-        export_layout.addStretch(1)
+        export_widgets.append(self.export_batch_button)
+        export_tab.set_flow_widgets(export_widgets)
         self._property_tabs.addTab(export_tab, "Export")
+        self._property_tabs.installEventFilter(self)
         self._fit_property_tabs_height()
 
         root_layout.addWidget(self._property_tabs)
@@ -917,7 +1097,109 @@ class EditorWindow(QMainWindow):
         self._update_color_button_preview(self.fill_button, QColor(231, 76, 60, 80))
         self._update_color_button_preview(self.text_color_button, QColor("#2c3e50"))
         self._apply_toolbar_tooltips()
+        self._update_style_color_visibility()
         return bar
+
+    def _resolve_style_color_targets(
+        self,
+        *,
+        tool: str | None = None,
+        selection_type: str | None = None,
+    ) -> frozenset[str]:
+        """
+        Resolves which Style color groups apply to the current context.
+
+        Selection wins while an annotation is selected in Select mode; otherwise
+        the active drawing tool decides. Empty means hide all color controls.
+
+        Args:
+            tool: Optional tool override; defaults to the active tool.
+            selection_type: Optional selection type override.
+
+        Returns:
+            frozenset[str]: Target keys among ``stroke``, ``fill``, and ``text``.
+        """
+
+        resolved_tool = str(tool or self._active_tool)
+        resolved_type = str(selection_type or "").strip().lower()
+        if resolved_type == "document":
+            return frozenset()
+        use_selection_context = (
+            resolved_tool in _COLOR_SELECTION_CONTEXT_TOOLS
+            or resolved_tool not in _COLOR_TARGETS_BY_TOOL
+        )
+        if use_selection_context:
+            if not resolved_type:
+                payload = self._primary_selection_payload()
+                if payload is not None:
+                    resolved_type = str(payload.get("type") or "").strip().lower()
+            if resolved_type and resolved_type != "document":
+                return _COLOR_TARGETS_BY_SELECTION.get(resolved_type, frozenset())
+            return frozenset()
+        return _COLOR_TARGETS_BY_TOOL.get(resolved_tool, frozenset())
+
+    def _update_style_color_visibility(
+        self,
+        *,
+        tool: str | None = None,
+        selection_type: str | None = None,
+    ) -> None:
+        """
+        Shows only the Style color groups relevant to tool or selection.
+
+        Args:
+            tool: Optional tool override.
+            selection_type: Optional selection type override.
+
+        Returns:
+            None
+        """
+
+        if not hasattr(self, "_property_tabs"):
+            return
+        targets = self._resolve_style_color_targets(
+            tool=tool,
+            selection_type=selection_type,
+        )
+        for target_name, widgets in self._color_target_widgets.items():
+            visible = target_name in targets
+            for widget in widgets:
+                widget.setVisible(visible)
+
+        ordered = [name for name in ("stroke", "fill", "text") if name in targets]
+        for gap_name, gap in self._color_group_gaps.items():
+            # Show the leading gap only when a previous group is also visible.
+            if gap_name not in targets:
+                gap.setVisible(False)
+                continue
+            index = ordered.index(gap_name) if gap_name in ordered else -1
+            gap.setVisible(index > 0)
+
+        style_visible = bool(targets)
+        self._property_tabs.setTabVisible(self._PROPERTY_TAB_STYLE, style_visible)
+        if style_visible:
+            self._fit_property_tabs_height()
+        elif self._property_tabs.currentIndex() == self._PROPERTY_TAB_STYLE:
+            self._property_tabs.setCurrentIndex(self._PROPERTY_TAB_ARRANGE)
+            self._fit_property_tabs_height()
+        else:
+            self._fit_property_tabs_height()
+
+    def _create_toolbar_gap(self, width: int = 6) -> QWidget:
+        """
+        Creates a fixed-width spacer used between groups in flow toolbars.
+
+        Args:
+            width: Spacer width in pixels.
+
+        Returns:
+            QWidget: Invisible fixed-width gap widget.
+        """
+
+        gap = QWidget()
+        gap.setFixedWidth(max(1, int(width)))
+        gap.setFixedHeight(1)
+        return gap
 
     def _fit_property_tabs_height(self) -> None:
         """
@@ -929,15 +1211,30 @@ class EditorWindow(QMainWindow):
 
         if not hasattr(self, "_property_tabs"):
             return
-        tab_bar_height = max(18, self._property_tabs.tabBar().sizeHint().height())
-        content_height = 24
-        for index in range(self._property_tabs.count()):
-            page = self._property_tabs.widget(index)
-            if page is None:
-                continue
-            content_height = max(content_height, page.sizeHint().height())
-        # Border and pane chrome around the active page.
-        self._property_tabs.setFixedHeight(tab_bar_height + content_height + 2)
+        if self._fitting_property_tabs:
+            return
+        self._fitting_property_tabs = True
+        try:
+            tab_bar_height = max(18, self._property_tabs.tabBar().sizeHint().height())
+            available_width = max(1, self._property_tabs.contentsRect().width())
+            content_height = 24
+            for index in range(self._property_tabs.count()):
+                page = self._property_tabs.widget(index)
+                if page is None:
+                    continue
+                if page.hasHeightForWidth():
+                    content_height = max(
+                        content_height,
+                        page.heightForWidth(available_width),
+                    )
+                else:
+                    content_height = max(content_height, page.sizeHint().height())
+            # Border and pane chrome around the active page.
+            target_height = tab_bar_height + content_height + 2
+            if self._property_tabs.height() != target_height:
+                self._property_tabs.setFixedHeight(target_height)
+        finally:
+            self._fitting_property_tabs = False
 
     def _focus_property_tab_for_context(
         self,
@@ -957,32 +1254,12 @@ class EditorWindow(QMainWindow):
 
         if not hasattr(self, "_property_tabs"):
             return
-        resolved_type = str(selection_type or "").strip().lower()
-        resolved_tool = str(tool or self._active_tool)
-        if resolved_type == "document":
-            return
-        if resolved_type == "text" or resolved_tool == Tool.TEXT:
-            # Text typography lives on the Text tool popup; colors stay on Style.
-            self._property_tabs.setCurrentIndex(self._PROPERTY_TAB_STYLE)
-            return
-        if resolved_tool in {
-            Tool.RECT,
-            Tool.ELLIPSE,
-            Tool.LINE,
-            Tool.ARROW,
-            Tool.FILL_BG,
-            Tool.BLUR,
-            Tool.STEP,
-            Tool.CROP,
-            Tool.SELECT_RECT,
-            Tool.SELECT_ELLIPSE,
-            Tool.SELECT_PATH,
-            Tool.MAGIC_WAND,
-            Tool.BRUSH,
-            Tool.ERASER,
-            Tool.BUCKET,
-            Tool.EYEDROPPER,
-        } or resolved_type in {"rect", "ellipse", "line", "arrow", "step", "image"}:
+        self._update_style_color_visibility(tool=tool, selection_type=selection_type)
+        targets = self._resolve_style_color_targets(
+            tool=tool,
+            selection_type=selection_type,
+        )
+        if targets:
             self._property_tabs.setCurrentIndex(self._PROPERTY_TAB_STYLE)
 
     def _build_tool_icon(self, tool: str, *, locked: bool = False) -> QIcon:
@@ -1030,14 +1307,120 @@ class EditorWindow(QMainWindow):
             painter.setPen(stroke_pen)
             painter.setBrush(QBrush(QColor(74, 163, 255, 70)))
             painter.drawEllipse(QRectF(3.0, 4.0, 12.0, 10.0))
+        elif tool == Tool.TRIANGLE:
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(74, 163, 255, 70)))
+            painter.drawPolygon(
+                QPolygonF(
+                    [
+                        QPointF(9.0, 3.0),
+                        QPointF(15.0, 14.0),
+                        QPointF(3.0, 14.0),
+                    ]
+                )
+            )
+        elif tool == Tool.STAR:
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(241, 196, 15, 160)))
+            painter.drawPolygon(
+                QPolygonF(
+                    [
+                        QPointF(9.0, 2.5),
+                        QPointF(10.5, 7.0),
+                        QPointF(15.0, 7.2),
+                        QPointF(11.4, 10.0),
+                        QPointF(12.7, 14.5),
+                        QPointF(9.0, 12.0),
+                        QPointF(5.3, 14.5),
+                        QPointF(6.6, 10.0),
+                        QPointF(3.0, 7.2),
+                        QPointF(7.5, 7.0),
+                    ]
+                )
+            )
+        elif tool == Tool.POLYGON:
+            # Irregular freeform outline with vertex dots (not a regular pentagon).
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(74, 163, 255, 70)))
+            polygon_points = [
+                QPointF(3.0, 5.5),
+                QPointF(7.5, 2.5),
+                QPointF(14.5, 4.0),
+                QPointF(12.5, 10.5),
+                QPointF(15.0, 14.5),
+                QPointF(8.0, 13.0),
+                QPointF(3.5, 14.0),
+            ]
+            painter.drawPolygon(QPolygonF(polygon_points))
+            painter.setBrush(QBrush(QColor("#d7e3f1")))
+            painter.setPen(QPen(QColor("#8fa3b8"), 0.8))
+            for point in polygon_points:
+                painter.drawEllipse(point, 1.15, 1.15)
         elif tool == Tool.LINE:
             painter.setPen(stroke_pen)
             painter.drawLine(3, 14, 15, 4)
+        elif tool == Tool.POLYLINE:
+            painter.setPen(stroke_pen)
+            painter.drawPolyline(
+                QPolygonF(
+                    [
+                        QPointF(3.0, 13.0),
+                        QPointF(7.0, 6.0),
+                        QPointF(11.0, 11.0),
+                        QPointF(15.0, 4.0),
+                    ]
+                )
+            )
         elif tool == Tool.ARROW:
             painter.setPen(accent_pen)
             painter.drawLine(3, 14, 13, 5)
             painter.drawLine(13, 5, 11, 5)
             painter.drawLine(13, 5, 13, 7)
+        elif tool == Tool.DOUBLE_ARROW:
+            painter.setPen(accent_pen)
+            painter.drawLine(4, 14, 14, 4)
+            painter.drawLine(4, 14, 4, 11)
+            painter.drawLine(4, 14, 7, 14)
+            painter.drawLine(14, 4, 14, 7)
+            painter.drawLine(14, 4, 11, 4)
+        elif tool == Tool.BENT_ARROW:
+            painter.setPen(accent_pen)
+            painter.drawPolyline(
+                QPolygonF(
+                    [
+                        QPointF(3.0, 13.0),
+                        QPointF(3.0, 6.0),
+                        QPointF(12.0, 6.0),
+                    ]
+                )
+            )
+            painter.drawLine(12, 6, 10, 4)
+            painter.drawLine(12, 6, 10, 8)
+        elif tool == Tool.SPOTLIGHT:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QBrush(QColor(0, 0, 0, 140)))
+            painter.drawRect(QRectF(2.0, 2.0, 14.0, 14.0))
+            painter.setBrush(QBrush(QColor(0, 0, 0, 0)))
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+            painter.drawEllipse(QRectF(5.0, 5.0, 8.0, 8.0))
+            painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+            painter.setPen(QPen(QColor("#f1c40f"), 1.3))
+            painter.drawEllipse(QRectF(5.0, 5.0, 8.0, 8.0))
+        elif tool == Tool.CROSS:
+            painter.setPen(QPen(QColor("#e74c3c"), 2.0))
+            painter.drawLine(4, 4, 14, 14)
+            painter.drawLine(14, 4, 4, 14)
+        elif tool == Tool.CHECKMARK:
+            painter.setPen(QPen(QColor("#27ae60"), 2.0))
+            painter.drawPolyline(
+                QPolygonF(
+                    [
+                        QPointF(3.5, 9.5),
+                        QPointF(7.5, 13.5),
+                        QPointF(14.5, 4.5),
+                    ]
+                )
+            )
         elif tool == Tool.TEXT:
             painter.setPen(stroke_pen)
             text_font = painter.font()
@@ -1045,6 +1428,19 @@ class EditorWindow(QMainWindow):
             text_font.setPointSize(10)
             painter.setFont(text_font)
             painter.drawText(QRectF(2.0, 1.0, 14.0, 16.0), "T")
+        elif tool == Tool.CALLOUT:
+            painter.setPen(stroke_pen)
+            painter.setBrush(QBrush(QColor(255, 255, 255, 220)))
+            painter.drawRoundedRect(QRectF(2.5, 2.5, 13.0, 9.0), 2.0, 2.0)
+            painter.drawPolygon(
+                QPolygonF(
+                    [
+                        QPointF(5.0, 11.0),
+                        QPointF(8.0, 11.0),
+                        QPointF(6.0, 15.0),
+                    ]
+                )
+            )
         elif tool == Tool.FILL_BG:
             painter.setPen(stroke_pen)
             painter.setBrush(QBrush(QColor(74, 163, 255, 100)))
@@ -1271,6 +1667,28 @@ class EditorWindow(QMainWindow):
         button.setFixedWidth(max(24, button.sizeHint().width()))
         self._configure_compact_toolbar_height(button)
 
+    def _create_palette_row(self, colors: list[QColor], target: str) -> QWidget:
+        """
+        Builds one compact horizontal row of palette swatches.
+
+        Args:
+            colors: Palette colors to show.
+            target: Style target key (stroke, fill, text).
+
+        Returns:
+            QWidget: Row widget with 2px horizontal spacing between swatches.
+        """
+
+        row = QWidget()
+        row.setObjectName("paletteSwatchRow")
+        row.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        for color in colors:
+            layout.addWidget(self._create_palette_button(color, target))
+        return row
+
     def _create_palette_button(self, color: QColor, target: str) -> QPushButton:
         """
         Builds one compact palette button for direct color assignment.
@@ -1284,6 +1702,7 @@ class EditorWindow(QMainWindow):
         """
 
         button = QPushButton("")
+        button.setObjectName("paletteSwatch")
         button.setFixedSize(18, 18)
         button.setToolTip(f"Apply {color.name()} to {target}")
         button.setProperty("paletteColor", color.name(QColor.NameFormat.HexArgb))
@@ -1808,8 +2227,15 @@ class EditorWindow(QMainWindow):
             Tool.ERASER,
             Tool.RECT,
             Tool.ELLIPSE,
+            Tool.TRIANGLE,
+            Tool.STAR,
+            Tool.POLYGON,
             Tool.LINE,
+            Tool.POLYLINE,
             Tool.ARROW,
+            Tool.DOUBLE_ARROW,
+            Tool.BENT_ARROW,
+            Tool.SPOTLIGHT,
         )
         for tool_key in width_tools:
             button = self._tool_buttons.get(tool_key)
@@ -1905,6 +2331,28 @@ class EditorWindow(QMainWindow):
                 root.addLayout(style_row)
                 self._tool_style_combos[tool_key] = style_combo
 
+            if tool_key == Tool.RECT:
+                radius_row = QHBoxLayout()
+                radius_row.setSpacing(8)
+                radius_title = QLabel("Radius", panel)
+                radius_title.setMinimumWidth(44)
+                radius_title.setToolTip(
+                    "Corner radius for rectangles (0 = sharp corners). "
+                    "Applies to new draws and to a selected rectangle."
+                )
+                radius_row.addWidget(radius_title)
+                radius_spin = QDoubleSpinBox(panel)
+                radius_spin.setDecimals(1)
+                radius_spin.setSingleStep(1.0)
+                radius_spin.setRange(0.0, 200.0)
+                radius_spin.setValue(float(self._rect_corner_radius))
+                radius_spin.setMinimumWidth(120)
+                radius_spin.setProperty("radiusTool", tool_key)
+                radius_spin.valueChanged.connect(self._tool_menu_radius_changed)
+                radius_row.addWidget(radius_spin, 1)
+                root.addLayout(radius_row)
+                self._tool_radius_spins[tool_key] = radius_spin
+
             panel_action.setDefaultWidget(panel)
             menu.addAction(panel_action)
             menu.aboutToShow.connect(
@@ -1982,6 +2430,31 @@ class EditorWindow(QMainWindow):
             persist=True,
         )
 
+    def _tool_menu_radius_changed(self, value: float) -> None:
+        """
+        Applies a rectangle corner-radius change from the Rectangle tool menu.
+
+        Args:
+            value: New corner radius in pixels.
+
+        Returns:
+            None
+        """
+
+        sender = self.sender()
+        tool = ""
+        if isinstance(sender, QDoubleSpinBox):
+            tool = str(sender.property("radiusTool") or "")
+        if tool and tool != Tool.RECT:
+            return
+        resolved = max(0.0, float(value))
+        self._rect_corner_radius = resolved
+        self.canvas.set_rect_corner_radius(
+            resolved,
+            apply_to_selection=True,
+            emit_history=True,
+        )
+
     def _prepare_stroke_tool_menu(self, tool_key: str) -> None:
         """
         Refreshes one stroke-tool popup from selection or tool defaults.
@@ -2043,7 +2516,7 @@ class EditorWindow(QMainWindow):
             # Brush/eraser menus always edit tool defaults; raster strokes are not
             # re-editable annotation objects.
             return False
-        if selection_type in {"rect", "ellipse", "line", "arrow"}:
+        if selection_type in {"rect", "ellipse", "triangle", "round_rect", "star", "highlight", "spotlight", "cross", "checkmark", "line", "arrow", "double_arrow", "polyline", "polygon", "bent_arrow"}:
             return True
         return False
 
@@ -2164,6 +2637,10 @@ class EditorWindow(QMainWindow):
                 and key in self._tool_style_combos
             ):
                 self._set_style_combo_value(key, stroke_style)
+            if key == Tool.RECT and str(payload.get("type") or "") == "rect":
+                corner_radius = payload.get("corner_radius")
+                if isinstance(corner_radius, (int, float)):
+                    self._set_radius_spin_value(key, float(corner_radius))
 
     def _restore_stroke_tool_menu_widgets(self, *, tool_key: str | None = None) -> None:
         """
@@ -2184,6 +2661,7 @@ class EditorWindow(QMainWindow):
                     list(self._tool_width_sliders.keys())
                     + list(self._tool_hardness_sliders.keys())
                     + list(self._tool_style_combos.keys())
+                    + list(self._tool_radius_spins.keys())
                 )
             )
         )
@@ -2205,6 +2683,30 @@ class EditorWindow(QMainWindow):
                     key,
                     self._tool_stroke_styles.get(key, STROKE_STYLE_SOLID),
                 )
+            if key == Tool.RECT and key in self._tool_radius_spins:
+                self._set_radius_spin_value(key, float(self._rect_corner_radius))
+
+    def _set_radius_spin_value(self, tool_key: str, radius: float) -> None:
+        """
+        Updates one tool Radius spin without emitting change handlers.
+
+        Args:
+            tool_key: Tool identifier.
+            radius: Corner radius to display.
+
+        Returns:
+            None
+        """
+
+        spin = self._tool_radius_spins.get(tool_key)
+        if spin is None:
+            return
+        resolved = max(0.0, float(radius))
+        if abs(spin.value() - resolved) < 0.001:
+            return
+        spin.blockSignals(True)
+        spin.setValue(resolved)
+        spin.blockSignals(False)
 
     def _sync_text_tool_menu_widgets(self, payload: dict[str, Any]) -> None:
         """
@@ -2873,7 +3375,7 @@ class EditorWindow(QMainWindow):
 
     def eventFilter(self, watched, event) -> bool:
         """
-        Handles double-click locking for drawing tool buttons.
+        Handles double-click locking for drawing tool buttons and property-tab reflow.
 
         Args:
             watched: Watched QObject.
@@ -2883,6 +3385,8 @@ class EditorWindow(QMainWindow):
             bool: True when handled.
         """
 
+        if watched is getattr(self, "_property_tabs", None) and event.type() == QEvent.Type.Resize:
+            self._fit_property_tabs_height()
         if isinstance(watched, QToolButton):
             tool_key = self._tool_button_to_key.get(watched)
             if tool_key is not None and event.type() == QEvent.Type.MouseButtonDblClick:
@@ -2904,9 +3408,19 @@ class EditorWindow(QMainWindow):
         return tool in {
             Tool.RECT,
             Tool.ELLIPSE,
+            Tool.TRIANGLE,
+            Tool.STAR,
+            Tool.POLYGON,
             Tool.LINE,
+            Tool.POLYLINE,
             Tool.ARROW,
+            Tool.DOUBLE_ARROW,
+            Tool.BENT_ARROW,
+            Tool.SPOTLIGHT,
+            Tool.CROSS,
+            Tool.CHECKMARK,
             Tool.TEXT,
+            Tool.CALLOUT,
             Tool.FILL_BG,
             Tool.BLUR,
             Tool.STEP,
@@ -3767,9 +4281,19 @@ class EditorWindow(QMainWindow):
         expected_action_by_tool = {
             Tool.RECT: "Draw rectangle",
             Tool.ELLIPSE: "Draw ellipse",
+            Tool.TRIANGLE: "Draw triangle",
+            Tool.STAR: "Draw star",
+            Tool.POLYGON: "Draw polygon",
             Tool.LINE: "Draw line",
+            Tool.POLYLINE: "Draw polyline",
             Tool.ARROW: "Draw arrow",
+            Tool.DOUBLE_ARROW: "Draw double arrow",
+            Tool.BENT_ARROW: "Draw bent arrow",
+            Tool.SPOTLIGHT: "Draw spotlight",
+            Tool.CROSS: "Draw cross",
+            Tool.CHECKMARK: "Draw checkmark",
             Tool.TEXT: "Insert text",
+            Tool.CALLOUT: "Insert callout",
             Tool.FILL_BG: "Fill background",
             Tool.BLUR: "Blur region",
             Tool.STEP: "Insert step",
@@ -3808,6 +4332,7 @@ class EditorWindow(QMainWindow):
         if selection_type == "document" or not selection_type:
             self._restore_stroke_tool_menu_widgets()
             self._restore_text_tool_menu_widgets()
+            self._update_style_color_visibility(selection_type="document")
             self._selection_info_label.setText(format_selection_info(payload))
             return
 
@@ -3843,7 +4368,7 @@ class EditorWindow(QMainWindow):
             )
             self._set_target_color("text", color, apply_to_canvas=False)
 
-        if selection_type in {"rect", "ellipse", "line", "arrow"}:
+        if selection_type in {"rect", "ellipse", "triangle", "round_rect", "star", "highlight", "spotlight", "cross", "checkmark", "line", "arrow", "double_arrow", "polyline", "polygon", "bent_arrow"}:
             self._sync_stroke_tool_menu_widgets(payload)
         elif selection_type == "text":
             self._sync_text_tool_menu_widgets(payload)

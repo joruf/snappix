@@ -9,6 +9,9 @@ from pathlib import Path
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -16,6 +19,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QStatusBar,
     QToolButton,
@@ -25,19 +29,55 @@ from PySide6.QtWidgets import (
 
 from src.annotation_items import StyleState
 from src.constants import APP_NAME
+from src.flow_layout import FlowLayoutWidget
 from src.timeline_widget import TimelineWidget
 from src.video_canvas import Tool, VideoCanvas
 from src.video_models import VideoAnnotationModel
 from src.video_recorder import OverlaySegment, build_export_command
 from src.video_storage import build_video_project_model, save_video_project
 
-_TOOL_LABELS = [
-    (Tool.SELECT, "Select"),
-    (Tool.RECT, "Rectangle"),
-    (Tool.ELLIPSE, "Ellipse"),
-    (Tool.LINE, "Line"),
-    (Tool.ARROW, "Arrow"),
-    (Tool.TEXT, "Text"),
+_TOOL_CATEGORIES: list[tuple[str, list[tuple[str, str]]]] = [
+    (
+        "Select",
+        [
+            (Tool.SELECT, "Select"),
+        ],
+    ),
+    (
+        "Shapes",
+        [
+            (Tool.RECT, "Rectangle"),
+            (Tool.ELLIPSE, "Ellipse"),
+            (Tool.TRIANGLE, "Triangle"),
+            (Tool.STAR, "Star"),
+            (Tool.POLYGON, "Polygon"),
+        ],
+    ),
+    (
+        "Lines",
+        [
+            (Tool.LINE, "Line"),
+            (Tool.POLYLINE, "Polyline"),
+            (Tool.ARROW, "Arrow"),
+            (Tool.DOUBLE_ARROW, "Double Arrow"),
+            (Tool.BENT_ARROW, "Bent Arrow"),
+        ],
+    ),
+    (
+        "Marks",
+        [
+            (Tool.CROSS, "Cross"),
+            (Tool.CHECKMARK, "Checkmark"),
+            (Tool.SPOTLIGHT, "Spotlight"),
+        ],
+    ),
+    (
+        "Text",
+        [
+            (Tool.TEXT, "Text"),
+            (Tool.CALLOUT, "Callout"),
+        ],
+    ),
 ]
 
 
@@ -101,6 +141,13 @@ class VideoEditorWindow(QMainWindow):
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
+        self._toolbar_host = FlowLayoutWidget(
+            central,
+            horizontal_spacing=4,
+            vertical_spacing=4,
+            margin=4,
+        )
+        layout.addWidget(self._toolbar_host, 0)
         layout.addWidget(self.canvas, 3)
         layout.addWidget(self.timeline, 1)
         self.setCentralWidget(central)
@@ -132,71 +179,91 @@ class VideoEditorWindow(QMainWindow):
 
     def _build_toolbar(self) -> None:
         """
-        Builds the drawing-tool and playback toolbar, each in its own bordered
-        group so the two control groups stay visually distinct.
+        Builds the wrapping drawing-tool, playback, and zoom controls.
 
         Returns:
             None
         """
 
-        toolbar = self.addToolBar("Tools")
-
-        tools_group_box = QGroupBox("")
-        tools_layout = QHBoxLayout(tools_group_box)
-        tools_layout.setContentsMargins(4, 2, 4, 2)
-        tools_layout.setSpacing(2)
+        strip_widgets: list[QWidget] = []
         tool_group = QActionGroup(self)
         tool_group.setExclusive(True)
-        for tool_id, label in _TOOL_LABELS:
-            action = QAction(label, self)
-            action.setCheckable(True)
-            action.triggered.connect(lambda _checked=False, t=tool_id: self.canvas.set_tool(t))
-            tool_group.addAction(action)
-            button = QToolButton(tools_group_box)
-            button.setDefaultAction(action)
-            tools_layout.addWidget(button)
+        for category_title, tools in _TOOL_CATEGORIES:
+            category_box = QGroupBox(category_title, self._toolbar_host)
+            category_box.setObjectName("toolCategoryBox")
+            category_box.setSizePolicy(
+                QSizePolicy.Policy.Maximum,
+                QSizePolicy.Policy.Maximum,
+            )
+            category_layout = QHBoxLayout(category_box)
+            category_layout.setContentsMargins(4, 10, 4, 4)
+            category_layout.setSpacing(4)
+            for tool_id, label in tools:
+                action = QAction(label, self)
+                action.setCheckable(True)
+                action.triggered.connect(
+                    lambda _checked=False, t=tool_id: self.canvas.set_tool(t)
+                )
+                tool_group.addAction(action)
+                button = QToolButton(category_box)
+                button.setDefaultAction(action)
+                category_layout.addWidget(button)
+            strip_widgets.append(category_box)
         tool_group.actions()[0].setChecked(True)
-        toolbar.addWidget(tools_group_box)
 
-        toolbar.addSeparator()
-
-        playback_group_box = QGroupBox("")
-        playback_layout = QHBoxLayout(playback_group_box)
-        playback_layout.setContentsMargins(4, 2, 4, 2)
-        playback_layout.setSpacing(2)
-
+        playback_box = QGroupBox("Playback", self._toolbar_host)
+        playback_box.setObjectName("toolCategoryBox")
+        playback_box.setSizePolicy(
+            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Maximum,
+        )
+        playback_layout = QHBoxLayout(playback_box)
+        playback_layout.setContentsMargins(4, 10, 4, 4)
+        playback_layout.setSpacing(4)
         self.play_action = QAction("Play", self)
         self.play_action.triggered.connect(self._toggle_playback)
-        play_button = QToolButton(playback_group_box)
+        play_button = QToolButton(playback_box)
         play_button.setDefaultAction(self.play_action)
         playback_layout.addWidget(play_button)
 
         self.stop_action = QAction("Stop", self)
         self.stop_action.triggered.connect(self._stop_playback)
-        stop_button = QToolButton(playback_group_box)
+        stop_button = QToolButton(playback_box)
         stop_button.setDefaultAction(self.stop_action)
         playback_layout.addWidget(stop_button)
 
-        toolbar.addWidget(playback_group_box)
+        self.sound_action = QAction("Sound: Off", self)
+        self.sound_action.setCheckable(True)
+        self.sound_action.setChecked(False)
+        self.sound_action.setToolTip(
+            "Toggle playback sound. Starts off so preview stays quiet by default."
+        )
+        self.sound_action.toggled.connect(self._on_sound_toggled)
+        sound_button = QToolButton(playback_box)
+        sound_button.setDefaultAction(self.sound_action)
+        playback_layout.addWidget(sound_button)
+        strip_widgets.append(playback_box)
 
-        toolbar.addSeparator()
-
-        zoom_group_box = QGroupBox("")
-        zoom_layout = QHBoxLayout(zoom_group_box)
-        zoom_layout.setContentsMargins(4, 2, 4, 2)
-        zoom_layout.setSpacing(2)
-
-        self.zoom_out_button = QPushButton("-")
+        zoom_box = QGroupBox("Zoom", self._toolbar_host)
+        zoom_box.setObjectName("toolCategoryBox")
+        zoom_box.setSizePolicy(
+            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Maximum,
+        )
+        zoom_layout = QHBoxLayout(zoom_box)
+        zoom_layout.setContentsMargins(4, 10, 4, 4)
+        zoom_layout.setSpacing(4)
+        self.zoom_out_button = QPushButton("-", zoom_box)
         self.zoom_out_button.setToolTip("Zoom out. Shortcut: Shift+Mouse Wheel.")
         self.zoom_out_button.clicked.connect(self.canvas.zoom_out)
         zoom_layout.addWidget(self.zoom_out_button)
 
-        self.zoom_label = QLabel("100%")
+        self.zoom_label = QLabel("100%", zoom_box)
         self.zoom_label.setMinimumWidth(42)
         self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         zoom_layout.addWidget(self.zoom_label)
 
-        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal, zoom_box)
         self.zoom_slider.setRange(10, 400)
         self.zoom_slider.setValue(100)
         self.zoom_slider.setFixedWidth(100)
@@ -204,17 +271,18 @@ class VideoEditorWindow(QMainWindow):
         self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
         zoom_layout.addWidget(self.zoom_slider)
 
-        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button = QPushButton("+", zoom_box)
         self.zoom_in_button.setToolTip("Zoom in. Shortcut: Shift+Mouse Wheel.")
         self.zoom_in_button.clicked.connect(self.canvas.zoom_in)
         zoom_layout.addWidget(self.zoom_in_button)
 
-        self.zoom_reset_button = QPushButton("Reset")
+        self.zoom_reset_button = QPushButton("Reset", zoom_box)
         self.zoom_reset_button.setToolTip("Reset zoom to fit the video frame.")
         self.zoom_reset_button.clicked.connect(self.canvas.reset_zoom)
         zoom_layout.addWidget(self.zoom_reset_button)
+        strip_widgets.append(zoom_box)
 
-        toolbar.addWidget(zoom_group_box)
+        self._toolbar_host.set_flow_widgets(strip_widgets)
 
     def _on_zoom_changed(self, zoom_factor: float) -> None:
         """
@@ -274,6 +342,20 @@ class VideoEditorWindow(QMainWindow):
         self.canvas.set_position(0)
         self._is_playing = False
         self.play_action.setText("Play")
+
+    def _on_sound_toggled(self, enabled: bool) -> None:
+        """
+        Enables or disables video playback audio from the Sound toolbar switch.
+
+        Args:
+            enabled: True when the user wants sound on.
+
+        Returns:
+            None
+        """
+
+        self.canvas.set_audio_muted(not enabled)
+        self.sound_action.setText("Sound: On" if enabled else "Sound: Off")
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         """
@@ -441,6 +523,11 @@ class VideoEditorWindow(QMainWindow):
             None
         """
 
+        options = self._prompt_export_options()
+        if options is None:
+            return
+        include_audio = bool(options.get("include_audio", True))
+
         default_path = str(Path(self._video_path).with_suffix(".export.mp4"))
         path, _filter = QFileDialog.getSaveFileName(
             self,
@@ -453,7 +540,7 @@ class VideoEditorWindow(QMainWindow):
 
         self.statusBar().showMessage("Exporting video…")
         try:
-            self._run_export(Path(path))
+            self._run_export(Path(path), include_audio=include_audio)
         except (OSError, RuntimeError) as exc:
             QMessageBox.warning(self, "Export Video", f"Could not export video:\n{exc}")
             self.statusBar().showMessage("Export failed", 5000)
@@ -461,12 +548,46 @@ class VideoEditorWindow(QMainWindow):
 
         self.statusBar().showMessage(f"Exported to {path}", 5000)
 
-    def _run_export(self, output_path: Path) -> None:
+    def _prompt_export_options(self) -> dict[str, bool] | None:
+        """
+        Asks whether the exported MP4 should include audio.
+
+        Returns:
+            dict[str, bool] | None: Chosen options, or None when cancelled.
+        """
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Export Video Options")
+        layout = QVBoxLayout(dialog)
+        hint = QLabel(
+            "Choose whether the exported MP4 should keep the recording audio track."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        include_audio = QCheckBox("Include audio in exported video", dialog)
+        include_audio.setChecked(True)
+        include_audio.setToolTip(
+            "When unchecked, the exported MP4 is silent even if the recording has sound."
+        )
+        layout.addWidget(include_audio)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel,
+            parent=dialog,
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return {"include_audio": include_audio.isChecked()}
+
+    def _run_export(self, output_path: Path, *, include_audio: bool = True) -> None:
         """
         Composites annotation-layer PNGs and invokes ffmpeg to burn them into the video.
 
         Args:
             output_path: Destination MP4 file path.
+            include_audio: When True, keep audio in the export; when False, strip it.
 
         Returns:
             None
@@ -532,7 +653,12 @@ class VideoEditorWindow(QMainWindow):
                     )
                 )
 
-            command = build_export_command(Path(self._video_path), segments, output_path)
+            command = build_export_command(
+                Path(self._video_path),
+                segments,
+                output_path,
+                include_audio=include_audio,
+            )
             result = subprocess.run(command, capture_output=True, text=True)
             if result.returncode != 0:
                 raise RuntimeError(result.stderr[-2000:] if result.stderr else "ffmpeg failed")

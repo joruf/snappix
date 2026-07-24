@@ -67,6 +67,7 @@ from PySide6.QtWidgets import (
 
 from src.annotation_items import (
     ArrowItem,
+    DoubleArrowItem,
     ITEM_ROLE_ID,
     ITEM_ROLE_LOCKED,
     ITEM_ROLE_TRANSFORM,
@@ -83,6 +84,7 @@ from src.annotation_items import (
     color_to_list,
     configure_graphics_item,
     create_pen,
+    create_stroke_pen,
     apply_stroke_width_to_pen,
     pen_stroke_width,
     normalize_stroke_style,
@@ -96,6 +98,16 @@ from src.annotation_shapes import (
     TEXT_STYLE_BOX,
     TEXT_STYLE_BUBBLE,
     TEXT_STYLE_PLAIN,
+)
+from src.shape_items import (
+    PATH_SHAPE_KINDS,
+    SHAPE_LINE_TYPES,
+    SHAPE_POLY_TYPES,
+    SHAPE_RECT_TYPES,
+    STAMP_MARK_TYPES,
+    PathShapeItem,
+    PolyPathItem,
+    SpotlightItem,
 )
 from src.brush_paint import paint_soft_brush_segment
 from src.crop_item import CropSelectionItem
@@ -182,8 +194,20 @@ class Tool:
     SELECT = "select"
     RECT = "rect"
     ELLIPSE = "ellipse"
+    TRIANGLE = "triangle"
+    ROUND_RECT = "round_rect"
+    STAR = "star"
+    HIGHLIGHT = "highlight"
+    SPOTLIGHT = "spotlight"
+    CROSS = "cross"
+    CHECKMARK = "checkmark"
     LINE = "line"
     ARROW = "arrow"
+    DOUBLE_ARROW = "double_arrow"
+    POLYLINE = "polyline"
+    POLYGON = "polygon"
+    BENT_ARROW = "bent_arrow"
+    CALLOUT = "callout"
     TEXT = "text"
     CROP = "crop"
     FILL_BG = "fill_bg"
@@ -198,6 +222,23 @@ class Tool:
     ERASER = "eraser"
     BUCKET = "bucket"
     EYEDROPPER = "eyedropper"
+
+
+# Drag-to-create tools that share rectangle or line preview interaction.
+DRAG_RECT_TOOLS = frozenset(
+    {
+        Tool.RECT,
+        Tool.ELLIPSE,
+        Tool.TRIANGLE,
+        Tool.STAR,
+        Tool.SPOTLIGHT,
+        Tool.CROSS,
+        Tool.CHECKMARK,
+    }
+)
+DRAG_LINE_TOOLS = frozenset({Tool.LINE, Tool.ARROW, Tool.DOUBLE_ARROW})
+POLY_DRAW_TOOLS = frozenset({Tool.POLYLINE, Tool.POLYGON, Tool.BENT_ARROW})
+DRAG_SHAPE_TOOLS = DRAG_RECT_TOOLS | DRAG_LINE_TOOLS
 
 
 ERASE_MODE_TRANSPARENT = "transparent"
@@ -283,6 +324,7 @@ class EditorCanvas(QGraphicsView):
             stroke_style=STROKE_STYLE_SOLID,
             text_style=TEXT_STYLE_PLAIN,
         )
+        self._rect_corner_radius = 0.0
         self._zoom_factor = 1.0
         self._initial_view_pending = False
         self._last_action_label = "Edit"
@@ -308,6 +350,8 @@ class EditorCanvas(QGraphicsView):
         self._pixel_selection_item: QGraphicsPixmapItem | None = None
         self._pixel_selection_outline: QGraphicsPathItem | None = None
         self._path_selection_points: list[QPointF] = []
+        self._poly_draw_points: list[QPointF] = []
+        self._poly_preview_item: PolyPathItem | None = None
         self._path_preview_item: QGraphicsPathItem | None = None
         self._path_selection_add = False
         self._erase_mode = ERASE_MODE_TRANSPARENT
@@ -694,6 +738,8 @@ class EditorCanvas(QGraphicsView):
 
         if self._tool == Tool.CROP and tool != Tool.CROP:
             self.cancel_crop()
+        if self._tool in POLY_DRAW_TOOLS and tool not in POLY_DRAW_TOOLS:
+            self._cancel_poly_draw()
         if self._brush_painting:
             self._finish_brush_stroke(commit=self._brush_stroke_dirty)
         self._tool = tool
@@ -782,13 +828,20 @@ class EditorCanvas(QGraphicsView):
             "z_index": round(item.zValue(), 1),
         }
 
-        if annotation_type in {"rect", "ellipse"}:
+        if annotation_type in SHAPE_RECT_TYPES:
             payload["stroke_rgba"] = color_to_list(item.pen().color())
             payload["fill_rgba"] = color_to_list(item.brush().color())
             payload["stroke_width"] = pen_stroke_width(item.pen())
             payload["stroke_style"] = stroke_style_from_pen(item.pen())
-        elif annotation_type in {"line", "arrow"}:
+            if annotation_type == "rect" and isinstance(item, PathShapeItem):
+                payload["corner_radius"] = item.corner_radius()
+        elif annotation_type in SHAPE_LINE_TYPES:
             payload["stroke_rgba"] = color_to_list(item.pen().color())
+            payload["stroke_width"] = pen_stroke_width(item.pen())
+            payload["stroke_style"] = stroke_style_from_pen(item.pen())
+        elif annotation_type in SHAPE_POLY_TYPES:
+            payload["stroke_rgba"] = color_to_list(item.pen().color())
+            payload["fill_rgba"] = color_to_list(item.brush().color())
             payload["stroke_width"] = pen_stroke_width(item.pen())
             payload["stroke_style"] = stroke_style_from_pen(item.pen())
         elif annotation_type == "text":
@@ -1012,8 +1065,17 @@ class EditorCanvas(QGraphicsView):
             annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
             if bool(item.data(ITEM_ROLE_LOCKED) or False):
                 continue
-            if annotation_type in {"rect", "ellipse"}:
+            if annotation_type in SHAPE_RECT_TYPES:
                 shape_item = item
+                if annotation_type in STAMP_MARK_TYPES:
+                    # Cross/checkmark are filled stamps: Border and Fill both
+                    # update the visible mark color (brush), keeping NoPen.
+                    mark_color = stroke_color if stroke_color is not None else fill_color
+                    if mark_color is not None:
+                        shape_item.setBrush(mark_color)
+                        shape_item.setPen(create_stroke_pen(mark_color, 0.0))
+                    changed = True
+                    continue
                 if stroke_color is not None:
                     pen = shape_item.pen()
                     pen.setColor(stroke_color)
@@ -1033,7 +1095,23 @@ class EditorCanvas(QGraphicsView):
                     pen.setStyle(stroke_style_to_qt(stroke_style))
                     shape_item.setPen(pen)
                 changed = True
-            elif annotation_type in {"line", "arrow"}:
+            elif annotation_type == "step" and isinstance(item, StepBadgeItem):
+                if stroke_color is not None:
+                    pen = item.pen()
+                    pen.setColor(stroke_color)
+                    item.setPen(pen)
+                if fill_color is not None:
+                    item.setBrush(fill_color)
+                if stroke_width is not None:
+                    item.setPen(
+                        apply_stroke_width_to_pen(
+                            item.pen(),
+                            stroke_width,
+                            stroke_style=stroke_style,
+                        )
+                    )
+                changed = True
+            elif annotation_type in SHAPE_LINE_TYPES:
                 line_item = item
                 pen = line_item.pen()
                 if stroke_color is not None:
@@ -1131,6 +1209,50 @@ class EditorCanvas(QGraphicsView):
             self._sync_resize_overlay_with_target()
         if changed and emit_history:
             self._emit_content_changed("Update selected style")
+
+    def rect_corner_radius(self) -> float:
+        """
+        Returns the corner radius used for new rectangle annotations.
+
+        Returns:
+            float: Corner radius in pixels.
+        """
+
+        return self._rect_corner_radius
+
+    def set_rect_corner_radius(
+        self,
+        radius: float,
+        *,
+        apply_to_selection: bool = True,
+        emit_history: bool = True,
+    ) -> None:
+        """
+        Updates the rectangle corner radius for new draws and optional selection.
+
+        Args:
+            radius: Corner radius in pixels (0 = sharp corners).
+            apply_to_selection: When True, updates selected rectangle items.
+            emit_history: When True, records a history entry after selection edits.
+
+        Returns:
+            None
+        """
+
+        self._rect_corner_radius = max(0.0, float(radius))
+        if not apply_to_selection:
+            return
+        changed = False
+        for item in self._selected_annotation_items():
+            if bool(item.data(ITEM_ROLE_LOCKED) or False):
+                continue
+            if str(item.data(ITEM_ROLE_TYPE) or "") != "rect":
+                continue
+            if isinstance(item, PathShapeItem):
+                item.set_corner_radius(self._rect_corner_radius)
+                changed = True
+        if changed and emit_history:
+            self._emit_content_changed("Change rectangle radius")
 
     def set_grid_visible(self, visible: bool) -> None:
         """
@@ -1251,6 +1373,8 @@ class EditorCanvas(QGraphicsView):
         if self._tool == Tool.STEP:
             step_number = self._next_available_step_number()
             badge = StepBadgeItem(step_number)
+            badge.setPen(create_stroke_pen(QColor(self._style.stroke_color), max(1.0, float(self._style.stroke_width) or 2.0)))
+            badge.setBrush(QBrush(QColor(self._style.fill_color)))
             badge.setPos(scene_pos.x() - badge.rect().width() / 2.0, scene_pos.y() - badge.rect().height() / 2.0)
             self._scene.addItem(badge)
             self._next_step_number = step_number + 1
@@ -1258,7 +1382,23 @@ class EditorCanvas(QGraphicsView):
             self._emit_content_changed("Insert step")
             return
 
-        if self._tool in {Tool.RECT, Tool.ELLIPSE, Tool.LINE, Tool.ARROW}:
+        if self._tool == Tool.CALLOUT:
+            text = self._prompt_text_input()
+            if text:
+                previous_style = self._style.text_style
+                self._style.text_style = TEXT_STYLE_BUBBLE
+                item = self._create_text_item(text, scene_pos)
+                self._style.text_style = previous_style
+                self._select_annotation_item(item)
+                self._emit_content_changed("Insert callout")
+            return
+
+        if self._tool in POLY_DRAW_TOOLS:
+            self._clear_resize_overlay()
+            self._append_poly_draw_point(scene_pos)
+            return
+
+        if self._tool in DRAG_SHAPE_TOOLS:
             self._clear_resize_overlay()
             self._preview_item = self._create_preview_item(scene_pos)
             if self._preview_item is not None:
@@ -1673,8 +1813,14 @@ class EditorCanvas(QGraphicsView):
             draw_names = {
                 Tool.RECT: "Draw rectangle",
                 Tool.ELLIPSE: "Draw ellipse",
+                Tool.TRIANGLE: "Draw triangle",
+                Tool.STAR: "Draw star",
+                Tool.SPOTLIGHT: "Draw spotlight",
+                Tool.CROSS: "Draw cross",
+                Tool.CHECKMARK: "Draw checkmark",
                 Tool.LINE: "Draw line",
                 Tool.ARROW: "Draw arrow",
+                Tool.DOUBLE_ARROW: "Draw double arrow",
             }
             self._emit_content_changed(draw_names.get(self._tool, "Draw annotation"))
             return
@@ -1705,6 +1851,14 @@ class EditorCanvas(QGraphicsView):
             None
         """
 
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and self._tool in POLY_DRAW_TOOLS
+            and len(self._poly_draw_points) >= 2
+        ):
+            self._finalize_poly_draw()
+            event.accept()
+            return
         if (
             event.button() == Qt.MouseButton.LeftButton
             and self._tool == Tool.SELECT_PATH
@@ -1829,7 +1983,7 @@ class EditorCanvas(QGraphicsView):
 
         for item in self._selected_annotation_items():
             annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-            if annotation_type in {"rect", "ellipse", "line", "arrow"}:
+            if annotation_type in (SHAPE_RECT_TYPES | SHAPE_LINE_TYPES):
                 return True
             if annotation_type == "text" and isinstance(item, StyledTextItem):
                 return True
@@ -1845,7 +1999,7 @@ class EditorCanvas(QGraphicsView):
 
         for item in self._selected_annotation_items():
             annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-            if annotation_type in {"rect", "ellipse", "line", "arrow"}:
+            if annotation_type in (SHAPE_RECT_TYPES | SHAPE_LINE_TYPES):
                 return True
         return False
 
@@ -1951,7 +2105,11 @@ class EditorCanvas(QGraphicsView):
 
         pen = create_pen(self._style)
         if self._tool == Tool.RECT:
-            item = QGraphicsRectItem(QRectF(start, start))
+            item = PathShapeItem(
+                "rect",
+                QRectF(start, start),
+                corner_radius=self._rect_corner_radius,
+            )
             item.setPen(pen)
             item.setBrush(self._style.fill_color)
             return item
@@ -1960,12 +2118,30 @@ class EditorCanvas(QGraphicsView):
             item.setPen(pen)
             item.setBrush(self._style.fill_color)
             return item
+        if self._tool in PATH_SHAPE_KINDS and self._tool != Tool.RECT:
+            fill = self._style.fill_color
+            stroke_pen = pen
+            if self._tool in STAMP_MARK_TYPES:
+                fill = QColor(self._style.stroke_color)
+                stroke_pen = create_stroke_pen(QColor(self._style.stroke_color), 0.0)
+            item = PathShapeItem(self._tool, QRectF(start, start))
+            item.setPen(stroke_pen)
+            item.setBrush(fill)
+            return item
+        if self._tool == Tool.SPOTLIGHT:
+            item = SpotlightItem(QRectF(start, start), focus_mode="ellipse")
+            item.setPen(pen)
+            return item
         if self._tool == Tool.LINE:
             item = StrokeLineItem(start.x(), start.y(), start.x(), start.y())
             item.setPen(pen)
             return item
         if self._tool == Tool.ARROW:
             item = ArrowItem(start.x(), start.y(), start.x(), start.y())
+            item.setPen(pen)
+            return item
+        if self._tool == Tool.DOUBLE_ARROW:
+            item = DoubleArrowItem(start.x(), start.y(), start.x(), start.y())
             item.setPen(pen)
             return item
         if self._tool == Tool.CROP:
@@ -2022,7 +2198,10 @@ class EditorCanvas(QGraphicsView):
             return
         snapped_current = self._snap_point_to_grid(current)
         rect = QRectF(start, snapped_current).normalized()
-        if isinstance(self._preview_item, (QGraphicsRectItem, QGraphicsEllipseItem)):
+        if isinstance(
+            self._preview_item,
+            (QGraphicsRectItem, QGraphicsEllipseItem, PathShapeItem, SpotlightItem),
+        ):
             self._preview_item.setRect(rect)
             return
         if isinstance(self._preview_item, QGraphicsLineItem):
@@ -2126,7 +2305,7 @@ class EditorCanvas(QGraphicsView):
             QRectF: Annotation geometry bounds.
         """
 
-        if annotation.annotation_type in {"line", "arrow"}:
+        if annotation.annotation_type in SHAPE_LINE_TYPES:
             return QRectF(
                 QPointF(annotation.x, annotation.y),
                 QPointF(annotation.x + annotation.width, annotation.y + annotation.height),
@@ -2199,6 +2378,7 @@ class EditorCanvas(QGraphicsView):
         self._pixel_selection_path = QPainterPath()
         self._pixel_selection_mask = None
         self._path_selection_points.clear()
+        self._cancel_poly_draw()
         self.clear_copy_feedback()
         self.crop_selection_changed.emit(False)
 
@@ -2364,7 +2544,12 @@ class EditorCanvas(QGraphicsView):
                 if bool(item.data(ITEM_ROLE_LOCKED) or False):
                     continue
                 annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-                if annotation_type in {"rect", "ellipse"}:
+                if annotation_type in STAMP_MARK_TYPES:
+                    item.setBrush(sampled)
+                    item.setPen(create_stroke_pen(sampled, 0.0))
+                elif annotation_type in SHAPE_RECT_TYPES:
+                    item.setBrush(sampled)
+                elif annotation_type == "step" and isinstance(item, StepBadgeItem):
                     item.setBrush(sampled)
                 elif annotation_type == "text" and isinstance(item, StyledTextItem):
                     item.set_colors(fill_color=sampled)
@@ -2376,7 +2561,14 @@ class EditorCanvas(QGraphicsView):
             if bool(item.data(ITEM_ROLE_LOCKED) or False):
                 continue
             annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-            if annotation_type in {"rect", "ellipse", "line", "arrow"}:
+            if annotation_type in STAMP_MARK_TYPES:
+                item.setBrush(sampled)
+                item.setPen(create_stroke_pen(sampled, 0.0))
+            elif annotation_type in (SHAPE_RECT_TYPES | SHAPE_LINE_TYPES):
+                pen = item.pen()
+                pen.setColor(sampled)
+                item.setPen(pen)
+            elif annotation_type == "step" and isinstance(item, StepBadgeItem):
                 pen = item.pen()
                 pen.setColor(sampled)
                 item.setPen(pen)
@@ -2903,6 +3095,94 @@ class EditorCanvas(QGraphicsView):
             return
         self.set_pixel_selection_path(path, add=add)
 
+    def _append_poly_draw_point(self, scene_pos: QPointF) -> None:
+        """
+        Adds one vertex while drawing a polyline, polygon, or bent arrow.
+
+        Args:
+            scene_pos: Vertex in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        if not self._poly_draw_points:
+            self._poly_draw_points = [scene_pos]
+            pen = create_pen(self._style)
+            self._poly_preview_item = PolyPathItem(self._tool, self._poly_draw_points)
+            self._poly_preview_item.setPen(pen)
+            if self._tool == Tool.POLYGON:
+                self._poly_preview_item.setBrush(self._style.fill_color)
+            else:
+                self._poly_preview_item.setBrush(QColor(0, 0, 0, 0))
+            self._poly_preview_item.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+                False,
+            )
+            self._poly_preview_item.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                False,
+            )
+            self._scene.addItem(self._poly_preview_item)
+            self.status_message.emit(
+                "Click to add points · Double-click or Enter to finish · Esc to cancel"
+            )
+            return
+        self._poly_draw_points.append(scene_pos)
+        if self._poly_preview_item is not None:
+            self._poly_preview_item.set_points(self._poly_draw_points)
+
+    def _cancel_poly_draw(self) -> None:
+        """
+        Aborts an in-progress multi-point shape without committing.
+
+        Returns:
+            None
+        """
+
+        if self._poly_preview_item is not None and self._poly_preview_item.scene() is self._scene:
+            self._scene.removeItem(self._poly_preview_item)
+        self._poly_preview_item = None
+        self._poly_draw_points = []
+
+    def _finalize_poly_draw(self) -> None:
+        """
+        Commits the in-progress multi-point annotation to the scene.
+
+        Returns:
+            None
+        """
+
+        points = list(self._poly_draw_points)
+        kind = self._tool
+        min_points = 3 if kind == Tool.POLYGON else 2
+        if self._poly_preview_item is not None and self._poly_preview_item.scene() is self._scene:
+            self._scene.removeItem(self._poly_preview_item)
+        self._poly_preview_item = None
+        self._poly_draw_points = []
+        if len(points) < min_points:
+            return
+        # Drop a duplicated closing vertex often introduced by double-click.
+        if len(points) >= 2 and (points[-1] - points[-2]).manhattanLength() < 0.5:
+            points = points[:-1]
+        if len(points) < min_points:
+            return
+        item = PolyPathItem(kind, points)
+        item.setPen(create_pen(self._style))
+        if kind == Tool.POLYGON:
+            item.setBrush(self._style.fill_color)
+        else:
+            item.setBrush(QColor(0, 0, 0, 0))
+        configure_graphics_item(item, kind)
+        self._scene.addItem(item)
+        self._select_annotation_item(item)
+        draw_names = {
+            Tool.POLYLINE: "Draw polyline",
+            Tool.POLYGON: "Draw polygon",
+            Tool.BENT_ARROW: "Draw bent arrow",
+        }
+        self._emit_content_changed(draw_names.get(kind, "Draw annotation"))
+
     def collect_annotations(self) -> list[AnnotationModel]:
         """
         Serializes all current annotation items.
@@ -3270,12 +3550,19 @@ class EditorCanvas(QGraphicsView):
                 dy = step
             if self.nudge_selected_items(dx, dy):
                 return
+        if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter} and self._tool in POLY_DRAW_TOOLS:
+            if len(self._poly_draw_points) >= (3 if self._tool == Tool.POLYGON else 2):
+                self._finalize_poly_draw()
+                return
         if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter} and self.has_pending_crop():
             self.apply_pending_crop()
             return
         if event.key() == Qt.Key.Key_Escape:
             if self._brush_painting:
                 self._finish_brush_stroke(commit=self._brush_stroke_dirty)
+                return
+            if self._poly_draw_points:
+                self._cancel_poly_draw()
                 return
             if self.has_pending_crop():
                 self.cancel_crop()
@@ -3352,7 +3639,7 @@ class EditorCanvas(QGraphicsView):
         annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
         min_size = 2.0
 
-        if annotation_type in {"rect", "ellipse"}:
+        if annotation_type in SHAPE_RECT_TYPES:
             shape_item = item
             rect = shape_item.rect()
             center = rect.center()
@@ -3368,7 +3655,7 @@ class EditorCanvas(QGraphicsView):
             )
             return True
 
-        if annotation_type in {"line", "arrow"}:
+        if annotation_type in SHAPE_LINE_TYPES:
             line_item = item
             line = line_item.line()
             center = QPointF(
@@ -4296,7 +4583,7 @@ class EditorCanvas(QGraphicsView):
         if bool(item.data(ITEM_ROLE_LOCKED) or False):
             return False
         annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-        return annotation_type in {"rect", "ellipse", "line", "arrow", "text", "image"}
+        return annotation_type in (SHAPE_RECT_TYPES | SHAPE_LINE_TYPES | {"text", "image"})
 
     def _item_scene_rect(self, item: QGraphicsItem) -> QRectF:
         """
@@ -4328,9 +4615,9 @@ class EditorCanvas(QGraphicsView):
         """
 
         annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-        if annotation_type in {"rect", "ellipse"}:
+        if annotation_type in SHAPE_RECT_TYPES:
             return item.mapRectToScene(item.rect()).normalized()
-        if annotation_type in {"line", "arrow"}:
+        if annotation_type in SHAPE_LINE_TYPES:
             line = item.line()
             p1 = item.mapToScene(line.p1())
             p2 = item.mapToScene(line.p2())
@@ -4372,7 +4659,7 @@ class EditorCanvas(QGraphicsView):
 
         target_rect = self._item_scene_rect(target)
         annotation_type = str(target.data(ITEM_ROLE_TYPE) or "")
-        pass_through_interior = annotation_type in {"line", "arrow"}
+        pass_through_interior = annotation_type in SHAPE_LINE_TYPES
         if self._resize_overlay_item is None:
             overlay = CropSelectionItem(target_rect)
             overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
@@ -4463,12 +4750,12 @@ class EditorCanvas(QGraphicsView):
 
         annotation_type = str(target.data(ITEM_ROLE_TYPE) or "")
 
-        if annotation_type in {"rect", "ellipse"}:
+        if annotation_type in SHAPE_RECT_TYPES:
             target.setPos(new_rect.topLeft())
             target.setRect(QRectF(0.0, 0.0, new_rect.width(), new_rect.height()))
             return True
 
-        if annotation_type in {"line", "arrow"}:
+        if annotation_type in SHAPE_LINE_TYPES:
             line = target.line()
             p1_scene = target.mapToScene(line.p1())
             p2_scene = target.mapToScene(line.p2())
