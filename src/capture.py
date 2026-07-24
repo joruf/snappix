@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 
 from src.constants import APP_NAME
 from src.auto_scroll_capture import MAX_SCROLL_FRAMES, perform_auto_scroll_capture
+from src.flow_layout import FlowLayoutWidget
 from src.platform import (
     capture_desktop_png_bytes,
     capture_region_with_grim_slurp,
@@ -258,21 +259,24 @@ class CapturePanel(QWidget):
             "Open the editor or create a blank canvas without taking a screenshot."
         )
         self.open_editor_button.clicked.connect(self.editor_requested.emit)
-        open_editor_row = QHBoxLayout()
-        open_editor_row.setContentsMargins(0, 0, 0, 0)
-        open_editor_row.addStretch(1)
-        open_editor_row.addWidget(self.open_editor_button)
-        form.addRow("", open_editor_row)
         self._minimize_to_tray_on_close = True
 
-        buttons = QHBoxLayout()
+        buttons_frame = QFrame()
+        buttons_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        root_layout.addWidget(buttons_frame)
+        buttons_frame_layout = QVBoxLayout(buttons_frame)
+        buttons_frame_layout.setContentsMargins(8, 8, 8, 8)
+        buttons_flow = FlowLayoutWidget(buttons_frame)
+        buttons_frame_layout.addWidget(buttons_flow)
+        button_widgets: list[QWidget] = []
+
         self.capture_fullscreen_button = QPushButton("Capture Fullscreen")
         self.capture_fullscreen_button.setObjectName("primaryButton")
         self.capture_fullscreen_button.clicked.connect(
             lambda: self._emit_request_for_mode(CaptureMode.FULL_SCREEN)
         )
         self.capture_fullscreen_button.setToolTip("Capture all screens immediately.")
-        buttons.addWidget(self.capture_fullscreen_button)
+        button_widgets.append(self.capture_fullscreen_button)
 
         self.capture_area_button = QPushButton("Capture Area")
         self.capture_area_button.setObjectName("primaryButton")
@@ -280,7 +284,7 @@ class CapturePanel(QWidget):
             lambda: self._emit_request_for_mode(CaptureMode.REGION)
         )
         self.capture_area_button.setToolTip("Select and capture a custom screen region.")
-        buttons.addWidget(self.capture_area_button)
+        button_widgets.append(self.capture_area_button)
 
         self.capture_window_button = QPushButton("Capture Window")
         self.capture_window_button.setObjectName("primaryButton")
@@ -288,7 +292,7 @@ class CapturePanel(QWidget):
             lambda: self._emit_request_for_mode(CaptureMode.WINDOW)
         )
         self.capture_window_button.setToolTip("Select one application window to capture.")
-        buttons.addWidget(self.capture_window_button)
+        button_widgets.append(self.capture_window_button)
 
         self.capture_scroll_button = QPushButton("Scroll")
         self.capture_scroll_button.setObjectName("primaryButton")
@@ -298,7 +302,7 @@ class CapturePanel(QWidget):
         self.capture_scroll_button.setToolTip(
             "Select a window and capture its full scrollable content automatically."
         )
-        buttons.addWidget(self.capture_scroll_button)
+        button_widgets.append(self.capture_scroll_button)
 
         self.capture_video_button = QPushButton("Capture Video")
         self.capture_video_button.setObjectName("primaryButton")
@@ -306,7 +310,7 @@ class CapturePanel(QWidget):
             "Select a screen region and record it to video."
         )
         self.capture_video_button.clicked.connect(self.video_capture_requested.emit)
-        buttons.addWidget(self.capture_video_button)
+        button_widgets.append(self.capture_video_button)
 
         self.pick_color_button = QPushButton("")
         self.pick_color_button.setIcon(_build_color_picker_icon())
@@ -315,9 +319,16 @@ class CapturePanel(QWidget):
             "Pick a color from the screen and copy it to clipboard."
         )
         self.pick_color_button.clicked.connect(self.color_pick_requested.emit)
-        buttons.addWidget(self.pick_color_button)
+        button_widgets.append(self.pick_color_button)
 
-        root_layout.addLayout(buttons)
+        self._capture_buttons_row_width = self._measure_row_width(
+            button_widgets, buttons_flow.flow_layout.horizontalSpacing()
+        )
+        self._buttons_flow = buttons_flow
+
+        button_widgets.append(self.open_editor_button)
+
+        buttons_flow.set_flow_widgets(button_widgets)
 
     def set_video_capture_available(self, available: bool) -> None:
         """
@@ -451,9 +462,32 @@ class CapturePanel(QWidget):
             return
         QTimer.singleShot(0, self._apply_initial_window_geometry)
 
+    @staticmethod
+    def _measure_row_width(widgets: list[QWidget], spacing: int) -> int:
+        """
+        Measures the total width needed to place widgets side by side in one row.
+
+        Args:
+            widgets: Widgets that would be placed left to right.
+            spacing: Horizontal gap between adjacent widgets in pixels.
+
+        Returns:
+            int: Combined width in pixels, including in-between spacing.
+        """
+
+        total = 0
+        for index, widget in enumerate(widgets):
+            widget.adjustSize()
+            total += widget.sizeHint().width()
+            if index > 0:
+                total += spacing
+        return total
+
     def _apply_initial_window_geometry(self) -> None:
         """
-        Applies compact initial size and top-right position once per run.
+        Applies the initial size (wide enough for all capture buttons on one row,
+        the Open Editor link wrapping below, and no more height than needed) and
+        top-right position once per run.
 
         Returns:
             None
@@ -461,9 +495,15 @@ class CapturePanel(QWidget):
 
         if self._initial_position_done:
             return
+        # Temporarily force the flow container's minimum width to fit all capture
+        # buttons on one row, so adjustSize()/minimumSizeHint() below compute the
+        # window's default size (and height-for-width row count) around that row
+        # width analytically, without depending on a live resize round-trip.
+        self._buttons_flow.setMinimumWidth(self._capture_buttons_row_width)
         self.adjustSize()
         target_size = self.minimumSizeHint()
         self.resize(target_size)
+        self._buttons_flow.setMinimumWidth(0)
         screen = QGuiApplication.screenAt(QCursor.pos())
         if screen is None:
             screen = QGuiApplication.primaryScreen()

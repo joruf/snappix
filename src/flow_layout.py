@@ -234,7 +234,9 @@ class FlowLayout(QLayout):
 
     def _do_layout(self, rect: QRect, test_only: bool) -> int:
         """
-        Lays out or measures items inside one rectangle.
+        Lays out or measures items inside one rectangle, vertically centering
+        each item within its row (rows can mix item heights, e.g. a small icon
+        button next to taller text buttons).
 
         Args:
             rect: Target rectangle.
@@ -251,13 +253,11 @@ class FlowLayout(QLayout):
             -margins.right(),
             -margins.bottom(),
         )
-        x_pos = effective_rect.x()
-        y_pos = effective_rect.y()
-        row_height = 0
-        used_height = 0
         horizontal_spacing = self.horizontalSpacing()
         vertical_spacing = self.verticalSpacing()
 
+        rows: list[list[tuple[QLayoutItem, QSize]]] = [[]]
+        row_width = 0
         for item in self._items:
             widget = item.widget()
             if widget is not None:
@@ -275,21 +275,33 @@ class FlowLayout(QLayout):
                 item_size = item_size.expandedTo(widget.minimumSizeHint())
 
             item_width = item_size.width()
-            if (
-                row_height > 0
-                and x_pos + item_width > effective_rect.right() + 1
-            ):
-                x_pos = effective_rect.x()
-                y_pos += row_height + vertical_spacing
-                row_height = 0
+            current_row = rows[-1]
+            if current_row and row_width + horizontal_spacing + item_width > effective_rect.width() + 1:
+                rows.append([])
+                current_row = rows[-1]
+                row_width = 0
 
-            if not test_only:
-                item.setGeometry(QRect(QPoint(x_pos, y_pos), item_size))
+            row_width += (horizontal_spacing if current_row else 0) + item_width
+            current_row.append((item, item_size))
 
-            x_pos += item_width + horizontal_spacing
-            row_height = max(row_height, item_size.height())
-            used_height = max(used_height, y_pos + row_height - effective_rect.y())
+        y_pos = effective_rect.y()
+        laid_out_any_row = False
+        for row in rows:
+            if not row:
+                continue
+            if laid_out_any_row:
+                y_pos += vertical_spacing
+            row_height = max(item_size.height() for _item, item_size in row)
+            x_pos = effective_rect.x()
+            for item, item_size in row:
+                if not test_only:
+                    item_y = y_pos + (row_height - item_size.height()) // 2
+                    item.setGeometry(QRect(QPoint(x_pos, item_y), item_size))
+                x_pos += item_size.width() + horizontal_spacing
+            y_pos += row_height
+            laid_out_any_row = True
 
+        used_height = (y_pos - effective_rect.y()) if laid_out_any_row else 0
         used_height += margins.top() + margins.bottom()
         return used_height
 

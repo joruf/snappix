@@ -100,6 +100,27 @@ class TestFlowLayout(unittest.TestCase):
         self.assertEqual(first.geometry().y(), second.geometry().y())
         self.assertGreater(third.geometry().y(), second.geometry().y())
 
+    def test_flow_layout_vertically_centers_mixed_height_items_in_a_row(self) -> None:
+        """
+        Ensures a shorter item shares a row with a taller one centered on its middle,
+        rather than being pinned to the row's top edge.
+        """
+
+        container = QWidget()
+        container.setFixedWidth(400)
+        layout = FlowLayout(container, margin=0, horizontal_spacing=4, vertical_spacing=4)
+        short_item = QPushButton("Short")
+        short_item.setFixedSize(80, 24)
+        tall_item = QPushButton("Tall")
+        tall_item.setFixedSize(80, 32)
+        layout.set_widgets([short_item, tall_item])
+        layout.setGeometry(QRect(0, 0, 400, 100))
+
+        short_center = short_item.geometry().y() + short_item.geometry().height() / 2
+        tall_center = tall_item.geometry().y() + tall_item.geometry().height() / 2
+        self.assertAlmostEqual(short_center, tall_center, delta=1)
+        self.assertGreater(short_item.geometry().y(), tall_item.geometry().y())
+
     def test_flow_layout_widget_reflows_when_width_changes(self) -> None:
         """
         Ensures the flow container increases height when width becomes narrower.

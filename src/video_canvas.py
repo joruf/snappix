@@ -121,6 +121,11 @@ class VideoCanvas(QGraphicsView):
     duration_changed = Signal(int)
     annotation_created = Signal(object)
     content_changed = Signal()
+    zoom_changed = Signal(float)
+
+    ZOOM_MIN = 0.1
+    ZOOM_MAX = 8.0
+    ZOOM_STEP = 1.06
 
     def __init__(self) -> None:
         """
@@ -163,6 +168,8 @@ class VideoCanvas(QGraphicsView):
         self._drag_start = None
         self._preview_item: QGraphicsItem | None = None
         self._first_frame_forced = False
+        self._zoom_factor = 1.0
+        self._initial_view_pending = True
 
     def load_video(self, path: str) -> None:
         """
@@ -192,11 +199,12 @@ class VideoCanvas(QGraphicsView):
 
         self._video_item.setSize(QSizeF(width, height))
         self._scene.setSceneRect(0, 0, width, height)
+        self._initial_view_pending = True
         self._fit_scene_in_view()
 
     def resizeEvent(self, event) -> None:
         """
-        Keeps the video scaled to fit the viewport as the canvas is resized.
+        Keeps the video scaled to fit the viewport until the user zooms manually.
 
         Args:
             event: Qt resize event.
@@ -206,7 +214,8 @@ class VideoCanvas(QGraphicsView):
         """
 
         super().resizeEvent(event)
-        self._fit_scene_in_view()
+        if self._initial_view_pending:
+            self._fit_scene_in_view()
 
     def showEvent(self, event) -> None:
         """
@@ -217,11 +226,13 @@ class VideoCanvas(QGraphicsView):
         """
 
         super().showEvent(event)
-        self._fit_scene_in_view()
+        if self._initial_view_pending:
+            self._fit_scene_in_view()
 
     def _fit_scene_in_view(self) -> None:
         """
-        Scales the view so the full video frame fits, preserving aspect ratio.
+        Scales the view so the full video frame fits, preserving aspect ratio,
+        and resets the tracked zoom factor to match.
 
         Returns:
             None
@@ -229,7 +240,108 @@ class VideoCanvas(QGraphicsView):
 
         if self._scene.sceneRect().isEmpty():
             return
+        viewport = self.viewport()
+        if viewport is None or viewport.width() <= 1 or viewport.height() <= 1:
+            return
+        self.resetTransform()
         self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._zoom_factor = self.transform().m11()
+        self._initial_view_pending = False
+        self.zoom_changed.emit(self._zoom_factor)
+
+    def wheelEvent(self, event) -> None:
+        """
+        Zooms with Shift+wheel; otherwise keeps default scroll behavior.
+
+        Args:
+            event: Wheel event.
+
+        Returns:
+            None
+        """
+
+        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            delta = event.angleDelta().y()
+            if delta == 0:
+                delta = event.angleDelta().x()
+            if delta > 0:
+                self.zoom_in()
+            elif delta < 0:
+                self.zoom_out()
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def zoom_in(self) -> None:
+        """
+        Zooms into the video canvas.
+
+        Returns:
+            None
+        """
+
+        self._apply_zoom(self.ZOOM_STEP)
+
+    def zoom_out(self) -> None:
+        """
+        Zooms out of the video canvas.
+
+        Returns:
+            None
+        """
+
+        self._apply_zoom(1.0 / self.ZOOM_STEP)
+
+    def reset_zoom(self) -> None:
+        """
+        Resets zoom to the default fit level.
+
+        Returns:
+            None
+        """
+
+        self._initial_view_pending = True
+        self._fit_scene_in_view()
+
+    def set_zoom_factor(self, target_zoom: float) -> None:
+        """
+        Sets zoom to an absolute factor value.
+
+        Args:
+            target_zoom: Target zoom factor (1.0 = 100%).
+
+        Returns:
+            None
+        """
+
+        bounded_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, target_zoom))
+        if abs(bounded_zoom - self._zoom_factor) < 0.0001:
+            return
+        scale_factor = bounded_zoom / self._zoom_factor
+        self.scale(scale_factor, scale_factor)
+        self._zoom_factor = bounded_zoom
+        self._initial_view_pending = False
+        self.zoom_changed.emit(self._zoom_factor)
+
+    def _apply_zoom(self, factor: float) -> None:
+        """
+        Applies a multiplicative zoom factor.
+
+        Args:
+            factor: Scale factor.
+
+        Returns:
+            None
+        """
+
+        new_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom_factor * factor))
+        if abs(new_zoom - self._zoom_factor) < 0.0001:
+            return
+        scale_factor = new_zoom / self._zoom_factor
+        self.scale(scale_factor, scale_factor)
+        self._zoom_factor = new_zoom
+        self._initial_view_pending = False
+        self.zoom_changed.emit(self._zoom_factor)
 
     def set_tool(self, tool: str) -> None:
         """

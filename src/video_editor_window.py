@@ -6,14 +6,17 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor
 from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
+    QSlider,
     QStatusBar,
     QToolButton,
     QVBoxLayout,
@@ -87,6 +90,7 @@ class VideoEditorWindow(QMainWindow):
         self.canvas.position_changed.connect(self._on_position_changed)
         self.canvas.annotation_created.connect(self._on_annotation_created)
         self.canvas.content_changed.connect(self._mark_dirty)
+        self.canvas.zoom_changed.connect(self._on_zoom_changed)
 
         self.timeline = TimelineWidget()
         self.timeline.set_annotations(self._annotations)
@@ -174,6 +178,73 @@ class VideoEditorWindow(QMainWindow):
         playback_layout.addWidget(stop_button)
 
         toolbar.addWidget(playback_group_box)
+
+        toolbar.addSeparator()
+
+        zoom_group_box = QGroupBox("")
+        zoom_layout = QHBoxLayout(zoom_group_box)
+        zoom_layout.setContentsMargins(4, 2, 4, 2)
+        zoom_layout.setSpacing(2)
+
+        self.zoom_out_button = QPushButton("-")
+        self.zoom_out_button.setToolTip("Zoom out. Shortcut: Shift+Mouse Wheel.")
+        self.zoom_out_button.clicked.connect(self.canvas.zoom_out)
+        zoom_layout.addWidget(self.zoom_out_button)
+
+        self.zoom_label = QLabel("100%")
+        self.zoom_label.setMinimumWidth(42)
+        self.zoom_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_layout.addWidget(self.zoom_label)
+
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(10, 400)
+        self.zoom_slider.setValue(100)
+        self.zoom_slider.setFixedWidth(100)
+        self.zoom_slider.setToolTip("Zoom: left smaller, right larger")
+        self.zoom_slider.valueChanged.connect(self._zoom_slider_changed)
+        zoom_layout.addWidget(self.zoom_slider)
+
+        self.zoom_in_button = QPushButton("+")
+        self.zoom_in_button.setToolTip("Zoom in. Shortcut: Shift+Mouse Wheel.")
+        self.zoom_in_button.clicked.connect(self.canvas.zoom_in)
+        zoom_layout.addWidget(self.zoom_in_button)
+
+        self.zoom_reset_button = QPushButton("Reset")
+        self.zoom_reset_button.setToolTip("Reset zoom to fit the video frame.")
+        self.zoom_reset_button.clicked.connect(self.canvas.reset_zoom)
+        zoom_layout.addWidget(self.zoom_reset_button)
+
+        toolbar.addWidget(zoom_group_box)
+
+    def _on_zoom_changed(self, zoom_factor: float) -> None:
+        """
+        Refreshes the zoom label/slider to match the canvas zoom factor.
+
+        Args:
+            zoom_factor: Current zoom factor.
+
+        Returns:
+            None
+        """
+
+        zoom_percent = int(round(zoom_factor * 100))
+        self.zoom_label.setText(f"{zoom_percent}%")
+        self.zoom_slider.blockSignals(True)
+        self.zoom_slider.setValue(max(10, min(400, zoom_percent)))
+        self.zoom_slider.blockSignals(False)
+
+    def _zoom_slider_changed(self, value: int) -> None:
+        """
+        Applies an absolute zoom from the slider percentage value.
+
+        Args:
+            value: Slider zoom percentage.
+
+        Returns:
+            None
+        """
+
+        self.canvas.set_zoom_factor(float(value) / 100.0)
 
     def _toggle_playback(self) -> None:
         """
