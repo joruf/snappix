@@ -135,7 +135,9 @@ class TestVideoEditorExport(unittest.TestCase):
             self.assertFalse(editor.sound_action.isChecked())
             editor.sound_action.setChecked(True)
             self.assertFalse(editor.canvas.is_audio_muted())
-            self.assertEqual(editor.sound_action.text(), "Sound: On")
+            self.assertEqual(editor.sound_action.toolTip(), "Turn playback sound off")
+            self.assertFalse(editor.play_action.icon().isNull())
+            self.assertFalse(editor.stop_action.icon().isNull())
 
     def test_flush_recovery_snapshot_writes_sfpv_project(self) -> None:
         """

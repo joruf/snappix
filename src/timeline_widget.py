@@ -22,6 +22,7 @@ MIN_VIEW_DURATION_MS = 500
 DEFAULT_PAGE_DURATION_MS = 20_000
 ZOOM_WHEEL_FACTOR = 1.15
 CTRL_NAV_THRESHOLD_PX = 48
+DRAG_AUTO_PAN_EDGE_PX = 24
 
 DRAG_MODE_PLAYHEAD = "playhead"
 DRAG_MODE_MOVE = "move"
@@ -300,10 +301,68 @@ class TimelineWidget(QWidget):
             int: Clamped position in milliseconds within [0, duration].
         """
 
+        return self._ms_from_track_x(x)
+
+    def _ms_from_track_x(self, x: int) -> int:
+        """
+        Maps one track x coordinate to timeline milliseconds.
+
+        Values outside the visible track extrapolate to earlier/later times and
+        are clamped only to the full video duration.
+
+        Args:
+            x: Pixel x coordinate in widget space.
+
+        Returns:
+            int: Timeline position in milliseconds within [0, duration].
+        """
+
         track = self._track_area_rect()
         ratio = (x - track.x()) / max(1, track.width())
         ms = self._view_start_ms + ratio * self._view_duration_ms
         return int(max(0, min(self._duration_ms, ms)))
+
+    def _auto_pan_view_during_drag(self, pos_x: int) -> None:
+        """
+        Pans the visible timeline range while dragging an annotation near an edge.
+
+        Args:
+            pos_x: Current mouse x coordinate in widget space.
+
+        Returns:
+            None
+        """
+
+        if self._drag_mode in ("", DRAG_MODE_PLAYHEAD):
+            return
+
+        track = self._track_area_rect()
+        max_start = max(0, self._duration_ms - self._view_duration_ms)
+        old_start = self._view_start_ms
+
+        if pos_x < track.x() + DRAG_AUTO_PAN_EDGE_PX and self._view_start_ms > 0:
+            overflow = track.x() + DRAG_AUTO_PAN_EDGE_PX - pos_x
+            pan_ms = max(
+                100,
+                int(overflow / max(1, track.width()) * self._view_duration_ms),
+            )
+            self._view_start_ms = max(0, self._view_start_ms - pan_ms)
+        elif (
+            pos_x > track.x() + track.width() - DRAG_AUTO_PAN_EDGE_PX
+            and self._view_start_ms < max_start
+        ):
+            overflow = pos_x - (track.x() + track.width() - DRAG_AUTO_PAN_EDGE_PX)
+            pan_ms = max(
+                100,
+                int(overflow / max(1, track.width()) * self._view_duration_ms),
+            )
+            self._view_start_ms = min(max_start, self._view_start_ms + pan_ms)
+
+        if self._view_start_ms == old_start:
+            return
+
+        if self._drag_mode == DRAG_MODE_MOVE:
+            self._drag_anchor_ms += self._view_start_ms - old_start
 
     def _jump_by_pages(self, pages: int) -> None:
         """
@@ -520,6 +579,7 @@ class TimelineWidget(QWidget):
         self._drag_anchor_ms = self._x_to_ms(pos.x())
         self._drag_orig_start = annotation.start_ms
         self._drag_orig_end = annotation.end_ms
+        self.grabMouse()
         self.update()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
@@ -548,7 +608,8 @@ class TimelineWidget(QWidget):
             return
 
         if self._drag_mode and self._drag_annotation is not None:
-            current_ms = self._x_to_ms(pos.x())
+            self._auto_pan_view_during_drag(pos.x())
+            current_ms = self._ms_from_track_x(pos.x())
             annotation = self._drag_annotation
             if self._drag_mode == DRAG_MODE_MOVE:
                 delta = current_ms - self._drag_anchor_ms
@@ -595,6 +656,8 @@ class TimelineWidget(QWidget):
         self._drag_mode = ""
         self._drag_annotation = None
         self._ctrl_nav_anchor_x = None
+        if self.mouseGrabber() == self:
+            self.releaseMouse()
         self.unsetCursor()
 
     def wheelEvent(self, event: QWheelEvent) -> None:

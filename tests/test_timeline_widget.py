@@ -253,6 +253,49 @@ class TestTimelineWidgetDragging(unittest.TestCase):
         self.assertEqual(annotation.start_ms, 2000)
         self.assertEqual(annotation.end_ms, 4000)
 
+    def test_body_drag_can_move_beyond_visible_view(self) -> None:
+        """
+        Ensures annotation drags are not limited to the currently visible time page.
+        """
+
+        annotation = _make_annotation(start_ms=6500, end_ms=7500)
+        widget = TimelineWidget()
+        widget.resize(1200, RULER_HEIGHT + 60)
+        widget.set_duration(10000)
+        widget.set_annotations([annotation])
+        _set_view_page(widget, 2000)
+        widget._view_start_ms = 6000  # pylint: disable=protected-access
+        widget._clamp_view()  # pylint: disable=protected-access
+        row_y = RULER_HEIGHT + 15.0
+
+        widget.mousePressEvent(_mouse_event(QMouseEvent.Type.MouseButtonPress, 500.0, row_y))
+        widget.mouseMoveEvent(_mouse_event(QMouseEvent.Type.MouseMove, 1540.0, row_y))
+        widget.mouseReleaseEvent(_mouse_event(QMouseEvent.Type.MouseButtonRelease, 1540.0, row_y))
+
+        self.assertEqual(annotation.start_ms, 8500)
+        self.assertEqual(annotation.end_ms, 9500)
+
+    def test_start_edge_drag_clamps_at_zero(self) -> None:
+        """
+        Ensures dragging the start edge cannot move earlier than 0 ms.
+        """
+
+        annotation = _make_annotation(start_ms=500, end_ms=2500)
+        widget = TimelineWidget()
+        widget.resize(1200, RULER_HEIGHT + 60)
+        widget.set_duration(10000)
+        widget.set_annotations([annotation])
+        _set_view_page(widget, 2000)
+        row_y = RULER_HEIGHT + 15.0
+        press_x = widget._ms_to_x(500) + (EDGE_HIT_PX / 2.0)  # pylint: disable=protected-access
+
+        widget.mousePressEvent(_mouse_event(QMouseEvent.Type.MouseButtonPress, press_x, row_y))
+        widget.mouseMoveEvent(_mouse_event(QMouseEvent.Type.MouseMove, 0.0, row_y))
+        widget.mouseReleaseEvent(_mouse_event(QMouseEvent.Type.MouseButtonRelease, 0.0, row_y))
+
+        self.assertEqual(annotation.start_ms, 0)
+        self.assertEqual(annotation.end_ms, 2500)
+
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for timeline widget tests")
 class TestTimelineWidgetNavigation(unittest.TestCase):

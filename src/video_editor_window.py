@@ -7,7 +7,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtCore import QEvent, Qt, QSize, Signal
 from PySide6.QtGui import QAction, QColor
 from PySide6.QtWidgets import (
     QDialog,
@@ -31,6 +31,7 @@ from src.annotation_items import StyleState
 from src.constants import APP_NAME
 from src.flow_layout import FlowLayoutWidget
 from src.timeline_widget import TimelineWidget
+from src.tool_icons import build_playback_icon
 from src.video_canvas import VideoCanvas
 from src.video_models import VideoAnnotationModel, VideoProjectModel
 from src.video_recorder import OverlaySegment, build_export_command
@@ -260,28 +261,41 @@ class VideoEditorWindow(QMainWindow):
         playback_layout = QHBoxLayout(playback_box)
         playback_layout.setContentsMargins(4, 10, 4, 4)
         playback_layout.setSpacing(4)
-        self.play_action = QAction("Play", self)
+        self.play_action = QAction(self)
         self.play_action.triggered.connect(self._toggle_playback)
         play_button = QToolButton(playback_box)
-        play_button.setDefaultAction(self.play_action)
+        self._configure_playback_button(
+            play_button,
+            self.play_action,
+            icon_id="play",
+            tooltip="Play",
+        )
         playback_layout.addWidget(play_button)
 
-        self.stop_action = QAction("Stop", self)
+        self.stop_action = QAction(self)
         self.stop_action.triggered.connect(self._stop_playback)
         stop_button = QToolButton(playback_box)
-        stop_button.setDefaultAction(self.stop_action)
+        self._configure_playback_button(
+            stop_button,
+            self.stop_action,
+            icon_id="stop",
+            tooltip="Stop and rewind to start",
+        )
         playback_layout.addWidget(stop_button)
 
-        self.sound_action = QAction("Sound: Off", self)
+        self.sound_action = QAction(self)
         self.sound_action.setCheckable(True)
         self.sound_action.setChecked(False)
-        self.sound_action.setToolTip(
-            "Toggle playback sound. Starts off so preview stays quiet by default."
-        )
         self.sound_action.toggled.connect(self._on_sound_toggled)
         sound_button = QToolButton(playback_box)
-        sound_button.setDefaultAction(self.sound_action)
+        self._configure_playback_button(
+            sound_button,
+            self.sound_action,
+            icon_id="sound_off",
+            tooltip="Turn playback sound on",
+        )
         playback_layout.addWidget(sound_button)
+        self._sync_playback_action_icons()
         strip_widgets.append(playback_box)
 
         zoom_box = QGroupBox("Zoom", parent)
@@ -322,6 +336,56 @@ class VideoEditorWindow(QMainWindow):
         zoom_layout.addWidget(self.zoom_reset_button)
         strip_widgets.append(zoom_box)
         return strip_widgets
+
+    def _configure_playback_button(
+        self,
+        button: QToolButton,
+        action: QAction,
+        *,
+        icon_id: str,
+        tooltip: str,
+    ) -> None:
+        """
+        Applies the shared icon-only styling used by editor toolbar buttons.
+
+        Args:
+            button: Playback tool button widget.
+            action: Backing action for the button.
+            icon_id: Playback icon identifier.
+            tooltip: Hover tooltip text.
+
+        Returns:
+            None
+        """
+
+        action.setIcon(build_playback_icon(icon_id))
+        action.setToolTip(tooltip)
+        button.setDefaultAction(action)
+        button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        button.setIconSize(QSize(28, 28))
+        button.setFixedSize(38, 34)
+
+    def _sync_playback_action_icons(self) -> None:
+        """
+        Refreshes play/pause and sound icons to match the current playback state.
+
+        Returns:
+            None
+        """
+
+        if self._is_playing:
+            self.play_action.setIcon(build_playback_icon("pause"))
+            self.play_action.setToolTip("Pause")
+        else:
+            self.play_action.setIcon(build_playback_icon("play"))
+            self.play_action.setToolTip("Play")
+
+        if self.sound_action.isChecked():
+            self.sound_action.setIcon(build_playback_icon("sound_on"))
+            self.sound_action.setToolTip("Turn playback sound off")
+        else:
+            self.sound_action.setIcon(build_playback_icon("sound_off"))
+            self.sound_action.setToolTip("Turn playback sound on")
 
     def _on_canvas_tool_changed(self, tool_id: str) -> None:
         """
@@ -387,11 +451,10 @@ class VideoEditorWindow(QMainWindow):
 
         if self._is_playing:
             self.canvas.pause()
-            self.play_action.setText("Play")
         else:
             self.canvas.play()
-            self.play_action.setText("Pause")
         self._is_playing = not self._is_playing
+        self._sync_playback_action_icons()
 
     def _stop_playback(self) -> None:
         """
@@ -404,7 +467,7 @@ class VideoEditorWindow(QMainWindow):
         self.canvas.pause()
         self.canvas.set_position(0)
         self._is_playing = False
-        self.play_action.setText("Play")
+        self._sync_playback_action_icons()
 
     def _on_sound_toggled(self, enabled: bool) -> None:
         """
@@ -418,7 +481,7 @@ class VideoEditorWindow(QMainWindow):
         """
 
         self.canvas.set_audio_muted(not enabled)
-        self.sound_action.setText("Sound: On" if enabled else "Sound: Off")
+        self._sync_playback_action_icons()
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         """

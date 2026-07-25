@@ -315,3 +315,74 @@ def build_tool_icon(tool: str, *, locked: bool = False) -> QIcon:
     painter.end()
     return QIcon(pixmap)
 
+
+def build_playback_icon(icon_id: str) -> QIcon:
+    """
+    Builds one vector icon for video playback controls.
+
+    Args:
+        icon_id: One of ``play``, ``pause``, ``stop``, ``sound_on``, ``sound_off``.
+
+    Returns:
+        QIcon: Rendered icon.
+    """
+
+    size = 28
+    scale = size / 18.0
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.scale(scale, scale)
+
+    stroke_pen = QPen(QColor("#d7e3f1"), 1.6)
+    accent_pen = QPen(QColor(get_editor_accent_colors()[0]), 1.6)
+    painter.setPen(stroke_pen)
+    painter.setBrush(QBrush(QColor(74, 163, 255, 90)))
+
+    if icon_id == "play":
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(5.5, 3.5),
+                    QPointF(5.5, 14.5),
+                    QPointF(14.5, 9.0),
+                ]
+            )
+        )
+    elif icon_id == "pause":
+        painter.setBrush(QBrush(QColor("#d7e3f1")))
+        painter.drawRect(QRectF(4.5, 3.5, 3.2, 11.0))
+        painter.drawRect(QRectF(10.3, 3.5, 3.2, 11.0))
+    elif icon_id == "stop":
+        painter.setBrush(QBrush(QColor("#d7e3f1")))
+        painter.drawRect(QRectF(4.5, 4.5, 9.0, 9.0))
+    elif icon_id in {"sound_on", "sound_off"}:
+        painter.setBrush(QBrush(QColor("#d7e3f1")))
+        painter.drawPolygon(
+            QPolygonF(
+                [
+                    QPointF(3.0, 7.0),
+                    QPointF(6.0, 7.0),
+                    QPointF(10.0, 4.0),
+                    QPointF(10.0, 14.0),
+                    QPointF(6.0, 11.0),
+                    QPointF(3.0, 11.0),
+                ]
+            )
+        )
+        if icon_id == "sound_on":
+            painter.setPen(accent_pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawArc(QRectF(10.5, 6.0, 4.0, 6.0), 300 * 16, 120 * 16)
+            painter.drawArc(QRectF(12.0, 4.5, 5.0, 9.0), 300 * 16, 120 * 16)
+        else:
+            painter.setPen(QPen(QColor("#e74c3c"), 1.8))
+            painter.drawLine(11.0, 5.0, 15.5, 13.0)
+            painter.drawLine(15.5, 5.0, 11.0, 13.0)
+    else:
+        painter.drawRect(QRectF(4.0, 4.0, 10.0, 10.0))
+
+    painter.end()
+    return QIcon(pixmap)
+
