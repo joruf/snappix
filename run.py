@@ -183,6 +183,10 @@ def _install_application_icons() -> None:
     shutil.copy2(_capture_icon_path(), icon_root / "snappix.svg")
     shutil.copy2(_editor_icon_path(), icon_root / "snappix-editor.svg")
     _refresh_icon_theme_cache(icon_root.parent.parent)
+    from src.install_manifest import record_user_file
+
+    record_user_file(icon_root / "snappix.svg")
+    record_user_file(icon_root / "snappix-editor.svg")
 
 
 def _resolve_venv_python(project_root: Path) -> Path:
@@ -347,6 +351,9 @@ def _install_desktop_shortcut() -> bool:
         shortcut_path.write_text(_desktop_shortcut_content(), encoding="utf-8")
         mode = shortcut_path.stat().st_mode
         shortcut_path.chmod(mode | 0o111)
+        from src.install_manifest import record_user_file
+
+        record_user_file(shortcut_path)
         return True
     except OSError:
         return False
@@ -434,6 +441,10 @@ def _ensure_desktop_launcher() -> None:
         "NoDisplay=true\n"
     )
     editor_launcher_path.write_text(editor_content, encoding="utf-8")
+    from src.install_manifest import record_user_file
+
+    record_user_file(launcher_path)
+    record_user_file(editor_launcher_path)
 
 
 def _acquire_single_instance_lock() -> bool:

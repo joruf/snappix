@@ -56,6 +56,7 @@ class TestInstallDependencies(unittest.TestCase):
             ),
             patch.object(installer, "detect_package_manager", return_value="apt-get"),
             patch.object(installer, "_gui_mode_needs_pkexec", return_value=False),
+            patch.object(installer, "packages_not_installed", return_value=["grim"]),
             patch.object(installer, "_run_package_commands", return_value=1) as run_packages_mock,
         ):
             code = installer.install_system_dependencies(project_dir)
@@ -130,6 +131,28 @@ class TestInstallDependencies(unittest.TestCase):
         commands = installer._build_install_commands("apt-get", ["grim", "slurp"])
         self.assertEqual(commands[0], ["apt-get", "update"])
         self.assertEqual(commands[1], ["apt-get", "install", "-y", "grim", "slurp"])
+
+    def test_install_records_only_newly_installed_system_packages(self) -> None:
+        """
+        Ensures the install manifest records packages absent before installation only.
+        """
+
+        project_dir = Path("/tmp/snappix-test")
+        with (
+            patch.object(installer, "packages_not_installed", return_value=["grim", "slurp"]),
+            patch.object(installer, "_run_package_commands", return_value=0) as run_packages_mock,
+            patch.object(installer, "is_system_package_installed", side_effect=lambda _pm, pkg: pkg == "grim"),
+            patch.object(installer, "record_project_dir") as record_project_mock,
+            patch.object(installer, "record_package_manager") as record_manager_mock,
+            patch.object(installer, "record_system_packages_installed") as record_packages_mock,
+        ):
+            code = installer._install_packages_with_tracking(project_dir, "apt-get", ["grim", "slurp"])
+
+        self.assertEqual(code, 0)
+        run_packages_mock.assert_called_once()
+        record_project_mock.assert_called_once_with(project_dir)
+        record_manager_mock.assert_called_once_with("apt-get")
+        record_packages_mock.assert_called_once_with(["grim"])
 
 
 class TestInstallProgressGuiHelpers(unittest.TestCase):

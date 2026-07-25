@@ -58,6 +58,9 @@ class AutostartManager:
             "X-GNOME-Autostart-enabled=true\n"
         )
         self.desktop_path.write_text(content, encoding="utf-8")
+        from src.install_manifest import record_user_file
+
+        record_user_file(self.desktop_path)
 
     def disable(self) -> None:
         """

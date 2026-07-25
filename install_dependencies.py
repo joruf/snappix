@@ -12,6 +12,13 @@ from ctypes.util import find_library
 from pathlib import Path
 from shutil import which
 
+from src.install_manifest import (
+    record_package_manager,
+    record_project_dir,
+    record_system_packages_installed,
+    record_venv_created,
+)
+
 REQUIRED_SYSTEM_PACKAGE_MAP: dict[str, list[str]] = {
     "apt-get": [
         "libxcb-cursor0",
@@ -326,9 +333,10 @@ def install_system_dependencies(project_dir: Path) -> int:
                 "Snappix installer: required system packages are present; "
                 "trying recommended tools without blocking setup..."
             )
-            _run_package_commands(
+            _install_packages_with_tracking(
                 project_dir,
-                _build_install_commands(package_manager, recommended_packages),
+                package_manager,
+                recommended_packages,
             )
         still_recommended = detect_missing_recommended_dependencies()
         if still_recommended:
@@ -372,10 +380,7 @@ def install_system_dependencies(project_dir: Path) -> int:
         return 0
 
     print(f"Snappix installer: installing system dependencies via {package_manager}...")
-    install_code = _run_package_commands(
-        project_dir,
-        _build_install_commands(package_manager, packages),
-    )
+    install_code = _install_packages_with_tracking(project_dir, package_manager, packages)
     if install_code != 0:
         if not detect_missing_system_dependencies():
             print(
@@ -400,6 +405,106 @@ def install_system_dependencies(project_dir: Path) -> int:
     return 0
 
 
+def is_system_package_installed(package_manager: str, package: str) -> bool:
+    """
+    Checks whether one system package is currently installed.
+
+    Args:
+        package_manager: Package manager name.
+        package: Package name.
+
+    Returns:
+        bool: True when the package is installed.
+    """
+
+    if package_manager == "apt-get":
+        result = subprocess.run(
+            ["dpkg-query", "-W", "-f=${Status}", package],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return "install ok installed" in result.stdout
+    if package_manager in {"dnf", "zypper"}:
+        result = subprocess.run(["rpm", "-q", package], capture_output=True, check=False)
+        return result.returncode == 0
+    if package_manager == "pacman":
+        result = subprocess.run(["pacman", "-Qi", package], capture_output=True, check=False)
+        return result.returncode == 0
+    return False
+
+
+def packages_not_installed(package_manager: str, packages: list[str]) -> list[str]:
+    """
+    Returns packages from one list that are not currently installed.
+
+    Args:
+        package_manager: Package manager name.
+        packages: Candidate package names.
+
+    Returns:
+        list[str]: Packages absent before installation.
+    """
+
+    return [package for package in packages if not is_system_package_installed(package_manager, package)]
+
+
+def _record_newly_installed_packages(
+    project_dir: Path,
+    package_manager: str,
+    candidate_packages: list[str],
+) -> None:
+    """
+    Records system packages that Snappix newly installed.
+
+    Args:
+        project_dir: Project root directory.
+        package_manager: Package manager used for installation.
+        candidate_packages: Packages attempted by this install run.
+
+    Returns:
+        None
+    """
+
+    record_project_dir(project_dir)
+    record_package_manager(package_manager)
+    installed_now = [
+        package
+        for package in candidate_packages
+        if is_system_package_installed(package_manager, package)
+    ]
+    record_system_packages_installed(installed_now)
+
+
+def _install_packages_with_tracking(
+    project_dir: Path,
+    package_manager: str,
+    packages: list[str],
+) -> int:
+    """
+    Installs system packages and records only newly installed ones.
+
+    Args:
+        project_dir: Project root directory.
+        package_manager: Detected package manager name.
+        packages: Package names to ensure are installed.
+
+    Returns:
+        int: Exit code from package installation.
+    """
+
+    missing_before = packages_not_installed(package_manager, packages)
+    if not missing_before:
+        return 0
+    install_code = _run_package_commands(
+        project_dir,
+        _build_install_commands(package_manager, packages),
+    )
+    if install_code == 0:
+        _record_newly_installed_packages(project_dir, package_manager, missing_before)
+    return install_code
+
+
 def ensure_venv(project_dir: Path, python_bin: str) -> int:
     """
     Creates a virtual environment when missing.
@@ -416,7 +521,11 @@ def ensure_venv(project_dir: Path, python_bin: str) -> int:
     if venv_dir.exists():
         return 0
     print("Snappix installer: creating virtual environment...")
-    return run_command([python_bin, "-m", "venv", str(venv_dir)], project_dir)
+    create_code = run_command([python_bin, "-m", "venv", str(venv_dir)], project_dir)
+    if create_code == 0:
+        record_project_dir(project_dir)
+        record_venv_created(project_dir)
+    return create_code
 
 
 def install_packages(project_dir: Path) -> int:
@@ -464,6 +573,7 @@ def bootstrap(project_dir: Path, python_bin: str | None = None) -> int:
 
     interpreter = python_bin or sys.executable
     print("Snappix installer: checking installation requirements...")
+    record_project_dir(project_dir)
     system_code = install_system_dependencies(project_dir)
     create_code = ensure_venv(project_dir, interpreter)
     if create_code != 0:
