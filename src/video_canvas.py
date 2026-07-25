@@ -11,6 +11,7 @@ from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
+    QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
@@ -225,6 +226,16 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
         text_item.setPos(annotation.x, annotation.y)
         _configure_video_annotation_item(text_item, annotation)
         return text_item
+    if annotation.annotation_type == "image":
+        from src.editor_canvas import decode_base64_to_pixmap
+
+        encoded = str(annotation.payload.get("image_png_base64", ""))
+        if not encoded:
+            return None
+        item = QGraphicsPixmapItem(decode_base64_to_pixmap(encoded))
+        item.setPos(annotation.x, annotation.y)
+        _configure_video_annotation_item(item, annotation)
+        return item
     return None
 
 
@@ -340,6 +351,41 @@ class VideoCanvas(QGraphicsView):
         self._scene.setSceneRect(0, 0, width, height)
         self._initial_view_pending = True
         self._fit_scene_in_view()
+
+    def import_image_file(self, file_path: str) -> bool:
+        """
+        Inserts one image overlay at the current playhead time range.
+
+        Args:
+            file_path: Local image file path.
+
+        Returns:
+            bool: True when the image was imported successfully.
+        """
+
+        from pathlib import Path
+
+        from src.editor_canvas import encode_pixmap_to_base64
+        from src.media_import import load_image_pixmap
+
+        pixmap = load_image_pixmap(Path(file_path))
+        if pixmap is None:
+            return False
+
+        scene_size = self._scene.sceneRect()
+        width = float(pixmap.width())
+        height = float(pixmap.height())
+        x = max(0.0, (scene_size.width() - width) / 2.0)
+        y = max(0.0, (scene_size.height() - height) / 2.0)
+        self._finalize_annotation(
+            "image",
+            x,
+            y,
+            max(1.0, width),
+            max(1.0, height),
+            payload={"image_png_base64": encode_pixmap_to_base64(pixmap)},
+        )
+        return True
 
     def resizeEvent(self, event) -> None:
         """

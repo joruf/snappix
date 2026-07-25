@@ -679,6 +679,18 @@ class AppController:
         open_project_button.setToolTip("Open an existing project file (Ctrl+O).")
         open_project_button.clicked.connect(self._open_project_from_editor_host)
         empty_actions.addWidget(open_project_button)
+        import_image_button = QPushButton("Import Image")
+        import_image_button.setToolTip("Open an external image in a new editor tab.")
+        import_image_button.clicked.connect(
+            lambda: self.import_image_as_new_tab(self.editor_host),
+        )
+        empty_actions.addWidget(import_image_button)
+        import_video_button = QPushButton("Import Video")
+        import_video_button.setToolTip("Open an external video file in a new video editor tab.")
+        import_video_button.clicked.connect(
+            lambda: self.import_video_as_new_tab(self.editor_host),
+        )
+        empty_actions.addWidget(import_video_button)
         empty_layout.addLayout(empty_actions)
         empty_layout.addStretch(1)
         self.editor_stack.addWidget(self.editor_empty_state)
@@ -1056,6 +1068,12 @@ class AppController:
         editor = VideoEditorWindow(video_path, width, height)
         editor.set_recovery_path(recovery_path or create_video_tab_recovery_path())
         editor.prepare_recovery_assets()
+        editor.import_image_tab_requested.connect(
+            lambda: self.import_image_as_new_tab(editor),
+        )
+        editor.import_video_tab_requested.connect(
+            lambda: self.import_video_as_new_tab(editor),
+        )
         editor.setWindowIcon(self._editor_icon)
         editor.set_minimize_to_tray_on_close(False)
         editor.setParent(self.editor_tabs)
@@ -1701,6 +1719,12 @@ class AppController:
             lambda: self.create_new_canvas_tab(editor),
         )
         editor.new_tab_requested.connect(self.create_empty_editor_tab)
+        editor.import_image_tab_requested.connect(
+            lambda: self.import_image_as_new_tab(editor),
+        )
+        editor.import_video_tab_requested.connect(
+            lambda: self.import_video_as_new_tab(editor),
+        )
         editor.setWindowIcon(self._editor_icon)
         editor.set_minimize_to_tray_on_close(False)
         editor.setParent(self.editor_tabs)
@@ -1914,6 +1938,171 @@ class AppController:
         tab_title = Path(project_path).name
         editor = self._create_editor_tab(screenshot, tab_title)
         editor.load_project_model(model, project_path)
+
+    def import_image_as_new_tab(self, parent=None, file_path: str = "") -> None:
+        """
+        Opens one external image in a new editor tab as a movable layer.
+
+        Args:
+            parent: Optional parent widget for the file dialog.
+            file_path: Optional preselected image path.
+
+        Returns:
+            None
+        """
+
+        from src.media_import import (
+            IMAGE_FILE_FILTER,
+            build_import_canvas_background,
+            load_image_pixmap,
+        )
+
+        if not file_path:
+            file_path, _ = self._QFileDialog.getOpenFileName(
+                parent or self.editor_host,
+                "Import Image as New Tab",
+                "",
+                IMAGE_FILE_FILTER,
+            )
+        if not file_path:
+            return
+
+        pixmap = load_image_pixmap(file_path)
+        if pixmap is None:
+            self._QMessageBox.warning(
+                parent or self.editor_host,
+                "Import Image",
+                "Could not import the selected image file.",
+            )
+            return
+
+        background = build_import_canvas_background(pixmap)
+        editor = self._create_editor_tab(background, Path(file_path).name)
+        editor.canvas.insert_imported_image_at_origin(pixmap)
+
+    def import_video_as_new_tab(self, parent=None, file_path: str = "") -> None:
+        """
+        Opens one external video file or Snappix video project in a new tab.
+
+        Args:
+            parent: Optional parent widget for the file dialog.
+            file_path: Optional preselected video or project path.
+
+        Returns:
+            None
+        """
+
+        from src.constants import VIDEO_PROJECT_FILE_EXTENSION
+        from src.media_import import (
+            MAX_IMPORTED_VIDEO_DURATION_MS,
+            VIDEO_FILE_FILTER,
+            probe_video_file,
+            validate_import_video_duration,
+        )
+        from src.video_recorder import has_ffmpeg
+
+        if not file_path:
+            file_path, _ = self._QFileDialog.getOpenFileName(
+                parent or self.editor_host,
+                "Import Video",
+                "",
+                VIDEO_FILE_FILTER,
+            )
+        if not file_path:
+            return
+
+        if Path(file_path).suffix.lower() == VIDEO_PROJECT_FILE_EXTENSION:
+            self._open_video_project_in_editor(file_path, parent=parent)
+            return
+
+        if not has_ffmpeg():
+            self._QMessageBox.warning(
+                parent or self.editor_host,
+                "Import Video",
+                "Video import requires ffmpeg. Please install ffmpeg to enable this feature.",
+            )
+            return
+
+        probe = probe_video_file(file_path)
+        if probe is None:
+            self._QMessageBox.warning(
+                parent or self.editor_host,
+                "Import Video",
+                "Could not read the selected video file.",
+            )
+            return
+
+        if probe.duration_ms > 0 and not validate_import_video_duration(probe.duration_ms):
+            max_minutes = MAX_IMPORTED_VIDEO_DURATION_MS // 60_000
+            self._QMessageBox.warning(
+                parent or self.editor_host,
+                "Import Video",
+                f"Imported videos must be at most {max_minutes} minutes long.",
+            )
+            return
+
+        self._create_video_editor_tab(
+            file_path,
+            probe.width,
+            probe.height,
+            Path(file_path).name,
+            source_path=file_path,
+        )
+
+    def _open_video_project_in_editor(
+        self,
+        project_path: str,
+        *,
+        parent=None,
+    ) -> None:
+        """
+        Loads one Snappix video project into a new video editor tab.
+
+        Args:
+            project_path: Path to a ``.sfpv`` project file.
+            parent: Optional parent widget for error dialogs.
+
+        Returns:
+            None
+        """
+
+        from src.media_import import (
+            MAX_IMPORTED_VIDEO_DURATION_MS,
+            validate_import_video_duration,
+        )
+        from src.session_recovery import video_assets_dir
+        from src.video_storage import load_video_project
+
+        try:
+            extract_root = video_assets_dir() / Path(project_path).stem
+            project_model, video_path = load_video_project(project_path, extract_root)
+        except Exception as exc:
+            self._QMessageBox.warning(
+                parent or self.editor_host,
+                "Import Video",
+                f"Could not open video project:\n{exc}",
+            )
+            return
+
+        if project_model.duration_ms > 0 and not validate_import_video_duration(
+            project_model.duration_ms
+        ):
+            max_minutes = MAX_IMPORTED_VIDEO_DURATION_MS // 60_000
+            self._QMessageBox.warning(
+                parent or self.editor_host,
+                "Import Video",
+                f"Imported videos must be at most {max_minutes} minutes long.",
+            )
+            return
+
+        editor = self._create_video_editor_tab(
+            str(video_path),
+            project_model.video_width,
+            project_model.video_height,
+            Path(project_path).name,
+            source_path=project_path,
+        )
+        editor.load_video_project_model(project_model, project_path)
 
     def start_capture(self, request: CaptureRequest) -> None:
         """

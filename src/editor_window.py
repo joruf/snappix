@@ -422,6 +422,8 @@ class EditorWindow(QMainWindow):
     settings_requested = Signal()
     new_canvas_requested = Signal()
     new_tab_requested = Signal()
+    import_image_tab_requested = Signal()
+    import_video_tab_requested = Signal()
     export_preset_changed = Signal(str)
     export_scale_changed = Signal(float)
     export_keep_transparency_changed = Signal(bool)
@@ -1527,6 +1529,22 @@ class EditorWindow(QMainWindow):
         open_action.triggered.connect(self.open_project)
         file_menu.addAction(open_action)
         self._register_shortcut_action("open_project", open_action)
+
+        import_image_tab_action = QAction("Import Image as New Tab...", self)
+        import_image_tab_action.setToolTip(
+            "Open an external image in a new editor tab with a movable layer."
+        )
+        import_image_tab_action.triggered.connect(self.import_image_tab_requested.emit)
+        file_menu.addAction(import_image_tab_action)
+
+        import_video_tab_action = QAction("Import Video...", self)
+        import_video_tab_action.setToolTip(
+            "Open an external video file or Snappix video project in a new tab."
+        )
+        import_video_tab_action.triggered.connect(self.import_video_tab_requested.emit)
+        file_menu.addAction(import_video_tab_action)
+
+        file_menu.addSeparator()
 
         save_as_action = QAction("Save Project As...", self)
         save_as_action.setToolTip("Save project under a new file name.")
@@ -4720,11 +4738,13 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        from src.media_import import IMAGE_FILE_FILTER
+
         file_path, _ = QFileDialog.getOpenFileName(
             self,
             "Import Image",
             "",
-            "Images (*.png *.jpg *.jpeg *.gif *.bmp *.webp *.tif *.tiff);;All Files (*)",
+            IMAGE_FILE_FILTER,
         )
         if not file_path:
             return

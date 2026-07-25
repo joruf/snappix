@@ -49,6 +49,8 @@ class VideoEditorWindow(QMainWindow):
 
     close_requested = Signal()
     content_changed = Signal()
+    import_image_tab_requested = Signal()
+    import_video_tab_requested = Signal()
 
     def __init__(self, video_path: str, video_width: int, video_height: int) -> None:
         """
@@ -144,13 +146,30 @@ class VideoEditorWindow(QMainWindow):
 
     def _build_menu(self) -> None:
         """
-        Builds the File menu with project save/export actions.
+        Builds the File and Edit menus with project/import actions.
 
         Returns:
             None
         """
 
         file_menu = self.menuBar().addMenu("File")
+        edit_menu = self.menuBar().addMenu("Edit")
+
+        import_image_tab_action = QAction("Import Image as New Tab...", self)
+        import_image_tab_action.setToolTip(
+            "Open an external image in a new editor tab with a movable layer."
+        )
+        import_image_tab_action.triggered.connect(self.import_image_tab_requested.emit)
+        file_menu.addAction(import_image_tab_action)
+
+        import_video_tab_action = QAction("Import Video...", self)
+        import_video_tab_action.setToolTip(
+            "Open another external video file or Snappix video project in a new tab."
+        )
+        import_video_tab_action.triggered.connect(self.import_video_tab_requested.emit)
+        file_menu.addAction(import_video_tab_action)
+
+        file_menu.addSeparator()
 
         save_action = QAction("Save Project", self)
         save_action.setToolTip("Save the raw video and annotation timeline as a project file.")
@@ -161,6 +180,41 @@ class VideoEditorWindow(QMainWindow):
         export_action.setToolTip("Render a flattened MP4 with annotations burned in.")
         export_action.triggered.connect(self.export_mp4)
         file_menu.addAction(export_action)
+
+        import_image_action = QAction("Import Image...", self)
+        import_image_action.setToolTip(
+            "Insert an image overlay on the current video at the playhead."
+        )
+        import_image_action.triggered.connect(self.import_image)
+        edit_menu.addAction(import_image_action)
+
+    def import_image(self) -> None:
+        """
+        Prompts for one image file and inserts it as a time-ranged overlay.
+
+        Returns:
+            None
+        """
+
+        from src.media_import import IMAGE_FILE_FILTER
+
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import Image",
+            "",
+            IMAGE_FILE_FILTER,
+        )
+        if not file_path:
+            return
+        if not self.canvas.import_image_file(file_path):
+            QMessageBox.warning(
+                self,
+                APP_NAME,
+                "Could not import the selected image file.",
+            )
+            return
+        self.statusBar().showMessage("Image imported")
+        self._mark_dirty()
 
     def style_state(self) -> StyleState:
         """

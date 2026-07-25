@@ -4197,6 +4197,19 @@ class EditorCanvas(QGraphicsView):
         self._paste_image_pixmap(pixmap, scene_pos)
         return True
 
+    def insert_imported_image_at_origin(self, pixmap: QPixmap) -> None:
+        """
+        Places one imported image on the document background at the top-left corner.
+
+        Args:
+            pixmap: Image to insert as a movable annotation layer.
+
+        Returns:
+            None
+        """
+
+        self._insert_image_pixmap(pixmap, QPointF(0.0, 0.0), snap=False)
+
     def _paste_image_pixmap(self, pixmap: QPixmap, scene_pos: QPointF) -> None:
         """
         Inserts one image and applies blank-canvas sizing rules when needed.
