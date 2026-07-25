@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """
 Generates README screenshots for Snappix UI components.
+
+Renders the current Qt layouts (capture panel, editor host tabs, video editor,
+overlays, tray menu, setup splash) so docs/screenshots/ stays in sync with the
+live application chrome.
 """
 
 from __future__ import annotations
 
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -25,7 +31,16 @@ from PySide6.QtGui import (
     QPen,
     QPixmap,
 )
-from PySide6.QtWidgets import QApplication, QLabel, QMenu, QProgressBar, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QLabel,
+    QMainWindow,
+    QProgressBar,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from src.capture import CapturePanel, RegionCaptureOverlay, WindowCaptureOverlay
 from src.constants import APP_NAME
@@ -34,13 +49,17 @@ from src.models import AnnotationModel
 from src.theme import (
     THEME_DARK,
     build_application_stylesheet,
+    build_capture_accent_stylesheet,
     build_editor_accent_stylesheet,
     set_current_theme,
 )
+from src.video_editor_window import VideoEditorWindow
+from src.video_models import VideoAnnotationModel
 
 SCREENSHOT_DIR = PROJECT_ROOT / "docs" / "screenshots"
 MOCK_WIDTH = 1280
 MOCK_HEIGHT = 800
+SAMPLE_VIDEO_PATH = SCREENSHOT_DIR / "_sample-video.mp4"
 
 
 def _ensure_screenshot_dir() -> None:
@@ -132,15 +151,21 @@ def _build_mock_desktop() -> QPixmap:
         "docs.snappix.local — Getting Started",
     )
     painter.setPen(QColor("#475569"))
-    painter.drawText(browser_rect.adjusted(24, 52, -24, -24), Qt.AlignmentFlag.AlignTop, "\n".join([
-        "Snappix Documentation",
-        "",
-        "Capture screenshots quickly and annotate them with arrows,",
-        "step numbers, blur regions, and text callouts.",
-        "",
-        "Use Scroll Capture for long web pages and export to PNG,",
-        "JPEG, or PDF when you are done editing.",
-    ]))
+    painter.drawText(
+        browser_rect.adjusted(24, 52, -24, -24),
+        Qt.AlignmentFlag.AlignTop,
+        "\n".join(
+            [
+                "Snappix Documentation",
+                "",
+                "Capture screenshots and record screen regions as video.",
+                "Annotate with arrows, numbered steps, blur regions, and",
+                "time-based overlays in the image and video editors.",
+                "",
+                "Unsaved tabs restore automatically from ~/.snappix.",
+            ]
+        ),
+    )
 
     terminal_rect = QRect(920, 120, 300, 220)
     painter.fillRect(terminal_rect, QColor("#111827"))
@@ -151,7 +176,7 @@ def _build_mock_desktop() -> QPixmap:
     painter.drawText(
         terminal_rect.adjusted(12, 12, -12, -12),
         Qt.AlignmentFlag.AlignTop,
-        "$ python3 run.py\nSnappix ready.\n$ python3 run.py capture --mode region",
+        "$ python3 run.py\nSnappix ready.\n$ python3 uninstall_dependencies.py",
     )
 
     files_rect = QRect(920, 380, 300, 300)
@@ -161,15 +186,21 @@ def _build_mock_desktop() -> QPixmap:
     painter.fillRect(QRect(files_rect.x(), files_rect.y(), files_rect.width(), 28), QColor("#eef2ff"))
     painter.setPen(QColor("#334155"))
     painter.setFont(QFont("Sans Serif", 9, QFont.Weight.Bold))
-    painter.drawText(files_rect.x() + 10, files_rect.y() + 19, "Projects")
+    painter.drawText(files_rect.x() + 10, files_rect.y() + 19, "Workspace")
     painter.setFont(QFont("Sans Serif", 9))
     painter.setPen(QColor("#64748b"))
-    painter.drawText(files_rect.adjusted(12, 40, -12, -12), Qt.AlignmentFlag.AlignTop, "\n".join([
-        "capture-panel.sfp",
-        "editor-window.sfp",
-        "scroll-demo.sfp",
-        "readme-export.png",
-    ]))
+    painter.drawText(
+        files_rect.adjusted(12, 40, -12, -12),
+        Qt.AlignmentFlag.AlignTop,
+        "\n".join(
+            [
+                "session.json",
+                "tabs/tab-image.sfp",
+                "tabs/tab-recording.sfpv",
+                "video-sources/",
+            ]
+        ),
+    )
 
     painter.end()
     return pixmap
@@ -190,8 +221,6 @@ def _build_editor_sample_screenshot() -> QPixmap:
     painter.setPen(QPen(QColor("#e2e8f0"), 1))
     painter.drawRect(pixmap.rect().adjusted(0, 0, -1, -1))
 
-    header_rect = QRect(0, 0, pixmap.width(), 72)
-    painter.fillRect(header_rect, QColor("#ffffff"))
     painter.setPen(QColor("#0f172a"))
     painter.setFont(QFont("Sans Serif", 18, QFont.Weight.Bold))
     painter.drawText(28, 46, "Snappix — Capture Workflow")
@@ -211,7 +240,7 @@ def _build_editor_sample_screenshot() -> QPixmap:
     painter.drawText(
         card_rect.adjusted(18, 48, -18, -18),
         Qt.AlignmentFlag.AlignTop,
-        "Open the capture panel and choose fullscreen,\narea, window, or scroll capture.",
+        "Open the capture panel and choose fullscreen,\narea, window, scroll, or video capture.",
     )
 
     card_rect = QRect(470, 96, 460, 220)
@@ -241,9 +270,9 @@ def _build_editor_sample_screenshot() -> QPixmap:
     return pixmap
 
 
-def _sample_annotations() -> list[AnnotationModel]:
+def _sample_image_annotations() -> list[AnnotationModel]:
     """
-    Returns annotation models used in the editor screenshot.
+    Returns annotation models used in the image editor screenshot.
 
     Returns:
         list[AnnotationModel]: Demo annotations.
@@ -271,17 +300,6 @@ def _sample_annotations() -> list[AnnotationModel]:
             fill_rgba=[46, 204, 113, 0],
             stroke_width=4.0,
             payload={"z_index": 2.0, "stroke_style": "solid"},
-        ),
-        AnnotationModel(
-            annotation_type="line",
-            x=40.0,
-            y=340.0,
-            width=360.0,
-            height=0.0,
-            stroke_rgba=[52, 152, 219, 255],
-            fill_rgba=[0, 0, 0, 0],
-            stroke_width=3.0,
-            payload={"z_index": 2.5, "stroke_style": "dash"},
         ),
         AnnotationModel(
             annotation_type="step",
@@ -317,6 +335,56 @@ def _sample_annotations() -> list[AnnotationModel]:
     ]
 
 
+def _sample_video_annotations() -> list[VideoAnnotationModel]:
+    """
+    Returns annotation models used in the video editor screenshot.
+
+    Returns:
+        list[VideoAnnotationModel]: Demo video annotations.
+    """
+
+    return [
+        VideoAnnotationModel(
+            annotation_type="rect",
+            start_ms=500,
+            end_ms=4200,
+            x=120.0,
+            y=80.0,
+            width=280.0,
+            height=160.0,
+            stroke_rgba=[231, 76, 60, 255],
+            fill_rgba=[231, 76, 60, 70],
+            stroke_width=3.0,
+        ),
+        VideoAnnotationModel(
+            annotation_type="arrow",
+            start_ms=1800,
+            end_ms=6500,
+            x=520.0,
+            y=220.0,
+            width=160.0,
+            height=-80.0,
+            stroke_rgba=[46, 204, 113, 255],
+            fill_rgba=[0, 0, 0, 0],
+            stroke_width=3.0,
+        ),
+        VideoAnnotationModel(
+            annotation_type="text",
+            start_ms=2500,
+            end_ms=7000,
+            x=680.0,
+            y=96.0,
+            width=220.0,
+            height=48.0,
+            stroke_rgba=[44, 62, 80, 255],
+            fill_rgba=[255, 255, 255, 220],
+            stroke_width=2.0,
+            text="Explain this step",
+            font_size=16,
+        ),
+    ]
+
+
 def _capture_icon() -> QIcon:
     """
     Loads the Snappix capture icon when available.
@@ -327,6 +395,55 @@ def _capture_icon() -> QIcon:
 
     icon_path = PROJECT_ROOT / "assets" / "snappix-red.svg"
     return QIcon.fromTheme("snappix", QIcon(str(icon_path)))
+
+
+def _editor_icon() -> QIcon:
+    """
+    Loads the Snappix editor icon when available.
+
+    Returns:
+        QIcon: Editor icon.
+    """
+
+    icon_path = PROJECT_ROOT / "assets" / "snappix.svg"
+    return QIcon.fromTheme("snappix-editor", QIcon(str(icon_path)))
+
+
+def _ensure_sample_video() -> Path:
+    """
+    Ensures a small sample MP4 exists for the video editor screenshot.
+
+    Returns:
+        Path: Sample video file path.
+    """
+
+    if SAMPLE_VIDEO_PATH.is_file() and SAMPLE_VIDEO_PATH.stat().st_size > 0:
+        return SAMPLE_VIDEO_PATH
+
+    ffmpeg = "ffmpeg"
+    try:
+        subprocess.run(
+            [
+                ffmpeg,
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=#243b53:s=960x540:d=8",
+                "-pix_fmt",
+                "yuv420p",
+                str(SAMPLE_VIDEO_PATH),
+            ],
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False, dir=SCREENSHOT_DIR) as handle:
+            fallback = Path(handle.name)
+        fallback.write_bytes(b"")
+        return fallback
+
+    return SAMPLE_VIDEO_PATH
 
 
 def generate_capture_panel(app: QApplication) -> Path:
@@ -343,10 +460,12 @@ def generate_capture_panel(app: QApplication) -> Path:
     _apply_theme(app)
     panel = CapturePanel()
     panel.setWindowIcon(_capture_icon())
+    panel.setStyleSheet(build_capture_accent_stylesheet(THEME_DARK))
+    panel.set_video_capture_available(True)
     panel.delay_slider.setValue(3)
     panel._sync_delay_label_from_slider(3)  # pylint: disable=protected-access
     panel.adjustSize()
-    panel.resize(panel.size())
+    panel.resize(max(panel.sizeHint().width(), 360), panel.sizeHint().height())
     return _save_widget(panel, "capture-panel.png")
 
 
@@ -392,9 +511,33 @@ def generate_window_overlay(app: QApplication) -> Path:  # pylint: disable=unuse
     return _save_widget(overlay, "capture-window-preview.png")
 
 
+def _build_editor_host_with_tab(editor: EditorWindow, tab_title: str) -> QMainWindow:
+    """
+    Wraps one editor tab inside an editor-host window for realistic screenshots.
+
+    Args:
+        editor: Editor tab widget.
+        tab_title: Tab label text.
+
+    Returns:
+        QMainWindow: Editor host shell.
+    """
+
+    host = QMainWindow()
+    host.setObjectName("editorHost")
+    host.setWindowTitle(f"{APP_NAME} Editor")
+    host.setWindowIcon(_editor_icon())
+    host.setStyleSheet(build_editor_accent_stylesheet(THEME_DARK))
+    tabs = QTabWidget()
+    tabs.setDocumentMode(True)
+    tabs.addTab(editor, tab_title)
+    host.setCentralWidget(tabs)
+    return host
+
+
 def generate_editor_window(app: QApplication) -> Path:
     """
-    Captures the editor window screenshot.
+    Captures the tabbed image editor host screenshot.
 
     Args:
         app: Qt application instance.
@@ -405,16 +548,43 @@ def generate_editor_window(app: QApplication) -> Path:
 
     _apply_theme(app)
     editor = EditorWindow(_build_editor_sample_screenshot())
-    editor.setObjectName("editorHost")
-    editor.setStyleSheet(build_editor_accent_stylesheet(THEME_DARK))
-    editor.canvas.load_annotations(_sample_annotations())
+    editor.canvas.load_annotations(_sample_image_annotations())
     editor.canvas.set_tool("select")
-    editor.resize(1280, 820)
+    host = _build_editor_host_with_tab(editor, "Capture Workflow")
+    host.resize(1320, 860)
     editor.canvas.refresh_workspace_theme(THEME_DARK)
     QApplication.processEvents()
     editor.canvas._apply_initial_screenshot_view()  # pylint: disable=protected-access
     QApplication.processEvents()
-    return _save_widget(editor, "editor-window.png")
+    return _save_widget(host, "editor-window.png")
+
+
+def generate_video_editor(app: QApplication) -> Path:
+    """
+    Captures the video editor tab screenshot with timeline annotations.
+
+    Args:
+        app: Qt application instance.
+
+    Returns:
+        Path: Written screenshot path.
+    """
+
+    _apply_theme(app)
+    sample_video = _ensure_sample_video()
+    editor = VideoEditorWindow(str(sample_video), 960, 540)
+    editor.setWindowIcon(_editor_icon())
+    editor.setStyleSheet(build_editor_accent_stylesheet(THEME_DARK))
+    editor._annotations.extend(_sample_video_annotations())  # pylint: disable=protected-access
+    editor.canvas.set_annotations(editor._annotations)  # pylint: disable=protected-access
+    editor.timeline.set_annotations(editor._annotations)  # pylint: disable=protected-access
+    editor.timeline.set_duration(8000)
+    editor.timeline.set_position(2200)
+    editor.timeline.refresh()
+    host = _build_editor_host_with_tab(editor, "Recording")
+    host.resize(1320, 900)
+    QApplication.processEvents()
+    return _save_widget(host, "video-editor.png")
 
 
 def generate_tray_menu(app: QApplication) -> Path:
@@ -428,12 +598,20 @@ def generate_tray_menu(app: QApplication) -> Path:
         Path: Written screenshot path.
     """
 
+    from PySide6.QtWidgets import QMenu
+
     _apply_theme(app)
     menu = QMenu()
     menu.addAction("Show Snappix")
     menu.addSeparator()
     menu.addAction("Capture Area")
     menu.addAction("Capture Window Under Cursor")
+    menu.addAction("Capture Video")
+    menu.addSeparator()
+    pause_action = menu.addAction("Pause Recording")
+    pause_action.setEnabled(False)
+    stop_action = menu.addAction("Stop Recording")
+    stop_action.setEnabled(False)
     menu.addSeparator()
     autostart_action = menu.addAction("Start at boot")
     autostart_action.setCheckable(True)
@@ -441,15 +619,12 @@ def generate_tray_menu(app: QApplication) -> Path:
     theme_menu = menu.addMenu("Theme")
     theme_group = QActionGroup(theme_menu)
     theme_group.setExclusive(True)
-    dark_action = QAction("Dark", theme_menu)
-    dark_action.setCheckable(True)
-    dark_action.setChecked(True)
-    theme_group.addAction(dark_action)
-    theme_menu.addAction(dark_action)
-    light_action = QAction("Light", theme_menu)
-    light_action.setCheckable(True)
-    theme_group.addAction(light_action)
-    theme_menu.addAction(light_action)
+    for label, checked in (("Dark", True), ("Light", False), ("Slate", False), ("Sepia", False)):
+        action = QAction(label, theme_menu)
+        action.setCheckable(True)
+        action.setChecked(checked)
+        theme_group.addAction(action)
+        theme_menu.addAction(action)
     menu.addSeparator()
     menu.addAction("Settings...")
     menu.addSeparator()
@@ -465,7 +640,7 @@ def generate_tray_menu(app: QApplication) -> Path:
 
 def generate_first_time_setup(app: QApplication) -> Path:
     """
-    Captures the first-time setup progress dialog screenshot.
+    Captures the first-time setup splash screenshot.
 
     Args:
         app: Qt application instance.
@@ -476,40 +651,63 @@ def generate_first_time_setup(app: QApplication) -> Path:
 
     _apply_theme(app)
     container = QWidget()
-    container.setStyleSheet(build_application_stylesheet(THEME_DARK))
+    container.setStyleSheet(
+        "QWidget { background-color: #1a1f2a; color: #f4f8ff; }"
+        "QLabel#brandLabel { font-size: 18px; font-weight: 700; }"
+        "QLabel#subtitleLabel { color: #9aa6b8; font-size: 11px; }"
+        "QLabel#statusLabel { color: #d7dee8; font-size: 11px; }"
+        "QLabel#hintLabel { color: #9fb2c9; font-size: 11px; }"
+    )
     layout = QVBoxLayout(container)
-    layout.setContentsMargins(20, 20, 20, 20)
+    layout.setContentsMargins(36, 28, 36, 28)
     layout.setSpacing(12)
 
-    title = QLabel(
-        "Snappix is installing required dependencies.\n"
-        "Please wait — this may take a few minutes."
-    )
-    title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    title.setWordWrap(True)
-    layout.addWidget(title)
+    logo_path = PROJECT_ROOT / "assets" / "snappix-splash.png"
+    if logo_path.is_file():
+        logo = QLabel()
+        logo.setPixmap(QPixmap(str(logo_path)).scaledToWidth(220, Qt.TransformationMode.SmoothTransformation))
+        logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(logo)
+    else:
+        fallback = QLabel(APP_NAME)
+        fallback.setObjectName("brandLabel")
+        fallback.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(fallback)
 
-    status = QLabel("Installing Python packages (PySide6, Pillow, requests)...")
+    brand = QLabel(APP_NAME)
+    brand.setObjectName("brandLabel")
+    brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    layout.addWidget(brand)
+
+    subtitle = QLabel("Checking installation…")
+    subtitle.setObjectName("subtitleLabel")
+    subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    layout.addWidget(subtitle)
+
+    status = QLabel("Installing Python packages (PySide6, Pillow, requests, pynput)…")
+    status.setObjectName("statusLabel")
     status.setAlignment(Qt.AlignmentFlag.AlignCenter)
     status.setWordWrap(True)
     layout.addWidget(status)
 
     progress = QProgressBar()
     progress.setRange(0, 0)
-    progress.setFixedHeight(18)
+    progress.setFixedHeight(10)
+    progress.setTextVisible(False)
     layout.addWidget(progress)
 
-    hint = QLabel(
-        "If prompted, enter your password in the terminal for system packages."
-    )
+    hint = QLabel("If prompted, approve the administrator dialog for Linux system packages.")
+    hint.setObjectName("hintLabel")
     hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
     hint.setWordWrap(True)
-    hint.setStyleSheet("color: #9fb2c9; font-size: 11px;")
     layout.addWidget(hint)
 
-    container.adjustSize()
-    container.resize(max(container.sizeHint().width(), 480), container.sizeHint().height())
-    return _save_widget(container, "first-time-setup.png")
+    frame = QFrame()
+    frame.setFixedWidth(480)
+    frame_layout = QVBoxLayout(frame)
+    frame_layout.addWidget(container)
+    frame.adjustSize()
+    return _save_widget(frame, "first-time-setup.png")
 
 
 def main() -> int:
@@ -521,7 +719,10 @@ def main() -> int:
     """
 
     _ensure_screenshot_dir()
-    app = QApplication(sys.argv)
+    if not QGuiApplication.instance():
+        app = QApplication(sys.argv)
+    else:
+        app = QApplication.instance()
     app.setApplicationName(APP_NAME)
 
     outputs = [
@@ -529,6 +730,7 @@ def main() -> int:
         generate_region_overlay(app),
         generate_window_overlay(app),
         generate_editor_window(app),
+        generate_video_editor(app),
         generate_tray_menu(app),
         generate_first_time_setup(app),
     ]

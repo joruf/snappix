@@ -1,9 +1,9 @@
 # Snappix
 
 Snappix is a Linux screenshot and annotation app inspired by SnagIt.  
-Capture quickly, annotate in a tabbed editor, and keep projects editable as `.sfp` files.
+Capture quickly, annotate in a tabbed editor, record screen regions as video, and keep projects editable as `.sfp` / `.sfpv` files.
 
-**[Technical Documentation](docs/TECHNICAL.md)** — architecture, modules, config schema, capture pipeline, annotation model
+**[Technical Documentation](docs/TECHNICAL.md)** — architecture, modules, config schema, capture pipeline, session workspace, video editor
 
 ---
 
@@ -31,7 +31,7 @@ sudo apt install libxcb-cursor0 python3-tk python3-venv xdotool x11-utils tesser
 | `xdotool`, `x11-utils` | Window / scroll capture on X11 |
 | `tesseract-ocr` | OCR tool |
 | `grim`, `slurp` | Recommended for Wayland region / fullscreen capture |
-| `ffmpeg` | Recommended for video recording and export (X11 only for now) |
+| `ffmpeg` | Video recording and MP4 export |
 
 ### Requirements
 
@@ -51,6 +51,17 @@ sudo apt install libxcb-cursor0 python3-tk python3-venv xdotool x11-utils tesser
 
 Artifacts land in `dist/`. Tag `v1.2.0` (or run **Release Build** in GitHub Actions) to publish `.deb` and AppImage.
 
+### Uninstall Snappix-owned dependencies
+
+Snappix records which system packages and integration files **it** installed during first-run setup. To remove only those artifacts:
+
+```bash
+python3 uninstall_dependencies.py
+python3 uninstall_dependencies.py -y --remove-config   # non-interactive, incl. user settings
+```
+
+This removes the local `.venv`, desktop launchers, and system packages Snappix added — not packages that were already on your system.
+
 ---
 
 ## Key Features
@@ -58,42 +69,47 @@ Artifacts land in `dist/`. Tag `v1.2.0` (or run **Release Build** in GitHub Acti
 ### Capture
 
 - Compact **Capture Panel** with delay (0–20 s)
-- Modes: **Fullscreen**, **Area**, **Window**, **Scroll**, **Color Picker**
+- Modes: **Fullscreen**, **Area**, **Window**, **Scroll**, **Color Picker**, **Capture Video**
 - **Auto scroll capture** for long pages (scrollbar detect + stitch)
 - Post-capture: open editor, copy clipboard, or save to folder
-- Global hotkeys (default `Ctrl+Shift+A/W/F`)
+- Global hotkeys (default `Ctrl+Shift+A/W/F/V/P/R`)
 - Wayland region capture via `grim` + `slurp` when available
 
-### Video (X11 only)
+### Video (X11)
 
-- **Capture Video** button: select a region, then record it with `ffmpeg` (requires `ffmpeg`)
-- Pause / Resume / Stop from the system tray or global hotkeys (default `Ctrl+Shift+V/P/R`)
-- Optional microphone audio track
-- **Video Editor** tab: playback with a scrubbable timeline, draw Rectangle/Ellipse/Line/Arrow/Text
-  annotations that appear only within a chosen time range, drag annotation bars to move or
-  resize their start/end
-- Save a re-editable project (`.sfpv`, raw video + timeline) or export a flattened MP4 with
-  annotations burned in
+- **Capture Video**: select a region, record with `ffmpeg` (requires `ffmpeg`)
+- Pause / Resume / Stop from the system tray or global hotkeys
+- Optional microphone audio; drag the red border during recording to reposition the capture area
+- Elapsed recording timer above the capture border
+- **Video Editor** tab: playback canvas, vector toolbar (parity with image editor), scrubbable **timeline** with page navigation
+- Time-ranged annotations (Rectangle, Ellipse, Line, Arrow, Text, …) with draggable/resizable bars
+- Save a re-editable project (`.sfpv`) or export a flattened MP4 with annotations burned in
 
 ### Editor
 
-- Tabbed **Editor Host** for multiple screenshots
-- Drawing tools: Select, Rectangle, Ellipse, Line, Arrow, Text, Step, Crop
+- Tabbed **Editor Host** for multiple image and video tabs
+- Drawing tools: Select, Rectangle, Ellipse, Line, Arrow, Text, Step, Crop, Polyline, Polygon, Bent Arrow, …
 - Pixel tools: Rect/Ellipse/Lasso selection, Magic Wand, Brush, Eraser, Fill, Eyedropper
 - Redaction: **Blur**; background paint: **Bg Fill**; **OCR** region → clipboard
-- **Per-tool menus** (like Width): Hard (Brush/Eraser), Style solid/dash/dot (shapes/lines)
+- **Per-tool menus** (Width, Hard, Style) with selection-aware updates
 - Text tool menu: font, size, plain / box / bubble, spacing, padding
 - One-shot tools → return to Select; **double-click** locks a tool
 - Layers, geometry inspector (`X/Y/W/H`), document footer when nothing is selected
 - History with labeled undo list; zoom, grid, snap, smart guides
-- Export PNG / JPEG / PDF, batch export profiles, print
-- Multi-tab session recovery (auto-save every 30 s)
+- Export PNG / JPEG / PDF / SVG, batch export profiles, print
+
+### Session workspace
+
+- Unsaved image and video tabs persist in a configurable **workspace folder** (default `~/.snappix/`)
+- Closing Snappix restores all open tabs on the next launch — annotations, timeline, and tab titles included
+- Closing a tab deletes that tab's workspace data; tabs with unsaved annotations ask for confirmation first
+- Auto-save every 30 s into the workspace
 
 ### Desktop integration
 
 - Single-instance lock, system tray, autostart (XDG)
-- Light / Dark themes
-- Settings: hotkeys, post-capture action, save folder, editor shortcuts, auto-crop
+- Themes: Dark, Light, Slate, Sepia
+- Settings: hotkeys, post-capture action, save folder, **workspace folder**, editor shortcuts, auto-crop
 
 ---
 
@@ -111,9 +127,13 @@ Artifacts land in `dist/`. Tag `v1.2.0` (or run **Release Build** in GitHub Acti
 
 ![Snappix Window Overlay](docs/screenshots/capture-window-preview.png)
 
-### Editor Window
+### Image Editor (tabbed host)
 
 ![Snappix Editor Window](docs/screenshots/editor-window.png)
+
+### Video Editor
+
+![Snappix Video Editor](docs/screenshots/video-editor.png)
 
 ### System Tray Menu
 
@@ -123,7 +143,7 @@ Artifacts land in `dist/`. Tag `v1.2.0` (or run **Release Build** in GitHub Acti
 
 ![Snappix First-Time Setup](docs/screenshots/first-time-setup.png)
 
-Regenerate after UI changes:
+Regenerate after UI changes (requires Qt display + optional `ffmpeg` for the video-editor sample):
 
 ```bash
 .venv/bin/python scripts/generate_readme_screenshots.py
@@ -141,6 +161,7 @@ Regenerate after UI changes:
 | Capture Area | Drag-selection overlay |
 | Capture Window | X11 window pick (on Wayland prefer Area/Scroll) |
 | Scroll | Auto-scroll + stitch long content |
+| Capture Video | Select region and record (X11, requires `ffmpeg`) |
 | Color picker | Sample screen color → clipboard |
 | Open Editor | Editor host / blank canvas |
 
@@ -150,12 +171,19 @@ Regenerate after UI changes:
 2. Snappix finds the scrollbar, scrolls from top to bottom, and stitches frames.
 3. The result opens in the editor. Press **Esc** during window pick to cancel.
 
+### Video recording
+
+1. Click **Capture Video** and drag a region.
+2. Use tray menu or `Ctrl+Shift+P` / `Ctrl+Shift+R` to pause or stop.
+3. Drag the blinking border during recording to move the capture area without changing its size.
+4. The recording opens in a video editor tab; draw time-ranged annotations on the timeline.
+
 ### Editor tools (overview)
 
 | Tool | Notes |
 |------|--------|
 | Brush / Eraser | Soft stamps; **Width** + **Hard** in the tool menu |
-| Line / Arrow / Rect / Ellipse | **Width** + **Style** (solid/dash/dot/dash-dot) in the tool menu |
+| Line / Arrow / Rect / Ellipse | **Width** + **Style** (solid/dash/dot/dash-dot) |
 | Text | Typography in the Text tool menu |
 | Blur | Pixel-block size in the Blur tool menu |
 | Magic Wand / selections | Tolerance and erase mode in tool menus |
@@ -166,11 +194,13 @@ Regenerate after UI changes:
 
 **View → Settings** (editor) or tray **Settings**:
 
-- Global hotkeys on/off and bindings
+- Global hotkeys on/off and bindings (capture + recording)
 - Action after capture (editor / clipboard / save)
 - Capture save folder (default `~/Downloads/snappix/`)
+- **Workspace folder** for unsaved tabs (default `~/.snappix/`)
 - Editor keyboard shortcut overrides
 - Auto-crop unused canvas margins
+- Behavior when the last editor tab closes
 
 ---
 
@@ -227,6 +257,7 @@ python3 run.py open --project ./example.sfp
 | `Ctrl+Shift++` / `Ctrl+Shift+-` | Grow / shrink selection |
 | `Enter` | Apply crop |
 | `Esc` | Cancel crop / overlay |
+| `Del` | Delete selected objects (image + video editors) |
 
 ### Global (default)
 
@@ -235,24 +266,51 @@ python3 run.py open --project ./example.sfp
 | `Ctrl+Shift+A` | Capture area |
 | `Ctrl+Shift+W` | Capture window |
 | `Ctrl+Shift+F` | Capture fullscreen |
+| `Ctrl+Shift+V` | Start video capture |
+| `Ctrl+Shift+P` | Pause / resume recording |
+| `Ctrl+Shift+R` | Stop recording |
 
 ---
 
-## Project Format
+## Project Formats
 
-Projects are ZIP-based `*.sfp` files:
+### Image projects (`.sfp`)
+
+ZIP-based projects:
 
 - `manifest.json` — metadata and annotations
 - `assets/screenshot.png` — base image
 - optional `assets/image-*.png` — pasted images
 
-Payload fields include `stroke_style`, `text_style`, `z_index`, `step_number`, transforms.  
-Details: [Technical Documentation → Annotation Model](docs/TECHNICAL.md#annotation-model).
+### Video projects (`.sfpv`)
 
-User config: `~/.config/snappix/config.json`  
+ZIP-based projects:
+
+- `manifest.json` — annotation timeline and metadata
+- `assets/source.mp4` — embedded source video (stored uncompressed)
+
+Details: [Technical Documentation → Storage](docs/TECHNICAL.md#project-storage-sfp).
+
+### Configuration and workspace
+
+| Path | Purpose |
+|------|---------|
+| `~/.config/snappix/config.json` | User settings (hotkeys, theme, folders, tool defaults) |
+| `~/.config/snappix/install-manifest.json` | Packages/files installed by Snappix (for uninstall) |
+| `~/.snappix/` | Default workspace for unsaved tabs (configurable) |
+
+Workspace layout:
+
+```text
+~/.snappix/
+  session.json
+  tabs/tab-<uuid>.sfp
+  tabs/tab-<uuid>.sfpv
+  video-sources/
+  video-assets/
+```
+
 Schema: [Technical Documentation → Configuration](docs/TECHNICAL.md#configuration).
-
-Multi-tab recovery lives under `/tmp/snappix-session/` (auto-save every 30 s).
 
 ---
 

@@ -19,7 +19,7 @@ ROW_SPACING = 4
 EDGE_HIT_PX = 6
 MIN_ANNOTATION_DURATION_MS = 100
 MIN_VIEW_DURATION_MS = 500
-DEFAULT_VISIBLE_PAGES = 5
+DEFAULT_PAGE_DURATION_MS = 20_000
 ZOOM_WHEEL_FACTOR = 1.15
 CTRL_NAV_THRESHOLD_PX = 48
 
@@ -192,16 +192,18 @@ class TimelineWidget(QWidget):
 
     def _default_page_duration_ms(self) -> int:
         """
-        Returns the default visible page duration for one loaded video.
+        Returns the default visible time range when a video is loaded.
+
+        Short clips (20 seconds or less) use the full duration. Longer videos
+        start on a fixed 20-second page so a 100-second clip spans five pages.
 
         Returns:
-            int: Page duration in milliseconds.
+            int: Visible duration in milliseconds.
         """
 
-        if self._duration_ms <= MIN_VIEW_DURATION_MS:
+        if self._duration_ms <= DEFAULT_PAGE_DURATION_MS:
             return self._duration_ms
-        page_ms = max(MIN_VIEW_DURATION_MS, self._duration_ms // DEFAULT_VISIBLE_PAGES)
-        return min(self._duration_ms, page_ms)
+        return DEFAULT_PAGE_DURATION_MS
 
     def _resize_for_row_count(self) -> None:
         """

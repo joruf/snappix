@@ -41,34 +41,41 @@ class TestCollectEditorSessionTabsMixedTabs(unittest.TestCase):
 
         from run import AppController
 
-        controller = object.__new__(AppController)
-        controller.editor_tabs = QTabWidget()
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            image_path = tmp_root / "tab-image.sfp"
+            video_path = tmp_root / "tab-video.sfpv"
+            image_path.write_bytes(b"image")
+            video_path.write_bytes(b"video")
 
-        image_editor = QWidget()
-        image_editor.flush_recovery_snapshot = MagicMock()
-        image_editor.recovery_path = MagicMock(return_value="/tmp/snappix-session/tab-image.sfp")
-        image_editor.set_recovery_path = MagicMock()
-        image_editor._current_project_path = ""
-        controller.editor_tabs.addTab(image_editor, "Screenshot 1")
+            controller = object.__new__(AppController)
+            controller.editor_tabs = QTabWidget()
 
-        video_editor = QWidget()
-        video_editor.flush_recovery_snapshot = MagicMock()
-        video_editor.recovery_path = MagicMock(return_value="/tmp/snappix-session/tab-video.sfpv")
-        video_editor.set_recovery_path = MagicMock()
-        video_editor._current_project_path = ""
-        controller.editor_tabs.addTab(video_editor, "Recording 1")
+            image_editor = QWidget()
+            image_editor.flush_recovery_snapshot = MagicMock()
+            image_editor.recovery_path = MagicMock(return_value=str(image_path))
+            image_editor.set_recovery_path = MagicMock()
+            image_editor._current_project_path = ""
+            controller.editor_tabs.addTab(image_editor, "Screenshot 1")
 
-        controller.video_editors = [video_editor]
-        controller.editors = [image_editor]
+            video_editor = QWidget()
+            video_editor.flush_recovery_snapshot = MagicMock()
+            video_editor.recovery_path = MagicMock(return_value=str(video_path))
+            video_editor.set_recovery_path = MagicMock()
+            video_editor._current_project_path = ""
+            controller.editor_tabs.addTab(video_editor, "Recording 1")
 
-        with patch("src.session_recovery.ensure_tab_recovery_path", side_effect=lambda path: path):
-            tabs = controller._collect_editor_session_tabs()
+            controller.video_editors = [video_editor]
+            controller.editors = [image_editor]
 
-        image_editor.flush_recovery_snapshot.assert_called_once()
-        video_editor.flush_recovery_snapshot.assert_called_once()
-        self.assertEqual(len(tabs), 2)
-        self.assertEqual(tabs[0].kind, "image")
-        self.assertEqual(tabs[1].kind, "video")
+            with patch("src.session_recovery.ensure_tab_recovery_path", side_effect=lambda path: path):
+                tabs = controller._collect_editor_session_tabs()
+
+            image_editor.flush_recovery_snapshot.assert_called_once()
+            video_editor.flush_recovery_snapshot.assert_called_once()
+            self.assertEqual(len(tabs), 2)
+            self.assertEqual(tabs[0].kind, "image")
+            self.assertEqual(tabs[1].kind, "video")
 
     def test_collect_persists_video_tab_when_recovery_file_is_written(self) -> None:
         """

@@ -156,6 +156,36 @@ def default_capture_save_directory() -> str:
     return str(Path.home() / "Downloads" / "snappix")
 
 
+def default_workspace_directory() -> str:
+    """
+    Returns the default workspace folder for unsaved editor session data.
+
+    Returns:
+        str: Absolute path under the user home directory.
+    """
+
+    return str(Path.home() / ".snappix")
+
+
+def resolve_workspace_directory(raw: str = "") -> Path:
+    """
+    Resolves the configured workspace directory path.
+
+    Args:
+        raw: Optional configured workspace path.
+
+    Returns:
+        Path: Absolute workspace directory path.
+    """
+
+    candidate = raw.strip() or default_workspace_directory()
+    path = Path(candidate).expanduser()
+    try:
+        return path.resolve()
+    except OSError:
+        return path
+
+
 def normalize_stroke_width(value: Any, *, fallback: int = 6, minimum: int | None = None) -> int:
     """
     Clamps one stroke/brush width to the supported slider range.
@@ -484,6 +514,7 @@ class AppConfig:
         hotkey_recording_stop: Hotkey to stop an active recording.
         post_capture_action: Action after a successful capture.
         capture_save_directory: Optional folder for automatic capture saves.
+        workspace_directory: Folder for unsaved editor tabs and session recovery data.
         editor_last_tab_behavior: Behavior when the last editor tab is closed.
         export_preset: Preferred export quality preset.
         export_scale: Preferred export scale factor (1.0, 2.0, or 3.0).
@@ -510,6 +541,7 @@ class AppConfig:
     hotkey_recording_stop: str = DEFAULT_HOTKEY_RECORDING_STOP
     post_capture_action: str = DEFAULT_POST_CAPTURE_ACTION
     capture_save_directory: str = ""
+    workspace_directory: str = ""
     editor_last_tab_behavior: str = DEFAULT_EDITOR_LAST_TAB_BEHAVIOR
     export_preset: str = DEFAULT_EXPORT_PRESET
     export_scale: float = DEFAULT_EXPORT_SCALE
@@ -619,6 +651,7 @@ class ConfigManager:
                 str(payload.get("post_capture_action", DEFAULT_POST_CAPTURE_ACTION))
             ),
             capture_save_directory=str(payload.get("capture_save_directory", "")).strip(),
+            workspace_directory=str(payload.get("workspace_directory", "")).strip(),
             editor_last_tab_behavior=normalize_editor_last_tab_behavior(
                 str(
                     payload.get(
@@ -700,6 +733,7 @@ class ConfigManager:
             "hotkey_recording_stop": normalize_hotkey_spec(config.hotkey_recording_stop),
             "post_capture_action": normalize_post_capture_action(config.post_capture_action),
             "capture_save_directory": config.capture_save_directory.strip(),
+            "workspace_directory": config.workspace_directory.strip(),
             "editor_last_tab_behavior": normalize_editor_last_tab_behavior(
                 config.editor_last_tab_behavior
             ),

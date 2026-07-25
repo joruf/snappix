@@ -71,6 +71,7 @@ class VideoEditorWindow(QMainWindow):
         self._recovery_path = ""
         self._cached_duration_ms = 0
         self._session_video_source_path = ""
+        self._recovery_dirty = False
         self._autosave_flushing = False
         self._is_playing = False
         self._annotations: list[VideoAnnotationModel] = []
@@ -380,6 +381,28 @@ class VideoEditorWindow(QMainWindow):
         if duration_ms > 0:
             self._cached_duration_ms = duration_ms
             self.flush_recovery_snapshot()
+            self._recovery_dirty = False
+
+    def mark_recovery_dirty(self) -> None:
+        """
+        Marks the tab as having unsaved recovery changes for periodic auto-save.
+
+        Returns:
+            None
+        """
+
+        self._recovery_dirty = True
+
+    def flush_initial_recovery_snapshot(self) -> None:
+        """
+        Writes the first recovery snapshot immediately after tab creation.
+
+        Returns:
+            None
+        """
+
+        self.flush_recovery_snapshot(force=True)
+        self._recovery_dirty = False
 
     def prepare_recovery_assets(self) -> None:
         """
@@ -589,7 +612,10 @@ class VideoEditorWindow(QMainWindow):
             super().timerEvent(event)
             return
 
+        if not self._recovery_dirty:
+            return
         self.flush_recovery_snapshot()
+        self._recovery_dirty = False
 
     def _on_position_changed(self, position_ms: int) -> None:
         """
@@ -649,7 +675,7 @@ class VideoEditorWindow(QMainWindow):
         """
 
         self.content_changed.emit()
-        self.flush_recovery_snapshot()
+        self.mark_recovery_dirty()
 
     def has_annotations(self) -> bool:
         """

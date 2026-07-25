@@ -586,6 +586,7 @@ class AppController:
             Path.home() / ".config" / "autostart" / "snappix.desktop"
         )
         self.config: AppConfig = self.config_manager.load()
+        self._apply_workspace_directory()
         if self.autostart_manager.is_enabled():
             self.config.autostart_enabled = True
             try:
@@ -1068,8 +1069,52 @@ class AppController:
             editor._current_project_path = source_path
         self._show_editor_host()
         if persist_session:
-            self._save_editor_session()
+            self._initialize_tab_recovery(editor)
         return editor
+
+    def _initialize_tab_recovery(self, editor, *, persist_session: bool = True) -> None:
+        """
+        Writes an immediate recovery snapshot for a new or restored editor tab.
+
+        Args:
+            editor: Editor tab widget.
+            persist_session: When True, update the workspace session manifest.
+
+        Returns:
+            None
+        """
+
+        from PySide6.QtCore import QTimer
+        from src.video_editor_window import VideoEditorWindow
+
+        def complete_initial_recovery() -> None:
+            try:
+                if hasattr(editor, "flush_initial_recovery_snapshot"):
+                    editor.flush_initial_recovery_snapshot()
+                else:
+                    self._flush_editor_tab_recovery(editor)
+            except RuntimeError:
+                return
+            if persist_session:
+                self._save_editor_session()
+
+        QTimer.singleShot(0, complete_initial_recovery)
+
+        if isinstance(editor, VideoEditorWindow) and not getattr(editor, "_recovery_duration_hooked", False):
+            editor._recovery_duration_hooked = True
+
+            def on_duration_changed(_duration_ms: int) -> None:
+                try:
+                    self._flush_editor_tab_recovery(editor)
+                    if persist_session:
+                        self._save_editor_session()
+                except RuntimeError:
+                    return
+
+            editor.canvas.duration_changed.connect(on_duration_changed)
+
+        if isinstance(editor, VideoEditorWindow):
+            QTimer.singleShot(1500, complete_initial_recovery)
 
     def _on_video_editor_closed(self, editor) -> None:
         """
@@ -1111,6 +1156,7 @@ class AppController:
 
         self.config = dialog.build_config()
         self.config_manager.save(self.config)
+        self._apply_workspace_directory()
         self._apply_hotkeys()
         self._install_host_editor_shortcuts()
         for editor in list(self.editors):
@@ -1128,6 +1174,19 @@ class AppController:
                 self.config.tool_stroke_styles,
                 emit_signal=False,
             )
+
+    def _apply_workspace_directory(self) -> None:
+        """
+        Applies the configured workspace directory for session recovery storage.
+
+        Returns:
+            None
+        """
+
+        from src.config import resolve_workspace_directory
+        from src.session_recovery import set_workspace_root
+
+        set_workspace_root(resolve_workspace_directory(self.config.workspace_directory))
 
     def _capture_save_directory(self) -> Path:
         """
@@ -1656,7 +1715,7 @@ class AppController:
             editor._update_window_title()
         self._show_editor_host()
         if persist_session:
-            self._save_editor_session()
+            self._initialize_tab_recovery(editor)
         return editor
 
     def _flush_editor_tab_recovery(self, editor) -> None:
@@ -1712,13 +1771,12 @@ class AppController:
                 continue
             if not recovery_path:
                 continue
-            if isinstance(editor, VideoEditorWindow):
-                recovery_file = Path(recovery_path)
-                try:
-                    if not recovery_file.is_file() or recovery_file.stat().st_size <= 0:
-                        continue
-                except OSError:
+            recovery_file = Path(recovery_path)
+            try:
+                if not recovery_file.is_file() or recovery_file.stat().st_size <= 0:
                     continue
+            except OSError:
+                continue
             tabs.append(
                 EditorSessionTab(
                     title=title,
@@ -1773,10 +1831,12 @@ class AppController:
         for tab_entry in session_tabs:
             if tab_entry.kind == "video":
                 try:
-                    extract_root = Path(tab_entry.recovery_path).parent / "video-assets"
+                    from src.session_recovery import video_assets_dir
+
+                    extract_root = video_assets_dir() / Path(tab_entry.recovery_path).stem
                     project_model, video_path = load_video_project(
                         tab_entry.recovery_path,
-                        extract_root / Path(tab_entry.recovery_path).stem,
+                        extract_root,
                     )
                 except Exception as exc:
                     self._QMessageBox.warning(
@@ -1796,6 +1856,7 @@ class AppController:
                     persist_session=False,
                 )
                 editor.load_video_project_model(project_model, tab_entry.source_path)
+                editor.flush_initial_recovery_snapshot()
                 restored_count += 1
                 continue
 
@@ -1818,6 +1879,7 @@ class AppController:
                 persist_session=False,
             )
             editor.load_project_model(recovered_model, tab_entry.source_path)
+            editor.flush_initial_recovery_snapshot()
             restored_count += 1
 
         if restored_count == 0:
@@ -2230,13 +2292,27 @@ class AppController:
                     return
             except RuntimeError:
                 return
+            try:
+                recovery_path = tab_widget.recovery_path()
+            except (RuntimeError, AttributeError):
+                recovery_path = ""
+            if recovery_path:
+                from src.session_recovery import delete_tab_recovery_data
+
+                delete_tab_recovery_data(recovery_path)
         self.editor_tabs.removeTab(index)
         if tab_widget in self.editors:
             self.editors.remove(tab_widget)
         if tab_widget in self.video_editors:
             self.video_editors.remove(tab_widget)
         tab_widget.deleteLater()
-        self._save_editor_session()
+        if not self._is_quitting:
+            from src.session_recovery import clear_editor_session
+
+            if self.editor_tabs.count() == 0:
+                clear_editor_session()
+            else:
+                self._save_editor_session()
         self._handle_empty_editor_tabs()
 
     def _close_current_editor_tab(self) -> None:

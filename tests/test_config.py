@@ -206,3 +206,18 @@ class TestConfigManager(unittest.TestCase):
         )
         self.assertEqual(config.batch_export_profile_key, "alpha")
 
+    def test_workspace_directory_is_persisted(self) -> None:
+        """
+        Ensures the workspace directory setting survives save/load.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config_path = Path(tmp_dir) / "config.json"
+            manager = ConfigManager(config_path)
+            manager.save(AppConfig(workspace_directory="/tmp/snappix-workspace"))
+            loaded = manager.load()
+            self.assertEqual(loaded.workspace_directory, "/tmp/snappix-workspace")
+
+
+if __name__ == "__main__":
+    unittest.main()

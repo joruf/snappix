@@ -557,6 +557,7 @@ class EditorWindow(QMainWindow):
         self._push_history_state()
         self._refresh_layer_panel()
         self._autosave_flushing = False
+        self._recovery_dirty = False
         self._autosave_timer = self.startTimer(30_000)
 
     def _build_toolbar(self) -> QWidget:
@@ -3933,6 +3934,7 @@ class EditorWindow(QMainWindow):
         self._refresh_layer_panel()
         self._apply_one_shot_tool_completion(action_label)
         self._show_canvas_action_notification(action_label)
+        self.mark_recovery_dirty()
 
     def _on_canvas_status_message(self, message: str) -> None:
         """
@@ -6275,7 +6277,31 @@ class EditorWindow(QMainWindow):
             super().timerEvent(event)
             return
 
+        if not self._recovery_dirty:
+            return
         self.flush_recovery_snapshot()
+        self._recovery_dirty = False
+
+    def mark_recovery_dirty(self) -> None:
+        """
+        Marks the tab as having unsaved recovery changes for periodic auto-save.
+
+        Returns:
+            None
+        """
+
+        self._recovery_dirty = True
+
+    def flush_initial_recovery_snapshot(self) -> None:
+        """
+        Writes the first recovery snapshot immediately after tab creation.
+
+        Returns:
+            None
+        """
+
+        self.flush_recovery_snapshot()
+        self._recovery_dirty = False
 
     def flush_recovery_snapshot(self) -> None:
         """

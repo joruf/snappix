@@ -12,7 +12,7 @@ try:
 
     from src.timeline_widget import (
         CTRL_NAV_THRESHOLD_PX,
-        DEFAULT_VISIBLE_PAGES,
+        DEFAULT_PAGE_DURATION_MS,
         EDGE_HIT_PX,
         LABEL_WIDTH,
         RULER_HEIGHT,
@@ -87,6 +87,23 @@ def _mouse_event(
         buttons,
         modifiers,
     )
+
+
+def _set_view_page(widget: TimelineWidget, page_ms: int) -> None:
+    """
+    Narrows the visible timeline range for paging/zoom interaction tests.
+
+    Args:
+        widget: Timeline under test.
+        page_ms: Visible duration in milliseconds.
+
+    Returns:
+        None
+    """
+
+    widget._view_start_ms = 0  # pylint: disable=protected-access
+    widget._view_duration_ms = page_ms  # pylint: disable=protected-access
+    widget._clamp_view()  # pylint: disable=protected-access
 
 
 def _show_full_timeline(widget: TimelineWidget) -> None:
@@ -302,24 +319,39 @@ class TestTimelineWidgetNavigation(unittest.TestCase):
         self.assertEqual(track.width(), 900 - LABEL_WIDTH)
         self.assertEqual(track.x(), LABEL_WIDTH)
 
-    def test_default_view_shows_one_page_of_duration(self) -> None:
+    def test_default_view_shows_full_duration_for_short_clips(self) -> None:
         """
-        Ensures a 100s video initially shows one fifth of its duration.
+        Ensures clips of 20 seconds or less fill the timeline width.
         """
 
-        widget = self._make_widget()
+        widget = TimelineWidget()
+        widget.resize(660, RULER_HEIGHT + 60)
+        widget.set_duration(5000)
         self.assertEqual(widget._view_start_ms, 0)  # pylint: disable=protected-access
-        self.assertEqual(
-            widget._view_duration_ms,  # pylint: disable=protected-access
-            10000 // DEFAULT_VISIBLE_PAGES,
-        )
+        self.assertEqual(widget._view_duration_ms, 5000)  # pylint: disable=protected-access
+
+        widget.set_duration(10000)
+        self.assertEqual(widget._view_duration_ms, 10000)  # pylint: disable=protected-access
+
+    def test_default_view_shows_twenty_second_page_for_long_clips(self) -> None:
+        """
+        Ensures longer clips start on a 20-second page (100s -> five pages).
+        """
+
+        widget = TimelineWidget()
+        widget.resize(660, RULER_HEIGHT + 60)
+        widget.set_duration(100_000)
+        self.assertEqual(widget._view_start_ms, 0)  # pylint: disable=protected-access
+        self.assertEqual(widget._view_duration_ms, DEFAULT_PAGE_DURATION_MS)  # pylint: disable=protected-access
+        self.assertTrue(widget.can_pan_right())
 
     def test_pan_buttons_jump_full_pages(self) -> None:
         """
-        Ensures arrow buttons jump from 0-20s to 20-40s and back.
+        Ensures arrow buttons jump by one visible page at a time.
         """
 
         widget = self._make_widget()
+        _set_view_page(widget, 2000)
         page_ms = widget._view_duration_ms  # pylint: disable=protected-access
         widget.pan_right()
         self.assertEqual(widget._view_start_ms, page_ms)  # pylint: disable=protected-access
@@ -344,6 +376,7 @@ class TestTimelineWidgetNavigation(unittest.TestCase):
         """
 
         widget = self._make_widget()
+        _set_view_page(widget, 2000)
         widget.wheelEvent(self._wheel_event(410.0, 10.0, 120, ctrl=True))
         seeks: list[int] = []
         widget.seek_requested.connect(seeks.append)
@@ -360,6 +393,7 @@ class TestTimelineWidgetNavigation(unittest.TestCase):
         """
 
         widget = self._make_widget()
+        _set_view_page(widget, 2000)
         page_ms = widget._view_duration_ms  # pylint: disable=protected-access
         start_x = 300.0
         widget.mousePressEvent(

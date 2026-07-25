@@ -32,6 +32,7 @@ from src.config import (
     POST_CAPTURE_ACTIONS,
     AppConfig,
     default_capture_save_directory,
+    default_workspace_directory,
     normalize_editor_last_tab_behavior,
     normalize_hotkey_spec,
     normalize_post_capture_action,
@@ -190,6 +191,22 @@ class SettingsDialog(QDialog):
         save_directory_row.addWidget(self.save_directory_edit, 1)
         save_directory_row.addWidget(browse_button)
         form.addRow("Save folder:", save_directory_row)
+
+        workspace_directory_row = QHBoxLayout()
+        initial_workspace_directory = (
+            config.workspace_directory.strip() or default_workspace_directory()
+        )
+        self.workspace_directory_edit = QLineEdit(initial_workspace_directory)
+        self.workspace_directory_edit.setPlaceholderText(default_workspace_directory())
+        self.workspace_directory_edit.setToolTip(
+            "Unsaved image and video tabs, annotations, and session recovery data "
+            "are stored here while Snappix is closed."
+        )
+        workspace_browse_button = QPushButton("Browse...")
+        workspace_browse_button.clicked.connect(self._browse_workspace_directory)
+        workspace_directory_row.addWidget(self.workspace_directory_edit, 1)
+        workspace_directory_row.addWidget(workspace_browse_button)
+        form.addRow("Workspace folder:", workspace_directory_row)
 
         layout.addLayout(form)
         layout.addStretch(1)
@@ -352,6 +369,7 @@ class SettingsDialog(QDialog):
                 str(self.post_capture_combo.currentData())
             ),
             capture_save_directory=self.save_directory_edit.text().strip(),
+            workspace_directory=self.workspace_directory_edit.text().strip(),
             editor_last_tab_behavior=normalize_editor_last_tab_behavior(
                 str(self.editor_last_tab_combo.currentData())
             ),
@@ -387,6 +405,24 @@ class SettingsDialog(QDialog):
         )
         if selected:
             self.save_directory_edit.setText(selected)
+
+    def _browse_workspace_directory(self) -> None:
+        """
+        Opens a folder picker for the editor workspace directory.
+
+        Returns:
+            None
+        """
+
+        current_path = self.workspace_directory_edit.text().strip()
+        start_dir = current_path if current_path else default_workspace_directory()
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "Select Workspace Folder",
+            start_dir,
+        )
+        if selected:
+            self.workspace_directory_edit.setText(selected)
 
     def _accept_settings(self) -> None:
         """

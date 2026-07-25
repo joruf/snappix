@@ -14,6 +14,8 @@ from uuid import uuid4
 
 from src.constants import APP_FILE_EXTENSION, VIDEO_PROJECT_FILE_EXTENSION
 
+_WORKSPACE_ROOT: Path | None = None
+
 
 @dataclass(slots=True)
 class EditorSessionTab:
@@ -33,6 +35,55 @@ class EditorSessionTab:
     kind: str = "image"
 
 
+def reset_workspace_root() -> None:
+    """
+    Clears the cached workspace root so the next lookup uses defaults again.
+
+    Returns:
+        None
+    """
+
+    global _WORKSPACE_ROOT
+    _WORKSPACE_ROOT = None
+
+
+def set_workspace_root(path: str | Path) -> Path:
+    """
+    Sets the workspace directory used for unsaved editor session data.
+
+    Args:
+        path: Workspace root directory.
+
+    Returns:
+        Path: Resolved workspace root.
+    """
+
+    global _WORKSPACE_ROOT
+    resolved = Path(path).expanduser()
+    try:
+        resolved = resolved.resolve()
+    except OSError:
+        resolved = Path(path).expanduser()
+    _WORKSPACE_ROOT = resolved
+    _migrate_legacy_workspace_if_needed()
+    return resolved
+
+
+def workspace_root() -> Path:
+    """
+    Returns the active workspace directory.
+
+    Returns:
+        Path: Workspace root, defaulting to ``~/.snappix``.
+    """
+
+    if _WORKSPACE_ROOT is not None:
+        return _WORKSPACE_ROOT
+    from src.config import default_workspace_directory
+
+    return set_workspace_root(default_workspace_directory())
+
+
 def _session_root_dir() -> Path:
     """
     Returns the directory used for multi-tab recovery snapshots.
@@ -41,7 +92,20 @@ def _session_root_dir() -> Path:
         Path: Session recovery directory.
     """
 
-    return Path(tempfile.gettempdir()) / "snappix-session"
+    return workspace_root()
+
+
+def tabs_dir() -> Path:
+    """
+    Returns the directory used for per-tab recovery project files.
+
+    Returns:
+        Path: Writable tabs directory inside the workspace.
+    """
+
+    path = _session_root_dir() / "tabs"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def session_video_sources_dir() -> Path:
@@ -52,7 +116,22 @@ def session_video_sources_dir() -> Path:
         Path: Writable directory for session video sources.
     """
 
-    return _session_root_dir() / "video-sources"
+    path = _session_root_dir() / "video-sources"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def video_assets_dir() -> Path:
+    """
+    Returns the directory used for extracted video assets during restore.
+
+    Returns:
+        Path: Writable directory for extracted session videos.
+    """
+
+    path = _session_root_dir() / "video-assets"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def session_manifest_path() -> Path:
@@ -74,6 +153,9 @@ def legacy_recovery_snapshot_path() -> Path:
         Path: Legacy recovery snapshot path.
     """
 
+    legacy_in_workspace = _session_root_dir() / f"legacy-autosave{APP_FILE_EXTENSION}"
+    if legacy_in_workspace.is_file():
+        return legacy_in_workspace
     return Path(tempfile.gettempdir()) / f"snappix-autosave{APP_FILE_EXTENSION}"
 
 
@@ -85,9 +167,7 @@ def create_tab_recovery_path() -> str:
         str: Writable recovery project file path.
     """
 
-    session_dir = _session_root_dir()
-    session_dir.mkdir(parents=True, exist_ok=True)
-    return str(session_dir / f"tab-{uuid4().hex}{APP_FILE_EXTENSION}")
+    return str(tabs_dir() / f"tab-{uuid4().hex}{APP_FILE_EXTENSION}")
 
 
 def create_video_tab_recovery_path() -> str:
@@ -98,9 +178,7 @@ def create_video_tab_recovery_path() -> str:
         str: Writable recovery video project file path.
     """
 
-    session_dir = _session_root_dir()
-    session_dir.mkdir(parents=True, exist_ok=True)
-    return str(session_dir / f"tab-{uuid4().hex}{VIDEO_PROJECT_FILE_EXTENSION}")
+    return str(tabs_dir() / f"tab-{uuid4().hex}{VIDEO_PROJECT_FILE_EXTENSION}")
 
 
 def tab_kind_from_recovery_path(recovery_path: str) -> str:
@@ -119,12 +197,43 @@ def tab_kind_from_recovery_path(recovery_path: str) -> str:
     return "image"
 
 
+def _recovery_path_is_managed(existing_path: str) -> bool:
+    """
+    Indicates whether one recovery path lives inside the active workspace.
+
+    Args:
+        existing_path: Recovery project file path.
+
+    Returns:
+        bool: True when the path belongs to the current workspace layout.
+    """
+
+    if not existing_path.strip():
+        return False
+    target = Path(existing_path).expanduser()
+    try:
+        target = target.resolve()
+    except OSError:
+        target = Path(existing_path).expanduser()
+    root = _session_root_dir()
+    tabs_root = tabs_dir()
+    try:
+        if target.is_relative_to(tabs_root):
+            return True
+    except ValueError:
+        pass
+    try:
+        return target.is_relative_to(root)
+    except ValueError:
+        return False
+
+
 def ensure_tab_recovery_path(existing_path: str) -> str:
     """
     Ensures one tab recovery path remains writable.
 
     Reuses the existing path when possible and allocates a new path when the
-    session directory was removed from the temporary folder.
+    workspace directory changed or the file was removed.
 
     Args:
         existing_path: Current recovery project path for one editor tab.
@@ -145,9 +254,47 @@ def ensure_tab_recovery_path(existing_path: str) -> str:
     except OSError:
         return recreate()
 
-    if target.parent != _session_root_dir():
+    if not _recovery_path_is_managed(normalized):
         return recreate()
     return str(target)
+
+
+def delete_tab_recovery_data(recovery_path: str) -> None:
+    """
+    Removes one tab's workspace recovery files.
+
+    Args:
+        recovery_path: Recovery project file path for the closed tab.
+
+    Returns:
+        None
+    """
+
+    normalized = recovery_path.strip()
+    if not normalized:
+        return
+
+    project_path = Path(normalized).expanduser()
+    stem = project_path.stem
+    try:
+        if project_path.is_file() or project_path.is_symlink():
+            project_path.unlink()
+    except OSError:
+        pass
+
+    video_source = session_video_sources_dir() / f"{stem}.mp4"
+    try:
+        if video_source.is_file() or video_source.is_symlink():
+            video_source.unlink()
+    except OSError:
+        pass
+
+    extract_dir = video_assets_dir() / stem
+    try:
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir, ignore_errors=True)
+    except OSError:
+        pass
 
 
 def has_editor_session() -> bool:
@@ -299,16 +446,57 @@ def clear_editor_session() -> None:
         None
     """
 
-    session_dir = _session_root_dir()
+    manifest = session_manifest_path()
     try:
-        if session_dir.exists():
-            shutil.rmtree(session_dir, ignore_errors=True)
+        if manifest.is_file():
+            manifest.unlink()
     except OSError:
         pass
 
-    legacy_path = legacy_recovery_snapshot_path()
+    for directory in (tabs_dir(), session_video_sources_dir(), video_assets_dir()):
+        try:
+            if directory.exists():
+                shutil.rmtree(directory, ignore_errors=True)
+        except OSError:
+            pass
+
+    for legacy_candidate in (
+        _session_root_dir() / f"legacy-autosave{APP_FILE_EXTENSION}",
+        Path(tempfile.gettempdir()) / f"snappix-autosave{APP_FILE_EXTENSION}",
+    ):
+        try:
+            if legacy_candidate.is_file():
+                legacy_candidate.unlink()
+        except OSError:
+            pass
+
+
+def _migrate_legacy_workspace_if_needed() -> None:
+    """
+    Moves editor session data from the old temporary directory into the workspace.
+
+    Returns:
+        None
+    """
+
+    if session_manifest_path().is_file():
+        return
+
+    legacy_dir = Path(tempfile.gettempdir()) / "snappix-session"
+    if not legacy_dir.is_dir():
+        return
+
+    root = _session_root_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    for item in legacy_dir.iterdir():
+        target = root / item.name
+        if target.exists():
+            continue
+        try:
+            shutil.move(str(item), str(target))
+        except OSError:
+            continue
     try:
-        if legacy_path.exists():
-            legacy_path.unlink()
+        legacy_dir.rmdir()
     except OSError:
         pass
