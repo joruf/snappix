@@ -20,6 +20,7 @@ jobs:
         os:
           - ubuntu-22.04
           - ubuntu-24.04
+          - windows-latest
         python-version:
           - "3.11"
           - "3.12"
@@ -28,7 +29,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -48,11 +50,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run compatibility-matrix tests
+      - name: Run cross-platform contract tests
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -m unittest tests.test_os_compatibility_matrix tests.test_platform -v
+          python -m unittest tests.test_cross_platform_contract tests.test_paths tests.test_os_compatibility_matrix tests.test_win32_window tests.test_video_recorder -v
 
       - name: Run full test suite
         env:

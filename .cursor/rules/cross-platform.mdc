@@ -1,0 +1,27 @@
+---
+description: Keep Snappix working on both Linux and Windows when changing code
+alwaysApply: true
+---
+
+# Cross-platform (Linux + Windows)
+
+Snappix must keep working on **Linux** and **Windows**. macOS is out of scope.
+
+## Rules
+
+- Put OS path/capability logic in `src/paths.py` (or a dedicated backend module). Do not hardcode `~/.config`, `/tmp`, or `.venv/bin` in shared app code.
+- New capture, install, autostart, or video features need a Linux branch **and** a Windows branch, or an explicit unsupported UX on the missing OS.
+- Prefer mocks so Linux CI can verify Windows contracts and Windows CI can verify Linux contracts (`tests/test_cross_platform_contract.py`).
+- Keep `win32_window.py` import-safe on Linux (`is_win32_available()` false; no crash on import).
+- Do not assume CI is Linux-only: `current_os_family()` may be `linux` or `windows`.
+
+## Verification after relevant changes
+
+Run:
+
+```bash
+./scripts/check_cross_platform.sh
+# or on Windows: scripts\check_cross_platform.bat
+```
+
+That runs the cross-platform contract tests, then the full suite. Fix failures before treating the change as done.

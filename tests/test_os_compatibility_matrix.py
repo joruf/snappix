@@ -172,12 +172,12 @@ class TestOsCompatibilityMatrix(unittest.TestCase):
                         msg=f"{profile_name}/{feature_id}: {actual.note}",
                     )
 
-    def test_current_os_family_is_linux_on_ci(self) -> None:
+    def test_current_os_family_is_supported_on_ci(self) -> None:
         """
-        Ensures the runtime OS family helper reports Linux in this project CI.
+        Ensures the runtime OS family helper reports Linux or Windows in CI.
         """
 
-        self.assertEqual(current_os_family(), "linux")
+        self.assertIn(current_os_family(), {"linux", "windows"})
 
     def test_evaluate_capabilities_returns_all_features(self) -> None:
         """

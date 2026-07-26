@@ -392,10 +392,26 @@ Schema: [Technical Documentation → Configuration](docs/TECHNICAL.md#configurat
 ## Testing
 
 ```bash
+# Full suite (Linux)
 .venv/bin/python -m unittest discover -s tests -v
+
+# Full suite (Windows)
+.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-Platform compatibility (X11 vs Wayland, optional tools present/missing) is covered by mocked matrix tests in `tests/test_os_compatibility_matrix.py`.
+Before GitHub upload, run the cross-platform guard (contract tests + full suite):
+
+```bash
+# Linux
+./scripts/check_cross_platform.sh
+
+# Windows
+scripts\check_cross_platform.bat
+```
+
+CI runs the same contract tests and full suite on Ubuntu 22.04/24.04 and `windows-latest` (Python 3.11 and 3.12).
+
+Platform compatibility (X11 vs Wayland, optional tools present/missing) is covered by mocked matrix tests in `tests/test_os_compatibility_matrix.py`. The dual-OS API contract lives in `tests/test_cross_platform_contract.py`.
 
 ---
 
