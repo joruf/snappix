@@ -51,6 +51,8 @@ class TestConfigManager(unittest.TestCase):
             self.assertEqual(config.batch_export_profile_key, "docs_hq")
             self.assertEqual(config.batch_export_last_directory, "")
             self.assertTrue(config.auto_crop_on_shrink)
+            self.assertEqual(config.resize_handle_size, 10)
+            self.assertEqual(config.resize_handle_position, "center")
 
     def test_load_returns_defaults_for_invalid_json(self) -> None:
         """
@@ -128,6 +130,8 @@ class TestConfigManager(unittest.TestCase):
                     batch_export_profile_key="custom_profile",
                     batch_export_last_directory="/tmp/snappix-export",
                     auto_crop_on_shrink=False,
+                    resize_handle_size=14,
+                    resize_handle_position="outside",
                 )
             )
 
@@ -145,6 +149,8 @@ class TestConfigManager(unittest.TestCase):
             self.assertEqual(len(restored.batch_export_profiles), 1)
             self.assertEqual(restored.batch_export_profiles[0]["key"], "custom_profile")
             self.assertFalse(restored.auto_crop_on_shrink)
+            self.assertEqual(restored.resize_handle_size, 14)
+            self.assertEqual(restored.resize_handle_position, "outside")
 
     def test_normalize_hotkey_spec_lowercases_and_trims(self) -> None:
         """

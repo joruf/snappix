@@ -1088,6 +1088,7 @@ class AppController:
         self._show_editor_host()
         if persist_session:
             self._initialize_tab_recovery(editor)
+        self._apply_resize_handle_settings(editor)
         return editor
 
     def _initialize_tab_recovery(self, editor, *, persist_session: bool = True) -> None:
@@ -1179,6 +1180,7 @@ class AppController:
         self._install_host_editor_shortcuts()
         for editor in list(self.editors):
             editor.set_auto_crop_on_shrink(self.config.auto_crop_on_shrink)
+            self._apply_resize_handle_settings(editor)
             editor.apply_editor_shortcuts(self.config.editor_shortcuts)
             editor.apply_tool_stroke_widths(
                 self.config.tool_stroke_widths,
@@ -1192,6 +1194,26 @@ class AppController:
                 self.config.tool_stroke_styles,
                 emit_signal=False,
             )
+        for editor in list(self.video_editors):
+            self._apply_resize_handle_settings(editor)
+
+    def _apply_resize_handle_settings(self, editor) -> None:
+        """
+        Applies configured selection-overlay handle settings to one editor tab.
+
+        Args:
+            editor: Image or video editor tab widget.
+
+        Returns:
+            None
+        """
+
+        if not hasattr(editor, "set_resize_handle_style"):
+            return
+        editor.set_resize_handle_style(
+            size=self.config.resize_handle_size,
+            position=self.config.resize_handle_position,
+        )
 
     def _apply_workspace_directory(self) -> None:
         """
@@ -1677,6 +1699,7 @@ class AppController:
         editor.set_export_scale(self.config.export_scale)
         editor.set_export_keep_transparency(self.config.export_keep_transparency)
         editor.set_auto_crop_on_shrink(self.config.auto_crop_on_shrink)
+        self._apply_resize_handle_settings(editor)
         editor.apply_editor_shortcuts(self.config.editor_shortcuts)
         editor.apply_tool_stroke_widths(
             self.config.tool_stroke_widths,

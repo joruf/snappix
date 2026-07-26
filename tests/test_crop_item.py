@@ -101,3 +101,22 @@ class TestCropSelectionItem(unittest.TestCase):
         self.assertAlmostEqual(resized.width(), 260.0, delta=0.5)
         self.assertAlmostEqual(resized.height(), 160.0, delta=0.5)
 
+    def test_handle_style_changes_handle_size_and_position(self) -> None:
+        """
+        Ensures overlay handle style settings affect handle geometry.
+        """
+
+        item = CropSelectionItem(QRectF(0.0, 0.0, 100.0, 80.0))
+        item.set_handle_style(size=8, position="outside")
+        outside_top = item._handle_rects()["top"]  # pylint: disable=protected-access
+        self.assertAlmostEqual(outside_top.y(), -8.0)
+
+        item.set_handle_style(size=10, position="center")
+        center_top = item._handle_rects()["top"]  # pylint: disable=protected-access
+        self.assertAlmostEqual(center_top.y(), -5.0)
+
+        item.set_handle_style(size=12, position="inside")
+        inside_top = item._handle_rects()["top"]  # pylint: disable=protected-access
+        self.assertAlmostEqual(inside_top.y(), 0.0)
+        self.assertAlmostEqual(inside_top.width(), 12.0)
+

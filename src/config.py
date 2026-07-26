@@ -64,6 +64,52 @@ STYLE_AWARE_TOOLS = frozenset(DEFAULT_TOOL_STROKE_STYLES.keys())
 VALID_STROKE_STYLES = frozenset({"solid", "dash", "dot", "dash_dot"})
 DEFAULT_STROKE_STYLE = "solid"
 
+DEFAULT_RESIZE_HANDLE_SIZE = 10
+MIN_RESIZE_HANDLE_SIZE = 6
+MAX_RESIZE_HANDLE_SIZE = 24
+DEFAULT_RESIZE_HANDLE_POSITION = "center"
+RESIZE_HANDLE_POSITIONS: dict[str, str] = {
+    "center": "Centered on border",
+    "inside": "Inside selection",
+    "outside": "Outside selection",
+}
+
+
+def normalize_resize_handle_size(value: object) -> int:
+    """
+    Clamps one resize-handle size setting to the supported pixel range.
+
+    Args:
+        value: Raw configured handle size.
+
+    Returns:
+        int: Normalized handle size in pixels.
+    """
+
+    try:
+        parsed = int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        parsed = DEFAULT_RESIZE_HANDLE_SIZE
+    return max(MIN_RESIZE_HANDLE_SIZE, min(MAX_RESIZE_HANDLE_SIZE, parsed))
+
+
+def normalize_resize_handle_position(value: object) -> str:
+    """
+    Normalizes one resize-handle placement setting.
+
+    Args:
+        value: Raw configured handle placement key.
+
+    Returns:
+        str: One of ``center``, ``inside``, or ``outside``.
+    """
+
+    normalized = str(value or DEFAULT_RESIZE_HANDLE_POSITION).strip().lower()
+    if normalized in RESIZE_HANDLE_POSITIONS:
+        return normalized
+    return DEFAULT_RESIZE_HANDLE_POSITION
+
+
 POST_CAPTURE_EDITOR = "editor"
 POST_CAPTURE_CLIPBOARD = "clipboard"
 POST_CAPTURE_SAVE = "save"
@@ -523,6 +569,8 @@ class AppConfig:
         batch_export_profile_key: Active batch export profile key.
         batch_export_last_directory: Last used batch export output directory.
         auto_crop_on_shrink: Whether unused canvas margins are cropped automatically.
+        resize_handle_size: Pixel size of selection resize overlay handles.
+        resize_handle_position: Handle placement relative to the selection border.
         editor_shortcuts: Optional overrides for editor keyboard shortcuts.
         tool_stroke_widths: Default stroke/brush widths per drawing tool (0–64;
             brush/eraser stay at least 1).
@@ -550,6 +598,8 @@ class AppConfig:
     batch_export_profile_key: str = DEFAULT_BATCH_EXPORT_PROFILE_KEY
     batch_export_last_directory: str = ""
     auto_crop_on_shrink: bool = True
+    resize_handle_size: int = DEFAULT_RESIZE_HANDLE_SIZE
+    resize_handle_position: str = DEFAULT_RESIZE_HANDLE_POSITION
     editor_shortcuts: dict[str, str] = None
     tool_stroke_widths: dict[str, int] = None
     tool_brush_hardness: dict[str, int] = None
@@ -576,6 +626,8 @@ class AppConfig:
         self.tool_stroke_widths = normalize_tool_stroke_widths(self.tool_stroke_widths)
         self.tool_brush_hardness = normalize_tool_brush_hardness(self.tool_brush_hardness)
         self.tool_stroke_styles = normalize_tool_stroke_styles(self.tool_stroke_styles)
+        self.resize_handle_size = normalize_resize_handle_size(self.resize_handle_size)
+        self.resize_handle_position = normalize_resize_handle_position(self.resize_handle_position)
         profile_keys = {
             str(profile.get("key", "")).strip().lower()
             for profile in self.batch_export_profiles
@@ -681,6 +733,12 @@ class ConfigManager:
                 payload.get("batch_export_last_directory", "")
             ).strip(),
             auto_crop_on_shrink=bool(payload.get("auto_crop_on_shrink", True)),
+            resize_handle_size=normalize_resize_handle_size(
+                payload.get("resize_handle_size", DEFAULT_RESIZE_HANDLE_SIZE)
+            ),
+            resize_handle_position=normalize_resize_handle_position(
+                payload.get("resize_handle_position", DEFAULT_RESIZE_HANDLE_POSITION)
+            ),
             editor_shortcuts=normalize_editor_shortcuts(
                 sanitize_editor_shortcut_map(
                     payload.get("editor_shortcuts")
@@ -746,6 +804,10 @@ class ConfigManager:
             "batch_export_profile_key": str(config.batch_export_profile_key).strip().lower(),
             "batch_export_last_directory": config.batch_export_last_directory.strip(),
             "auto_crop_on_shrink": bool(config.auto_crop_on_shrink),
+            "resize_handle_size": normalize_resize_handle_size(config.resize_handle_size),
+            "resize_handle_position": normalize_resize_handle_position(
+                config.resize_handle_position
+            ),
             "editor_shortcuts": normalize_editor_shortcuts(
                 sanitize_editor_shortcut_map(config.editor_shortcuts)
             ),

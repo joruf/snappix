@@ -315,6 +315,10 @@ class VideoCanvas(QGraphicsView):
         self._resize_overlay_item: CropSelectionItem | None = None
         self._resize_overlay_target: QGraphicsItem | None = None
         self._updating_resize_overlay = False
+        from src.config import DEFAULT_RESIZE_HANDLE_POSITION, DEFAULT_RESIZE_HANDLE_SIZE
+
+        self._resize_handle_size = float(DEFAULT_RESIZE_HANDLE_SIZE)
+        self._resize_handle_position = DEFAULT_RESIZE_HANDLE_POSITION
         self._pending_selection_id: str | None = None
         self._rebuilding_visible_items = False
         self._rect_corner_radius = 0.0
@@ -731,6 +735,44 @@ class VideoCanvas(QGraphicsView):
         muted = not self.is_audio_muted()
         self.set_audio_muted(muted)
         return muted
+
+    def set_resize_handle_style(self, *, size: float, position: str) -> None:
+        """
+        Configures resize-overlay handle size and placement.
+
+        Args:
+            size: Handle edge length in pixels.
+            position: One of ``center``, ``inside``, or ``outside``.
+
+        Returns:
+            None
+        """
+
+        from src.config import normalize_resize_handle_position, normalize_resize_handle_size
+
+        self._resize_handle_size = float(normalize_resize_handle_size(size))
+        self._resize_handle_position = normalize_resize_handle_position(position)
+        if self._resize_overlay_item is not None:
+            self._resize_overlay_item.set_handle_style(
+                size=self._resize_handle_size,
+                position=self._resize_handle_position,
+            )
+
+    def _apply_resize_handle_style(self, overlay) -> None:
+        """
+        Applies the current resize-handle settings to one overlay item.
+
+        Args:
+            overlay: Selection overlay item.
+
+        Returns:
+            None
+        """
+
+        overlay.set_handle_style(
+            size=self._resize_handle_size,
+            position=self._resize_handle_position,
+        )
 
     def play(self) -> None:
         """
@@ -1554,6 +1596,7 @@ class VideoCanvas(QGraphicsView):
                 QRectF(0.0, 0.0, target_rect.width(), target_rect.height())
             )
             self._updating_resize_overlay = False
+        self._apply_resize_handle_style(self._resize_overlay_item)
         self._resize_overlay_target = target
 
     def _clear_resize_overlay(self) -> None:

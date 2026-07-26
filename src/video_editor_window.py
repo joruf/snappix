@@ -387,6 +387,20 @@ class VideoEditorWindow(QMainWindow):
             self.sound_action.setIcon(build_playback_icon("sound_off"))
             self.sound_action.setToolTip("Turn playback sound on")
 
+    def set_resize_handle_style(self, *, size: float, position: str) -> None:
+        """
+        Applies resize-overlay handle settings to the video canvas.
+
+        Args:
+            size: Handle edge length in pixels.
+            position: One of ``center``, ``inside``, or ``outside``.
+
+        Returns:
+            None
+        """
+
+        self.canvas.set_resize_handle_style(size=size, position=position)
+
     def _on_canvas_tool_changed(self, tool_id: str) -> None:
         """
         Keeps toolbar visuals aligned with programmatic canvas tool changes.

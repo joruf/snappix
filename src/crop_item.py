@@ -50,6 +50,8 @@ class CropSelectionItem(QGraphicsRectItem):
         self._aspect_ratio_lock_enabled = True
         self._resize_aspect_ratio = 1.0
         self._interior_interactive = True
+        self._handle_size = self.HANDLE_SIZE
+        self._handle_position = "inside"
         self.on_geometry_changed: Callable[[], None] | None = None
 
         border_pen = QPen(QColor(52, 152, 219, 230), 2.0, Qt.PenStyle.DashLine)
@@ -64,8 +66,140 @@ class CropSelectionItem(QGraphicsRectItem):
             QRectF: Expanded local bounds.
         """
 
-        margin = self.HANDLE_SIZE
+        margin = self._handle_margin()
         return self.rect().adjusted(-margin, -margin, margin, margin)
+
+    def set_handle_style(self, *, size: float, position: str) -> None:
+        """
+        Configures resize-handle size and placement for selection overlays.
+
+        Args:
+            size: Handle edge length in pixels.
+            position: One of ``center``, ``inside``, or ``outside``.
+
+        Returns:
+            None
+        """
+
+        from src.config import normalize_resize_handle_position, normalize_resize_handle_size
+
+        self._handle_size = float(normalize_resize_handle_size(size))
+        self._handle_position = normalize_resize_handle_position(position)
+        self.prepareGeometryChange()
+        self.update()
+
+    def _handle_margin(self) -> float:
+        """
+        Returns extra bounds needed so handles remain interactive.
+
+        Returns:
+            float: Margin in local coordinates.
+        """
+
+        if self._handle_position == "outside":
+            return self._handle_size
+        if self._handle_position == "center":
+            return self._handle_size / 2.0
+        return 0.0
+
+    def _handle_anchor(self, handle_name: str) -> tuple[float, float]:
+        """
+        Returns the border anchor point for one handle in local coordinates.
+
+        Args:
+            handle_name: Handle identifier.
+
+        Returns:
+            tuple[float, float]: Anchor x/y on the selection border.
+        """
+
+        rect = self.rect()
+        x_mid = rect.width() / 2.0
+        y_mid = rect.height() / 2.0
+        anchors = {
+            "top_left": (rect.left(), rect.top()),
+            "top": (x_mid, rect.top()),
+            "top_right": (rect.right(), rect.top()),
+            "right": (rect.right(), y_mid),
+            "bottom_right": (rect.right(), rect.bottom()),
+            "bottom": (x_mid, rect.bottom()),
+            "bottom_left": (rect.left(), rect.bottom()),
+            "left": (rect.left(), y_mid),
+        }
+        return anchors[handle_name]
+
+    def _handle_origin(self, handle_name: str) -> tuple[float, float]:
+        """
+        Computes the top-left corner for one handle rectangle.
+
+        Args:
+            handle_name: Handle identifier.
+
+        Returns:
+            tuple[float, float]: Handle rectangle origin in local coordinates.
+        """
+
+        anchor_x, anchor_y = self._handle_anchor(handle_name)
+        size = self._handle_size
+        position = self._handle_position
+
+        if handle_name == "top_left":
+            if position == "inside":
+                return anchor_x, anchor_y
+            if position == "center":
+                return anchor_x - size / 2.0, anchor_y - size / 2.0
+            return anchor_x - size, anchor_y - size
+
+        if handle_name == "top":
+            if position == "inside":
+                return anchor_x - size / 2.0, anchor_y
+            if position == "center":
+                return anchor_x - size / 2.0, anchor_y - size / 2.0
+            return anchor_x - size / 2.0, anchor_y - size
+
+        if handle_name == "top_right":
+            if position == "inside":
+                return anchor_x - size, anchor_y
+            if position == "center":
+                return anchor_x - size / 2.0, anchor_y - size / 2.0
+            return anchor_x, anchor_y - size
+
+        if handle_name == "right":
+            if position == "inside":
+                return anchor_x - size, anchor_y - size / 2.0
+            if position == "center":
+                return anchor_x - size / 2.0, anchor_y - size / 2.0
+            return anchor_x, anchor_y - size / 2.0
+
+        if handle_name == "bottom_right":
+            if position == "inside":
+                return anchor_x - size, anchor_y - size
+            if position == "center":
+                return anchor_x - size / 2.0, anchor_y - size / 2.0
+            return anchor_x, anchor_y
+
+        if handle_name == "bottom":
+            if position == "inside":
+                return anchor_x - size / 2.0, anchor_y - size
+            if position == "center":
+                return anchor_x - size / 2.0, anchor_y - size / 2.0
+            return anchor_x - size / 2.0, anchor_y
+
+        if handle_name == "bottom_left":
+            if position == "inside":
+                return anchor_x, anchor_y - size
+            if position == "center":
+                return anchor_x - size / 2.0, anchor_y - size / 2.0
+            return anchor_x - size, anchor_y
+
+        if handle_name == "left":
+            if position == "inside":
+                return anchor_x, anchor_y - size / 2.0
+            if position == "center":
+                return anchor_x - size / 2.0, anchor_y - size / 2.0
+            return anchor_x - size, anchor_y - size / 2.0
+
+        return anchor_x, anchor_y
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         """
@@ -318,19 +452,17 @@ class CropSelectionItem(QGraphicsRectItem):
         """
 
         rect = self.rect()
-        handle_size = self.HANDLE_SIZE
-        x_mid = rect.width() / 2.0
-        y_mid = rect.height() / 2.0
-        return {
-            "top_left": QRectF(0.0, 0.0, handle_size, handle_size),
-            "top": QRectF(x_mid - handle_size / 2.0, 0.0, handle_size, handle_size),
-            "top_right": QRectF(rect.width() - handle_size, 0.0, handle_size, handle_size),
-            "right": QRectF(rect.width() - handle_size, y_mid - handle_size / 2.0, handle_size, handle_size),
-            "bottom_right": QRectF(rect.width() - handle_size, rect.height() - handle_size, handle_size, handle_size),
-            "bottom": QRectF(x_mid - handle_size / 2.0, rect.height() - handle_size, handle_size, handle_size),
-            "bottom_left": QRectF(0.0, rect.height() - handle_size, handle_size, handle_size),
-            "left": QRectF(0.0, y_mid - handle_size / 2.0, handle_size, handle_size),
-        }
+        handle_size = self._handle_size
+        handle_rects: dict[str, QRectF] = {}
+        for handle_name in self.HANDLE_NAMES:
+            origin_x, origin_y = self._handle_origin(handle_name)
+            handle_rects[handle_name] = QRectF(
+                origin_x,
+                origin_y,
+                handle_size,
+                handle_size,
+            )
+        return handle_rects
 
     def _handle_at(self, local_pos: QPointF) -> str | None:
         """

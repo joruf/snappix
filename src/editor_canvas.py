@@ -283,6 +283,10 @@ class EditorCanvas(QGraphicsView):
         self._base_content_size = QSizeF(0.0, 0.0)
         self._fitting_document = False
         self._auto_crop_on_shrink = True
+        from src.config import DEFAULT_RESIZE_HANDLE_POSITION, DEFAULT_RESIZE_HANDLE_SIZE
+
+        self._resize_handle_size = float(DEFAULT_RESIZE_HANDLE_SIZE)
+        self._resize_handle_position = DEFAULT_RESIZE_HANDLE_POSITION
         self._copy_feedback_item: QGraphicsRectItem | None = None
         self._copy_feedback_timer = QTimer(self)
         self._copy_feedback_timer.setInterval(40)
@@ -3749,6 +3753,44 @@ class EditorCanvas(QGraphicsView):
 
         return bool(self._auto_crop_on_shrink)
 
+    def set_resize_handle_style(self, *, size: float, position: str) -> None:
+        """
+        Configures resize-overlay handle size and placement.
+
+        Args:
+            size: Handle edge length in pixels.
+            position: One of ``center``, ``inside``, or ``outside``.
+
+        Returns:
+            None
+        """
+
+        from src.config import normalize_resize_handle_position, normalize_resize_handle_size
+
+        self._resize_handle_size = float(normalize_resize_handle_size(size))
+        self._resize_handle_position = normalize_resize_handle_position(position)
+        if self._resize_overlay_item is not None:
+            self._resize_overlay_item.set_handle_style(
+                size=self._resize_handle_size,
+                position=self._resize_handle_position,
+            )
+
+    def _apply_resize_handle_style(self, overlay: CropSelectionItem) -> None:
+        """
+        Applies the current resize-handle settings to one overlay item.
+
+        Args:
+            overlay: Selection overlay item.
+
+        Returns:
+            None
+        """
+
+        overlay.set_handle_style(
+            size=self._resize_handle_size,
+            position=self._resize_handle_position,
+        )
+
     def _content_bounds_rect(self) -> QRectF:
         """
         Computes the tight scene bounds around screenshot base and annotations.
@@ -4714,6 +4756,7 @@ class EditorCanvas(QGraphicsView):
                 QRectF(0.0, 0.0, target_rect.width(), target_rect.height())
             )
             self._updating_resize_overlay = False
+        self._apply_resize_handle_style(self._resize_overlay_item)
         self._resize_overlay_target = target
 
     def _clear_resize_overlay(self) -> None:

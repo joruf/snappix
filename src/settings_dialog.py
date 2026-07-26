@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSpinBox,
     QTabWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -36,9 +37,12 @@ from src.config import (
     normalize_editor_last_tab_behavior,
     normalize_hotkey_spec,
     normalize_post_capture_action,
+    normalize_resize_handle_position,
+    normalize_resize_handle_size,
     normalize_tool_brush_hardness,
     normalize_tool_stroke_styles,
     normalize_tool_stroke_widths,
+    RESIZE_HANDLE_POSITIONS,
     sanitize_editor_shortcut_map,
 )
 from src.global_hotkeys import GlobalHotkeyManager, hotkey_spec_to_pynput
@@ -179,6 +183,28 @@ class SettingsDialog(QDialog):
         )
         self.auto_crop_on_shrink_checkbox.setChecked(bool(config.auto_crop_on_shrink))
         form.addRow("Canvas:", self.auto_crop_on_shrink_checkbox)
+
+        self.resize_handle_size_spin = QSpinBox()
+        self.resize_handle_size_spin.setRange(6, 24)
+        self.resize_handle_size_spin.setSuffix(" px")
+        self.resize_handle_size_spin.setToolTip(
+            "Edge length of the eight resize handles shown around selected objects."
+        )
+        self.resize_handle_size_spin.setValue(normalize_resize_handle_size(config.resize_handle_size))
+        form.addRow("Selection handle size:", self.resize_handle_size_spin)
+
+        self.resize_handle_position_combo = QComboBox()
+        for position_key, position_label in RESIZE_HANDLE_POSITIONS.items():
+            self.resize_handle_position_combo.addItem(position_label, position_key)
+        position_index = self.resize_handle_position_combo.findData(
+            normalize_resize_handle_position(config.resize_handle_position)
+        )
+        if position_index >= 0:
+            self.resize_handle_position_combo.setCurrentIndex(position_index)
+        self.resize_handle_position_combo.setToolTip(
+            "Placement of resize handles relative to the selection border."
+        )
+        form.addRow("Selection handle position:", self.resize_handle_position_combo)
 
         save_directory_row = QHBoxLayout()
         initial_save_directory = (
@@ -382,6 +408,12 @@ class SettingsDialog(QDialog):
             batch_export_profile_key=self._config.batch_export_profile_key,
             batch_export_last_directory=self._config.batch_export_last_directory,
             auto_crop_on_shrink=self.auto_crop_on_shrink_checkbox.isChecked(),
+            resize_handle_size=normalize_resize_handle_size(
+                self.resize_handle_size_spin.value()
+            ),
+            resize_handle_position=normalize_resize_handle_position(
+                str(self.resize_handle_position_combo.currentData())
+            ),
             editor_shortcuts=sanitize_editor_shortcut_map(self._collect_editor_shortcuts()),
             tool_stroke_widths=normalize_tool_stroke_widths(self._config.tool_stroke_widths),
             tool_brush_hardness=normalize_tool_brush_hardness(self._config.tool_brush_hardness),

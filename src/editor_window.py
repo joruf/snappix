@@ -5248,6 +5248,20 @@ class EditorWindow(QMainWindow):
 
         self.canvas.set_auto_crop_on_shrink(enabled)
 
+    def set_resize_handle_style(self, *, size: float, position: str) -> None:
+        """
+        Applies resize-overlay handle settings to the editor canvas.
+
+        Args:
+            size: Handle edge length in pixels.
+            position: One of ``center``, ``inside``, or ``outside``.
+
+        Returns:
+            None
+        """
+
+        self.canvas.set_resize_handle_style(size=size, position=position)
+
     def export_preset(self) -> str:
         """
         Returns the currently selected export preset key.

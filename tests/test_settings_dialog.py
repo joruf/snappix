@@ -62,6 +62,10 @@ class TestSettingsDialog(unittest.TestCase):
 
         dialog.save_directory_edit.setText("  /home/user/Pictures  ")
         dialog.auto_crop_on_shrink_checkbox.setChecked(False)
+        dialog.resize_handle_size_spin.setValue(12)
+        dialog.resize_handle_position_combo.setCurrentIndex(
+            dialog.resize_handle_position_combo.findData("inside")
+        )
         dialog._shortcut_edits["copy"].setKeySequence(  # pylint: disable=protected-access
             QKeySequence("F7")
         )
@@ -75,6 +79,8 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertEqual(config.capture_save_directory, "/home/user/Pictures")
         self.assertEqual(config.editor_last_tab_behavior, EDITOR_LAST_TAB_CLOSE_WINDOW)
         self.assertFalse(config.auto_crop_on_shrink)
+        self.assertEqual(config.resize_handle_size, 12)
+        self.assertEqual(config.resize_handle_position, "inside")
         self.assertEqual(config.editor_shortcuts.get("copy"), "F7")
 
     def test_build_config_preserves_autostart_and_theme(self) -> None:
