@@ -5,3 +5,5 @@
 /tests/__pycache__
 .initialized
 docs/screenshots/_sample-video.mp4
+/docs/vm-compat-reports
+/scripts/vm_compat

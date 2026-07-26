@@ -33,6 +33,26 @@ sudo apt install libxcb-cursor0 python3-tk python3-venv xdotool x11-utils tesser
 | `grim`, `slurp` | Recommended for Wayland region / fullscreen capture |
 | `ffmpeg` | Video recording and MP4 export |
 
+### Supported operating systems
+
+Snappix is built for **Linux desktop** sessions only. Windows and macOS are not supported.
+
+| Environment | Screenshots | Video recording | Window / scroll capture |
+|-------------|----------------|-----------------|-------------------------|
+| **Linux + X11** (tools installed) | Yes | Yes (`ffmpeg` x11grab) | Yes (`xdotool`, `xwininfo`) |
+| **Linux + Wayland** | Yes (prefer `grim`/`slurp`; else Qt overlay) | No (X11-only) | No (X11-only) |
+| **Windows / macOS** | No | No | No |
+
+#### Tested and verified
+
+| Platform | What was verified |
+|----------|-------------------|
+| **[Linux Mint](https://linuxmint.com/) 22.3 + X11** | Primary development platform. Real probes: fullscreen screenshot CLI, 1 s video capture via `ffmpeg` x11grab, window/scroll tools present, OCR/ffmpeg/grim/slurp available, compatibility unit tests green. |
+| **Linux Mint 22.3 + Wayland (tool check)** | `grim`/`slurp` present; video and window/scroll marked X11-only (as designed). |
+| **Ubuntu 22.04 / 24.04 (CI)** | Automated `unittest` suite on GitHub Actions with Python 3.11 and 3.12 (headless / offscreen). |
+
+Other Debian/Ubuntu-based desktops with the packages below should work similarly; detailed probe logs live under [`docs/vm-compat-reports/`](docs/vm-compat-reports/COMPATIBILITY.md).
+
 ### Requirements
 
 - Python **3.11+**
@@ -319,6 +339,8 @@ Schema: [Technical Documentation → Configuration](docs/TECHNICAL.md#configurat
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
 ```
+
+Platform compatibility (X11 vs Wayland, optional tools present/missing) is covered by mocked matrix tests in `tests/test_os_compatibility_matrix.py`.
 
 ---
 
