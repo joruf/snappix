@@ -98,7 +98,7 @@ class VideoEditorWindow(QMainWindow):
         self._build_menu()
 
         self._vector_toolbar = VideoVectorToolbar(self)
-        toolbar_widget = self._vector_toolbar.build()
+        self._toolbar_widget = self._vector_toolbar.build()
 
         self.canvas.duration_changed.connect(self._on_duration_changed)
         self.canvas.position_changed.connect(self._on_position_changed)
@@ -117,35 +117,45 @@ class VideoEditorWindow(QMainWindow):
             self._on_annotation_time_committed
         )
 
-        timeline_pan_left = QToolButton()
-        timeline_pan_left.setText("◀")
-        timeline_pan_left.setToolTip("Jump timeline one page earlier")
-        timeline_pan_left.clicked.connect(self.timeline.pan_left)
+        self.timeline_pan_left = QToolButton()
+        self.timeline_pan_left.setText("◀")
+        self.timeline_pan_left.setToolTip("Jump timeline one page earlier")
+        self.timeline_pan_left.clicked.connect(self.timeline.pan_left)
 
-        timeline_pan_right = QToolButton()
-        timeline_pan_right.setText("▶")
-        timeline_pan_right.setToolTip("Jump timeline one page later")
-        timeline_pan_right.clicked.connect(self.timeline.pan_right)
+        self.timeline_pan_right = QToolButton()
+        self.timeline_pan_right.setText("▶")
+        self.timeline_pan_right.setToolTip("Jump timeline one page later")
+        self.timeline_pan_right.clicked.connect(self.timeline.pan_right)
 
         timeline_row = QWidget()
+        timeline_row.setObjectName("videoTimelineRow")
         timeline_layout = QHBoxLayout(timeline_row)
         timeline_layout.setContentsMargins(4, 0, 4, 0)
         timeline_layout.setSpacing(4)
-        timeline_layout.addWidget(timeline_pan_left)
+        timeline_layout.addWidget(self.timeline_pan_left)
         timeline_layout.addWidget(self.timeline, 1)
-        timeline_layout.addWidget(timeline_pan_right)
+        timeline_layout.addWidget(self.timeline_pan_right)
 
         central = QWidget()
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-        layout.addWidget(toolbar_widget, 0)
+        layout.addWidget(self._toolbar_widget, 0)
         layout.addWidget(self.canvas, 3)
         layout.addWidget(timeline_row, 1)
         self.setCentralWidget(central)
 
         self.setStatusBar(QStatusBar(self))
         self.statusBar().showMessage("Ready")
+        self._toolbar_widget.setToolTip(
+            "Video editor toolbar: drawing tools, history, playback, zoom, and style."
+        )
+        self.canvas.setToolTip(
+            "Video preview: play the recording and place time-based annotations."
+        )
+        self.timeline.setToolTip(
+            "Timeline: annotation tracks, duration bars, and playhead scrubbing."
+        )
         self._autosave_timer = self.startTimer(30_000)
         self._push_history_state()
 
@@ -308,6 +318,7 @@ class VideoEditorWindow(QMainWindow):
 
         history_box = QGroupBox("History", parent)
         history_box.setObjectName("toolCategoryBox")
+        history_box.setToolTip("Undo and redo edits, and jump to earlier history states.")
         history_box.setSizePolicy(
             QSizePolicy.Policy.Maximum,
             QSizePolicy.Policy.Maximum,
@@ -355,6 +366,7 @@ class VideoEditorWindow(QMainWindow):
 
         playback_box = QGroupBox("Playback", parent)
         playback_box.setObjectName("toolCategoryBox")
+        playback_box.setToolTip("Playback controls: play, stop, and mute the video preview.")
         playback_box.setSizePolicy(
             QSizePolicy.Policy.Maximum,
             QSizePolicy.Policy.Maximum,
@@ -364,43 +376,46 @@ class VideoEditorWindow(QMainWindow):
         playback_layout.setSpacing(4)
         self.play_action = QAction(self)
         self.play_action.triggered.connect(self._toggle_playback)
-        play_button = QToolButton(playback_box)
+        self.play_button = QToolButton(playback_box)
         self._configure_playback_button(
-            play_button,
+            self.play_button,
             self.play_action,
             icon_id="play",
             tooltip="Play",
         )
-        playback_layout.addWidget(play_button)
+        playback_layout.addWidget(self.play_button)
 
         self.stop_action = QAction(self)
         self.stop_action.triggered.connect(self._stop_playback)
-        stop_button = QToolButton(playback_box)
+        self.stop_button = QToolButton(playback_box)
         self._configure_playback_button(
-            stop_button,
+            self.stop_button,
             self.stop_action,
             icon_id="stop",
             tooltip="Stop and rewind to start",
         )
-        playback_layout.addWidget(stop_button)
+        playback_layout.addWidget(self.stop_button)
 
         self.sound_action = QAction(self)
         self.sound_action.setCheckable(True)
         self.sound_action.setChecked(False)
         self.sound_action.toggled.connect(self._on_sound_toggled)
-        sound_button = QToolButton(playback_box)
+        self.sound_button = QToolButton(playback_box)
         self._configure_playback_button(
-            sound_button,
+            self.sound_button,
             self.sound_action,
             icon_id="sound_off",
             tooltip="Turn playback sound on",
         )
-        playback_layout.addWidget(sound_button)
+        playback_layout.addWidget(self.sound_button)
         self._sync_playback_action_icons()
         strip_widgets.append(playback_box)
 
         view_box = QGroupBox("View", parent)
         view_box.setObjectName("toolCategoryBox")
+        view_box.setToolTip(
+            "View options: show all annotation objects even outside the playhead range."
+        )
         view_box.setSizePolicy(
             QSizePolicy.Policy.Maximum,
             QSizePolicy.Policy.Maximum,
@@ -419,6 +434,7 @@ class VideoEditorWindow(QMainWindow):
 
         zoom_box = QGroupBox("Zoom", parent)
         zoom_box.setObjectName("toolCategoryBox")
+        zoom_box.setToolTip("Zoom the video preview in, out, or fit to the frame.")
         zoom_box.setSizePolicy(
             QSizePolicy.Policy.Maximum,
             QSizePolicy.Policy.Maximum,

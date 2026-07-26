@@ -890,6 +890,107 @@ def generate_video_editor(app: QApplication) -> Path:
     return _save_widget(host, "video-editor.png")
 
 
+def generate_video_editor_annotated(app: QApplication) -> Path:
+    """
+    Captures an annotated Video Editor overview with English callouts.
+
+    Args:
+        app: Qt application instance.
+
+    Returns:
+        Path: Written screenshot path.
+    """
+
+    _apply_theme(app)
+    sample_video = _ensure_sample_video()
+    editor = VideoEditorWindow(str(sample_video), 960, 540)
+    editor.setWindowIcon(_editor_icon())
+    editor.setStyleSheet(build_editor_accent_stylesheet(THEME_DARK))
+    editor._annotations.extend(_sample_video_annotations())  # pylint: disable=protected-access
+    editor.canvas.set_annotations(editor._annotations)  # pylint: disable=protected-access
+    editor.timeline.set_annotations(editor._annotations)  # pylint: disable=protected-access
+    editor.timeline.set_duration(8000)
+    editor.timeline.set_position(2200)
+    editor.timeline.refresh()
+    host = _build_editor_host_with_tab(editor, "Recording")
+    host.resize(1320, 900)
+    host.show()
+    QApplication.processEvents()
+    source = host.grab()
+
+    tabs = host.centralWidget()
+    assert isinstance(tabs, QTabWidget)
+    toolbar = editor._toolbar_widget  # pylint: disable=protected-access
+    property_tabs = host.findChild(QTabWidget, "editorPropertyTabs")
+    canvas = editor.canvas
+    timeline = editor.timeline
+    status = editor.statusBar()
+
+    pad_left, pad_top, pad_right, pad_bottom = 210, 64, 230, 78
+    menu_anchor = QPoint(70, 18)
+    tab_anchor = _widget_center_in(host, tabs.tabBar())
+    tools_anchor = QPoint(
+        toolbar.mapTo(host, QPoint(120, 28)).x(),
+        toolbar.mapTo(host, QPoint(120, 28)).y(),
+    )
+    history_anchor = _widget_center_in(host, editor.history_undo_button)
+    playback_anchor = _widget_center_in(host, editor.play_button)
+    view_anchor = _widget_center_in(host, editor.show_all_objects_checkbox)
+    zoom_anchor = _widget_center_in(host, editor.zoom_slider)
+    props_anchor = (
+        _widget_center_in(host, property_tabs)
+        if property_tabs is not None
+        else QPoint(tools_anchor.x(), tools_anchor.y() + 50)
+    )
+    canvas_anchor = _widget_center_in(host, canvas)
+    timeline_anchor = _widget_center_in(host, timeline)
+    # Point slightly above center so the label targets the time ruler / playhead area.
+    playhead_anchor = QPoint(
+        timeline.mapTo(host, QPoint(timeline.width() // 3, 18)).x(),
+        timeline.mapTo(host, QPoint(timeline.width() // 3, 18)).y(),
+    )
+    tracks_anchor = QPoint(
+        timeline.mapTo(host, QPoint(timeline.width() // 2, max(40, timeline.height() // 2))).x(),
+        timeline.mapTo(host, QPoint(timeline.width() // 2, max(40, timeline.height() // 2))).y(),
+    )
+    pan_left_anchor = _widget_center_in(host, editor.timeline_pan_left)
+    pan_right_anchor = _widget_center_in(host, editor.timeline_pan_right)
+    status_anchor = _widget_center_in(host, status)
+
+    callouts = [
+        Callout(menu_anchor, "Menu bar", QPoint(24, 40)),
+        Callout(tab_anchor, "Editor tabs", QPoint(pad_left + source.width() + 24, 48)),
+        Callout(tools_anchor, "Tool strip", QPoint(24, pad_top + 70)),
+        Callout(history_anchor, "History", QPoint(pad_left + source.width() + 24, pad_top + 85)),
+        Callout(playback_anchor, "Playback controls", QPoint(24, pad_top + playback_anchor.y() - 10)),
+        Callout(view_anchor, "Show all objects", QPoint(pad_left + source.width() + 24, pad_top + view_anchor.y() - 10)),
+        Callout(zoom_anchor, "Zoom controls", QPoint(pad_left + source.width() + 24, pad_top + zoom_anchor.y() + 20)),
+        Callout(props_anchor, "Style property tab", QPoint(24, pad_top + props_anchor.y() - 8)),
+        Callout(canvas_anchor, "Video preview", QPoint(24, pad_top + canvas_anchor.y() - 10)),
+        Callout(playhead_anchor, "Time ruler / playhead", QPoint(pad_left + source.width() + 24, pad_top + playhead_anchor.y() - 8)),
+        Callout(tracks_anchor, "Annotation tracks", QPoint(24, pad_top + tracks_anchor.y() - 8)),
+        Callout(timeline_anchor, "Timeline", QPoint(pad_left + source.width() + 24, pad_top + timeline_anchor.y() + 18)),
+        Callout(pan_left_anchor, "Timeline pan ◀", QPoint(24, pad_top + pan_left_anchor.y() + 18)),
+        Callout(pan_right_anchor, "Timeline pan ▶", QPoint(pad_left + source.width() + 24, pad_top + pan_right_anchor.y() + 40)),
+        Callout(
+            status_anchor,
+            "Status bar",
+            QPoint(pad_left + status_anchor.x() - 40, pad_top + source.height() + 20),
+        ),
+    ]
+    annotated = _annotate_screenshot(
+        source,
+        callouts,
+        pad_left=pad_left,
+        pad_top=pad_top,
+        pad_right=pad_right,
+        pad_bottom=pad_bottom,
+        title="Video Editor — UI Overview",
+    )
+    host.close()
+    return _save_pixmap(annotated, "video-editor-annotated.png")
+
+
 def generate_tray_menu(app: QApplication) -> Path:
     """
     Renders the system tray context menu screenshot.
@@ -1036,6 +1137,7 @@ def main() -> int:
         generate_editor_window(app),
         generate_editor_window_annotated(app),
         generate_video_editor(app),
+        generate_video_editor_annotated(app),
         generate_tray_menu(app),
         generate_first_time_setup(app),
     ]

@@ -272,6 +272,13 @@ class VideoVectorToolbar:
         self._property_tabs = QTabWidget(bar)
         self._property_tabs.setObjectName("editorPropertyTabs")
         self._property_tabs.setDocumentMode(True)
+        self._property_tabs.setToolTip(
+            "Style tab: border, fill, and text colors for video annotations."
+        )
+        self._property_tabs.setTabToolTip(
+            0,
+            "Style: border, fill, and text colors for the active tool or selection.",
+        )
         style_tab = FlowLayoutWidget(
             self._property_tabs,
             horizontal_spacing=3,

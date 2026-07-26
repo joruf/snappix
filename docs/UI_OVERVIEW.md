@@ -37,3 +37,26 @@ Hover any control in the live app for a short English tooltip.
 | Status bar | Feedback plus selection details |
 
 Hover toolbar buttons and property controls for English tooltips.
+
+## Video Editor
+
+![Video Editor — UI Overview](screenshots/video-editor-annotated.png)
+
+| Label | What it does |
+| --- | --- |
+| Menu bar | File and Edit commands (save project, export MP4, import) |
+| Editor tabs | One tab per open image or video project |
+| Tool strip | Drawing tools for time-based video annotations |
+| History | Undo / redo and jump to earlier states |
+| Playback controls | Play, stop/rewind, and mute the preview |
+| Show all objects | Show every annotation even outside the playhead range |
+| Zoom controls | Zoom the video preview |
+| Style property tab | Border, fill, and text colors for annotations |
+| Video preview | Plays the recording; place and edit overlays here |
+| Time ruler / playhead | Scrub current time along the recording |
+| Annotation tracks | Timed bars for each overlay (start/end on the timeline) |
+| Timeline | Full timeline row with tracks and playhead |
+| Timeline pan ◀ / ▶ | Scroll the timeline one page left or right |
+| Status bar | Feedback messages |
+
+Hover toolbar and timeline controls for English tooltips.

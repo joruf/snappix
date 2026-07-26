@@ -218,6 +218,12 @@ Labeled English callouts for the Editor window:
 
 ![Snappix Editor Window](docs/screenshots/editor-window.png)
 
+### Video Editor — UI Overview
+
+Labeled English callouts for the Video Editor window:
+
+![Snappix Video Editor Annotated](docs/screenshots/video-editor-annotated.png)
+
 ### Video Editor
 
 ![Snappix Video Editor](docs/screenshots/video-editor.png)
