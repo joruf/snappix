@@ -273,6 +273,12 @@ class FlowLayout(QLayout):
             item_size = item.sizeHint()
             if widget is not None:
                 item_size = item_size.expandedTo(widget.minimumSizeHint())
+                item_size = item_size.expandedTo(widget.minimumSize())
+                max_size = widget.maximumSize()
+                if max_size.width() < item_size.width():
+                    item_size.setWidth(max_size.width())
+                if max_size.height() < item_size.height():
+                    item_size.setHeight(max_size.height())
 
             item_width = item_size.width()
             current_row = rows[-1]

@@ -96,6 +96,7 @@ from src.config import (
     normalize_tool_stroke_widths,
 )
 from src.annotation_items import (
+    ITEM_ROLE_LOCKED,
     STROKE_STYLE_DASH,
     STROKE_STYLE_DASH_DOT,
     STROKE_STYLE_DOT,
@@ -170,6 +171,20 @@ _STROKE_STYLE_LABELS: dict[str, str] = {
     STROKE_STYLE_DOT: "Dotted",
     STROKE_STYLE_DASH_DOT: "Dash-dot",
 }
+
+_TOOL_CATEGORY_TOOLTIPS: dict[str, str] = {
+    "Select": "Selection tools: pick annotations or pixel regions on the canvas.",
+    "Paint": "Paint tools: brush, eraser, fill, and screen color picker.",
+    "Shapes": "Shape tools: rectangles, ellipses, triangles, stars, and polygons.",
+    "Lines": "Line tools: straight lines, polylines, and arrows.",
+    "Marks": "Mark tools: cross, checkmark, spotlight, and numbered steps.",
+    "Text": "Text tools: plain text and callout bubbles.",
+    "Image": "Image tools: background fill, blur, OCR, and crop.",
+    "Help": "Open the tools reference for every drawing tool.",
+    "History": "Undo and redo edits, and jump to earlier history states.",
+    "Zoom": "Zoom the canvas view in, out, or fit to the document.",
+}
+
 _CANVAS_CLIPBOARD_MIME = "application/x-snappix-canvas"
 _ANNOTATIONS_CLIPBOARD_MIME = "application/x-snappix-annotations"
 
@@ -660,6 +675,7 @@ class EditorWindow(QMainWindow):
         for category_title, tools in tool_categories:
             category_box = QGroupBox(category_title, strip)
             category_box.setObjectName("toolCategoryBox")
+            category_box.setToolTip(_TOOL_CATEGORY_TOOLTIPS.get(category_title, category_title))
             category_box.setSizePolicy(
                 QSizePolicy.Policy.Maximum,
                 QSizePolicy.Policy.Maximum,
@@ -695,6 +711,7 @@ class EditorWindow(QMainWindow):
 
         help_box = QGroupBox("Help", strip)
         help_box.setObjectName("toolCategoryBox")
+        help_box.setToolTip(_TOOL_CATEGORY_TOOLTIPS["Help"])
         help_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
         help_layout = QHBoxLayout(help_box)
         help_layout.setContentsMargins(4, 10, 4, 4)
@@ -710,6 +727,7 @@ class EditorWindow(QMainWindow):
 
         history_box = QGroupBox("History", strip)
         history_box.setObjectName("toolCategoryBox")
+        history_box.setToolTip(_TOOL_CATEGORY_TOOLTIPS["History"])
         history_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
         history_layout = QHBoxLayout(history_box)
         history_layout.setContentsMargins(4, 10, 4, 4)
@@ -735,6 +753,7 @@ class EditorWindow(QMainWindow):
 
         zoom_box = QGroupBox("Zoom", strip)
         zoom_box.setObjectName("toolCategoryBox")
+        zoom_box.setToolTip(_TOOL_CATEGORY_TOOLTIPS["Zoom"])
         zoom_box.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Maximum)
         zoom_layout = QHBoxLayout(zoom_box)
         zoom_layout.setContentsMargins(4, 10, 4, 4)
@@ -948,6 +967,7 @@ class EditorWindow(QMainWindow):
         arrange_widgets.append(self.geometry_apply_button)
         arrange_widgets.append(self._create_toolbar_gap(6))
         arrange_widgets.append(self._create_toolbar_label("Align"))
+        self._align_buttons: list[QPushButton] = []
         for mode, label in (
             ("left", "L"),
             ("center_h", "C"),
@@ -958,12 +978,16 @@ class EditorWindow(QMainWindow):
         ):
             button = QPushButton(label)
             button.setFixedWidth(28)
-            button.setToolTip(f"Align selection {mode.replace('_', ' ')}")
+            button.setToolTip(
+                f"Align selection {mode.replace('_', ' ')} "
+                "(one item → document; 2+ items → each other)"
+            )
             button.clicked.connect(
                 lambda _checked=False, align_mode=mode: self._align_selection(align_mode)
             )
             self._configure_compact_toolbar_height(button)
             arrange_widgets.append(button)
+            self._align_buttons.append(button)
         arrange_widgets.append(self._create_toolbar_label("Dist"))
         self.distribute_h_button = QPushButton("H")
         self.distribute_h_button.setFixedWidth(28)
@@ -1043,8 +1067,10 @@ class EditorWindow(QMainWindow):
         export_widgets: list[QWidget] = []
         export_widgets.append(self._create_toolbar_label("Preset"))
         self.export_preset_combo = QComboBox()
+        self.export_preset_combo.blockSignals(True)
         for preset_key, preset_values in self._export_presets.items():
             self.export_preset_combo.addItem(preset_values[0], preset_key)
+        self.export_preset_combo.blockSignals(False)
         self.export_preset_combo.currentIndexChanged.connect(self._on_export_preset_index_changed)
         self._configure_compact_combo(self.export_preset_combo, 110)
         export_widgets.append(self.export_preset_combo)
@@ -1093,6 +1119,9 @@ class EditorWindow(QMainWindow):
         self._update_color_button_preview(self.text_color_button, QColor("#2c3e50"))
         self._apply_toolbar_tooltips()
         self._update_style_color_visibility()
+        bar.setToolTip(
+            "Editor toolbar: drawing tools, history, zoom, and property tabs."
+        )
         return bar
 
     def _resolve_style_color_targets(
@@ -1436,7 +1465,7 @@ class EditorWindow(QMainWindow):
 
     def _apply_toolbar_tooltips(self) -> None:
         """
-        Adds English tooltip text to all toolbar controls.
+        Adds English tooltip text to all toolbar and property-panel controls.
 
         Returns:
             None
@@ -1444,6 +1473,25 @@ class EditorWindow(QMainWindow):
 
         for tool_key, button in self._tool_buttons.items():
             button.setToolTip(self._tool_tooltip_text(tool_key))
+
+        self.canvas.setToolTip(
+            "Canvas workspace: the document and annotations live here."
+        )
+        self._property_tabs.setToolTip(
+            "Property tabs: Style, Arrange, and Export controls for the selection."
+        )
+        self._property_tabs.setTabToolTip(
+            self._PROPERTY_TAB_STYLE,
+            "Style: border, fill, and text colors for the active tool or selection.",
+        )
+        self._property_tabs.setTabToolTip(
+            self._PROPERTY_TAB_ARRANGE,
+            "Arrange: grid, layers, geometry, align, distribute, rotate, flip, and skew.",
+        )
+        self._property_tabs.setTabToolTip(
+            self._PROPERTY_TAB_EXPORT,
+            "Export: quality presets, scale, transparency, and batch export profiles.",
+        )
 
         self.text_style_combo.setToolTip("Select plain text, text box, or speech bubble.")
         self.stroke_button.setToolTip("Open border color picker.")
@@ -1468,6 +1516,7 @@ class EditorWindow(QMainWindow):
         self.zoom_in_button.setToolTip("Zoom in. Shortcut: Ctrl++ or Shift+Mouse Wheel.")
         self.zoom_out_button.setToolTip("Zoom out. Shortcut: Ctrl+- or Shift+Mouse Wheel.")
         self.zoom_reset_button.setToolTip("Reset zoom to fit.")
+        self.zoom_label.setToolTip("Current zoom percentage.")
         self.history_undo_button.setToolTip("Undo the last change.")
         self.history_redo_button.setToolTip("Redo the last undone change.")
         self.history_list_combo.setToolTip("History entries with action names.")
@@ -1475,18 +1524,39 @@ class EditorWindow(QMainWindow):
         self.layer_combo.setToolTip("Select one layer to inspect or edit.")
         self.layer_visible_check.setToolTip("Toggle visibility for selected layer.")
         self.layer_lock_check.setToolTip("Lock selected layer against edits.")
-        self.layer_up_button.setToolTip("Move selected layer one step up.")
-        self.layer_down_button.setToolTip("Move selected layer one step down.")
+        self.layer_up_button.setToolTip("Move selected layer one step toward the front.")
+        self.layer_down_button.setToolTip("Move selected layer one step toward the back.")
         self.geometry_x_spin.setToolTip("Set selected layer X position.")
         self.geometry_y_spin.setToolTip("Set selected layer Y position.")
         self.geometry_w_spin.setToolTip("Set selected layer width.")
         self.geometry_h_spin.setToolTip("Set selected layer height.")
         self.geometry_apply_button.setToolTip("Apply X/Y/W/H values to selected layer.")
+        self.rotate_ccw_button.setToolTip("Rotate selection 15 degrees counter-clockwise.")
+        self.rotate_cw_button.setToolTip("Rotate selection 15 degrees clockwise.")
+        self.rotation_spin.setToolTip("Absolute rotation angle for the selection.")
+        self.rotation_apply_button.setToolTip("Apply the absolute rotation angle.")
+        self.flip_h_button.setToolTip("Flip selection horizontally.")
+        self.flip_v_button.setToolTip("Flip selection vertically.")
+        self.skew_x_spin.setToolTip("Horizontal skew angle in degrees.")
+        self.skew_y_spin.setToolTip("Vertical skew angle in degrees.")
+        self.skew_apply_button.setToolTip("Apply skew angles to the selection.")
+        self.distribute_h_button.setToolTip(
+            "Distribute selection horizontally (requires 3+ unlocked items)."
+        )
+        self.distribute_v_button.setToolTip(
+            "Distribute selection vertically (requires 3+ unlocked items)."
+        )
         self.export_preset_combo.setToolTip("Select export quality preset.")
+        self.export_scale_combo.setToolTip("Export resolution scale (@1x, @2x, or @3x).")
+        self.export_keep_transparency_check.setToolTip(
+            "When unchecked, transparent pixels are filled with white (needed for JPEG)."
+        )
         self.batch_profile_combo.setToolTip("Select named batch export profile.")
-        self.manage_batch_profiles_button.setToolTip("Rename, duplicate, delete, and reorder batch profiles.")
+        self.manage_batch_profiles_button.setToolTip(
+            "Rename, duplicate, delete, and reorder batch profiles."
+        )
         self.export_batch_button.setToolTip("Export current tab to multiple formats.")
-
+        self.tools_help_button.setToolTip("Open the tools reference table.")
     def _build_menu(self) -> None:
         """
         Builds the application menu bar and registers shortcut actions.
@@ -4073,6 +4143,7 @@ class EditorWindow(QMainWindow):
             self._restore_stroke_tool_menu_widgets()
             self._restore_text_tool_menu_widgets()
             self._update_style_color_visibility(selection_type="document")
+            self._update_arrange_action_enabled_state()
             self._selection_info_label.setText(format_selection_info(payload))
             return
 
@@ -4118,6 +4189,8 @@ class EditorWindow(QMainWindow):
 
         self._update_geometry_controls_from_payload(payload)
         self._sync_layer_controls_from_payload(payload)
+        self._sync_transform_controls_from_payload(payload)
+        self._update_arrange_action_enabled_state(payload)
         self._selection_info_label.setText(format_selection_info(payload))
 
     def _refresh_layer_panel(self) -> None:
@@ -4251,6 +4324,15 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        selected_count, unlocked_count = self._arrange_selection_count()
+        if unlocked_count < 1:
+            message = (
+                "Select an unlocked layer to reorder."
+                if selected_count < 1
+                else "Unlock the selected layer to reorder."
+            )
+            self.statusBar().showMessage(message, 3500)
+            return
         self._set_next_history_label("Move layer up")
         self.canvas.bring_selected_forward()
         self._refresh_layer_panel()
@@ -4263,6 +4345,15 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        selected_count, unlocked_count = self._arrange_selection_count()
+        if unlocked_count < 1:
+            message = (
+                "Select an unlocked layer to reorder."
+                if selected_count < 1
+                else "Unlock the selected layer to reorder."
+            )
+            self.statusBar().showMessage(message, 3500)
+            return
         self._set_next_history_label("Move layer down")
         self.canvas.send_selected_backward()
         self._refresh_layer_panel()
@@ -4326,6 +4417,80 @@ class EditorWindow(QMainWindow):
         self.layer_visible_check.blockSignals(False)
         self.layer_lock_check.blockSignals(False)
 
+    def _sync_transform_controls_from_payload(self, payload: dict[str, Any]) -> None:
+        """
+        Synchronizes rotation/skew spin boxes from the current selection.
+
+        Args:
+            payload: Selection payload from canvas.
+
+        Returns:
+            None
+        """
+
+        rotation = payload.get("rotation", 0.0)
+        skew_x = payload.get("skew_x", 0.0)
+        skew_y = payload.get("skew_y", 0.0)
+        if not isinstance(rotation, (int, float)):
+            rotation = 0.0
+        if not isinstance(skew_x, (int, float)):
+            skew_x = 0.0
+        if not isinstance(skew_y, (int, float)):
+            skew_y = 0.0
+        self.rotation_spin.blockSignals(True)
+        self.skew_x_spin.blockSignals(True)
+        self.skew_y_spin.blockSignals(True)
+        self.rotation_spin.setValue(float(rotation))
+        self.skew_x_spin.setValue(float(skew_x))
+        self.skew_y_spin.setValue(float(skew_y))
+        self.rotation_spin.blockSignals(False)
+        self.skew_x_spin.blockSignals(False)
+        self.skew_y_spin.blockSignals(False)
+
+    def _update_arrange_action_enabled_state(self, payload: dict[str, Any] | None = None) -> None:
+        """
+        Enables Arrange actions based on the current canvas selection.
+
+        Args:
+            payload: Optional selection payload (unused; kept for call-site symmetry).
+
+        Returns:
+            None
+        """
+
+        del payload
+        _selected_count, unlocked_count = self._arrange_selection_count()
+        has_unlocked = unlocked_count >= 1
+        can_distribute = unlocked_count >= 3
+        for button in getattr(self, "_align_buttons", []):
+            button.setEnabled(has_unlocked)
+        if hasattr(self, "distribute_h_button"):
+            self.distribute_h_button.setEnabled(can_distribute)
+            self.distribute_v_button.setEnabled(can_distribute)
+            self.rotate_ccw_button.setEnabled(has_unlocked)
+            self.rotate_cw_button.setEnabled(has_unlocked)
+            self.rotation_spin.setEnabled(has_unlocked)
+            self.rotation_apply_button.setEnabled(has_unlocked)
+            self.flip_h_button.setEnabled(has_unlocked)
+            self.flip_v_button.setEnabled(has_unlocked)
+            self.skew_x_spin.setEnabled(has_unlocked)
+            self.skew_y_spin.setEnabled(has_unlocked)
+            self.skew_apply_button.setEnabled(has_unlocked)
+
+    def _arrange_selection_count(self) -> tuple[int, int]:
+        """
+        Returns total and unlocked selected annotation counts.
+
+        Returns:
+            tuple[int, int]: ``(selected_count, unlocked_count)``.
+        """
+
+        selected = self.canvas._selected_annotation_items()  # pylint: disable=protected-access
+        unlocked = [
+            item for item in selected if not bool(item.data(ITEM_ROLE_LOCKED) or False)
+        ]
+        return len(selected), len(unlocked)
+
     def _apply_selected_geometry(self) -> None:
         """
         Applies inspector X/Y/W/H values to current selected layer.
@@ -4334,6 +4499,13 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        selected_count, unlocked_count = self._arrange_selection_count()
+        if selected_count < 1:
+            self.statusBar().showMessage("Select a layer before applying geometry.", 3500)
+            return
+        if unlocked_count < 1:
+            self.statusBar().showMessage("Unlock the selected layer to edit geometry.", 3500)
+            return
         if self.canvas.set_selected_geometry(
             x=float(self.geometry_x_spin.value()),
             y=float(self.geometry_y_spin.value()),
@@ -4343,10 +4515,15 @@ class EditorWindow(QMainWindow):
             self._set_next_history_label("Set selection geometry")
             self._push_history_state()
             self._refresh_layer_panel()
+        else:
+            self.statusBar().showMessage(
+                "Could not apply geometry to this selection.",
+                3500,
+            )
 
     def _align_selection(self, mode: str) -> None:
         """
-        Aligns the current multi-selection.
+        Aligns the current selection to peers or the document.
 
         Args:
             mode: Align mode identifier.
@@ -4355,9 +4532,20 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        selected_count, unlocked_count = self._arrange_selection_count()
+        if unlocked_count < 1:
+            message = (
+                "Select an unlocked layer to align."
+                if selected_count < 1
+                else "Unlock the selected layer to align."
+            )
+            self.statusBar().showMessage(message, 3500)
+            return
         if self.canvas.align_selected(mode):
             self._push_history_state()
             self._refresh_layer_panel()
+        else:
+            self.statusBar().showMessage("Selection is already aligned.", 2500)
 
     def _distribute_selection(self, axis: str) -> None:
         """
@@ -4370,9 +4558,18 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        _selected_count, unlocked_count = self._arrange_selection_count()
+        if unlocked_count < 3:
+            self.statusBar().showMessage(
+                "Select at least 3 unlocked layers to distribute.",
+                3500,
+            )
+            return
         if self.canvas.distribute_selected(axis):
             self._push_history_state()
             self._refresh_layer_panel()
+        else:
+            self.statusBar().showMessage("Could not distribute this selection.", 3500)
 
     def _rotate_selection(self, degrees: float) -> None:
         """
@@ -4385,9 +4582,20 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        selected_count, unlocked_count = self._arrange_selection_count()
+        if unlocked_count < 1:
+            message = (
+                "Select an unlocked layer to rotate."
+                if selected_count < 1
+                else "Unlock the selected layer to rotate."
+            )
+            self.statusBar().showMessage(message, 3500)
+            return
         if self.canvas.transform_selected(rotate_delta=float(degrees)):
             self._push_history_state()
             self._refresh_layer_panel()
+        else:
+            self.statusBar().showMessage("Could not rotate this selection.", 3500)
 
     def _apply_rotation_spin(self) -> None:
         """
@@ -4397,9 +4605,20 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        selected_count, unlocked_count = self._arrange_selection_count()
+        if unlocked_count < 1:
+            message = (
+                "Select an unlocked layer to rotate."
+                if selected_count < 1
+                else "Unlock the selected layer to rotate."
+            )
+            self.statusBar().showMessage(message, 3500)
+            return
         if self.canvas.transform_selected(rotation=float(self.rotation_spin.value())):
             self._push_history_state()
             self._refresh_layer_panel()
+        else:
+            self.statusBar().showMessage("Could not apply rotation.", 3500)
 
     def _flip_selection(self, *, horizontal: bool = False, vertical: bool = False) -> None:
         """
@@ -4413,9 +4632,20 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        selected_count, unlocked_count = self._arrange_selection_count()
+        if unlocked_count < 1:
+            message = (
+                "Select an unlocked layer to flip."
+                if selected_count < 1
+                else "Unlock the selected layer to flip."
+            )
+            self.statusBar().showMessage(message, 3500)
+            return
         if self.canvas.flip_selected(horizontal=horizontal, vertical=vertical):
             self._push_history_state()
             self._refresh_layer_panel()
+        else:
+            self.statusBar().showMessage("Could not flip this selection.", 3500)
 
     def _apply_skew_spins(self) -> None:
         """
@@ -4425,12 +4655,23 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        selected_count, unlocked_count = self._arrange_selection_count()
+        if unlocked_count < 1:
+            message = (
+                "Select an unlocked layer to skew."
+                if selected_count < 1
+                else "Unlock the selected layer to skew."
+            )
+            self.statusBar().showMessage(message, 3500)
+            return
         if self.canvas.transform_selected(
             skew_x=float(self.skew_x_spin.value()),
             skew_y=float(self.skew_y_spin.value()),
         ):
             self._push_history_state()
             self._refresh_layer_panel()
+        else:
+            self.statusBar().showMessage("Could not apply skew.", 3500)
 
     def _set_eyedropper_target(self, target: str) -> None:
         """

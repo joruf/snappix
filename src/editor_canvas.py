@@ -87,6 +87,7 @@ from src.annotation_items import (
     create_stroke_pen,
     apply_stroke_width_to_pen,
     pen_stroke_width,
+    merge_transform_into_payload,
     normalize_stroke_style,
     stroke_style_to_qt,
     transform_payload_from_item,
@@ -880,7 +881,7 @@ class EditorCanvas(QGraphicsView):
             payload["fill_rgba"] = color_to_list(item.brush().color())
             payload["stroke_width"] = item.pen().widthF()
 
-        return payload
+        return merge_transform_into_payload(item, payload)
 
     def _build_document_payload(self) -> dict[str, Any]:
         """
@@ -4879,11 +4880,29 @@ class EditorCanvas(QGraphicsView):
             pixmap = target.pixmap()
             if pixmap.width() <= 0 or pixmap.height() <= 0:
                 return False
-            target.setTransform(QTransform())
+            ratio = max(1.0, float(pixmap.devicePixelRatio()))
+            logical_width = float(pixmap.width()) / ratio
+            logical_height = float(pixmap.height()) / ratio
+            if logical_width <= 0.0 or logical_height <= 0.0:
+                return False
+            current = transform_payload_from_item(target)
+            # Size against the axis-aligned target box; re-center after transform so
+            # rotation/mirror/skew stay applied without wiping the image scale.
+            scale_x = new_rect.width() / logical_width
+            scale_y = new_rect.height() / logical_height
             target.setPos(new_rect.topLeft())
-            scale_x = new_rect.width() / float(pixmap.width())
-            scale_y = new_rect.height() / float(pixmap.height())
-            target.setTransform(QTransform.fromScale(scale_x, scale_y))
+            apply_item_transform(
+                target,
+                rotation=float(current["rotation"]),
+                mirror_h=bool(current["mirror_h"]),
+                mirror_v=bool(current["mirror_v"]),
+                skew_x=float(current["skew_x"]),
+                skew_y=float(current["skew_y"]),
+                base_scale_x=scale_x,
+                base_scale_y=scale_y,
+            )
+            bounds = target.sceneBoundingRect()
+            target.setPos(target.pos() + (new_rect.center() - bounds.center()))
             return True
 
         return False
@@ -5050,7 +5069,10 @@ class EditorCanvas(QGraphicsView):
 
     def align_selected(self, mode: str) -> bool:
         """
-        Aligns selected annotation items relative to their common bounds.
+        Aligns selected annotation items.
+
+        With two or more unlocked items, aligns relative to their common bounds.
+        With a single unlocked item, aligns to the document rectangle.
 
         Args:
             mode: One of left, center_h, right, top, middle_v, bottom.
@@ -5064,12 +5086,17 @@ class EditorCanvas(QGraphicsView):
             for item in self._selected_annotation_items()
             if not bool(item.data(ITEM_ROLE_LOCKED) or False)
         ]
-        if len(selected) < 2:
+        if not selected:
             return False
         rects = [(item, self._item_scene_rect(item).normalized()) for item in selected]
-        union = QRectF(rects[0][1])
-        for _, item_rect in rects[1:]:
-            union = union.united(item_rect)
+        if len(selected) >= 2:
+            union = QRectF(rects[0][1])
+            for _, item_rect in rects[1:]:
+                union = union.united(item_rect)
+        else:
+            union = self.document_rect().normalized()
+            if union.width() < 1.0 or union.height() < 1.0:
+                return False
         resolved = str(mode).strip().lower()
         changed = False
         for item, item_rect in rects:

@@ -100,6 +100,26 @@ class TestFlowLayout(unittest.TestCase):
         self.assertEqual(first.geometry().y(), second.geometry().y())
         self.assertGreater(third.geometry().y(), second.geometry().y())
 
+    def test_flow_layout_respects_maximum_width_for_spacing(self) -> None:
+        """
+        Ensures fixed-width buttons pack using their max width, not a larger sizeHint.
+        """
+
+        container = QWidget()
+        container.setFixedWidth(400)
+        layout = FlowLayout(container, margin=0, horizontal_spacing=3, vertical_spacing=2)
+        first = QPushButton("L")
+        first.setFixedWidth(28)
+        first.setFixedHeight(24)
+        second = QPushButton("C")
+        second.setFixedWidth(28)
+        second.setFixedHeight(24)
+        layout.set_widgets([first, second])
+        layout.setGeometry(QRect(0, 0, 400, 40))
+
+        self.assertEqual(first.geometry().width(), 28)
+        self.assertEqual(second.geometry().x(), first.geometry().x() + 28 + 3)
+
     def test_flow_layout_vertically_centers_mixed_height_items_in_a_row(self) -> None:
         """
         Ensures a shorter item shares a row with a taller one centered on its middle,

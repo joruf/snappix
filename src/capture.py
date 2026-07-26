@@ -215,6 +215,9 @@ class CapturePanel(QWidget):
         super().__init__()
         self.setObjectName("capturePanel")
         self.setWindowTitle(f"{APP_NAME} Capture")
+        self.setToolTip(
+            "Capture panel: choose a capture mode, optional delay, or open the editor."
+        )
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
@@ -230,10 +233,12 @@ class CapturePanel(QWidget):
 
         title = QLabel(APP_NAME)
         title.setObjectName("titleLabel")
+        title.setToolTip("Snappix Capture panel — start screenshots, scroll captures, and recordings.")
         root_layout.addWidget(title)
 
         frame = QFrame()
         frame.setFrameShape(QFrame.Shape.StyledPanel)
+        frame.setToolTip("Capture timing: delay before the capture starts.")
         root_layout.addWidget(frame)
         form = QFormLayout(frame)
 
@@ -268,6 +273,9 @@ class CapturePanel(QWidget):
 
         buttons_frame = QFrame()
         buttons_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        buttons_frame.setToolTip(
+            "Capture actions: fullscreen, area, window, scroll, video, color picker, and editor."
+        )
         root_layout.addWidget(buttons_frame)
         buttons_frame_layout = QVBoxLayout(buttons_frame)
         buttons_frame_layout.setContentsMargins(8, 8, 8, 8)

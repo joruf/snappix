@@ -9,27 +9,31 @@ live application chrome.
 
 from __future__ import annotations
 
+import math
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtCore import QPoint, QPointF, QRect, Qt
 from PySide6.QtGui import (
     QAction,
     QActionGroup,
     QColor,
     QFont,
+    QFontMetrics,
     QGuiApplication,
     QIcon,
     QLinearGradient,
     QPainter,
     QPen,
     QPixmap,
+    QPolygonF,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -60,6 +64,22 @@ SCREENSHOT_DIR = PROJECT_ROOT / "docs" / "screenshots"
 MOCK_WIDTH = 1280
 MOCK_HEIGHT = 800
 SAMPLE_VIDEO_PATH = SCREENSHOT_DIR / "_sample-video.mp4"
+
+
+@dataclass(frozen=True)
+class Callout:
+    """
+    One labeled arrow callout for annotated UI overview screenshots.
+
+    Attributes:
+        anchor: Point on the source screenshot the arrow tip should touch.
+        label: English label text.
+        label_pos: Top-left of the label bubble in padded overview coordinates.
+    """
+
+    anchor: QPoint
+    label: str
+    label_pos: QPoint
 
 
 def _ensure_screenshot_dir() -> None:
@@ -105,6 +125,137 @@ def _save_widget(widget: QWidget, filename: str) -> Path:
     widget.show()
     QApplication.processEvents()
     return _save_pixmap(widget.grab(), filename)
+
+
+def _widget_center_in(host: QWidget, child: QWidget) -> QPoint:
+    """
+    Maps the center of ``child`` into ``host`` coordinates.
+
+    Args:
+        host: Root widget used for the screenshot grab.
+        child: Nested widget to locate.
+
+    Returns:
+        QPoint: Center point in host coordinates.
+    """
+
+    top_left = child.mapTo(host, QPoint(0, 0))
+    return QPoint(
+        top_left.x() + max(1, child.width()) // 2,
+        top_left.y() + max(1, child.height()) // 2,
+    )
+
+
+def _draw_arrow_head(painter: QPainter, tip: QPointF, direction: QPointF) -> None:
+    """
+    Draws a filled arrow head at ``tip`` pointing along ``direction``.
+
+    Args:
+        painter: Active painter.
+        tip: Arrow tip point.
+        direction: Vector from label toward the tip.
+
+    Returns:
+        None
+    """
+
+    length = math.hypot(direction.x(), direction.y())
+    if length < 1.0:
+        return
+    unit = QPointF(direction.x() / length, direction.y() / length)
+    ortho = QPointF(-unit.y(), unit.x())
+    size = 10.0
+    wing = 5.0
+    base = tip - unit * size
+    polygon = QPolygonF(
+        [
+            tip,
+            base + ortho * wing,
+            base - ortho * wing,
+        ]
+    )
+    painter.drawPolygon(polygon)
+
+
+def _annotate_screenshot(
+    source: QPixmap,
+    callouts: list[Callout],
+    *,
+    pad_left: int = 220,
+    pad_top: int = 72,
+    pad_right: int = 240,
+    pad_bottom: int = 72,
+    title: str = "",
+) -> QPixmap:
+    """
+    Composites a UI screenshot with English arrow callouts around it.
+
+    Args:
+        source: Grabbed window or panel screenshot.
+        callouts: Labels with anchors in source coordinates.
+        pad_left: Left margin for labels.
+        pad_top: Top margin for labels.
+        pad_right: Right margin for labels.
+        pad_bottom: Bottom margin for labels.
+        title: Optional overview title drawn above the screenshot.
+
+    Returns:
+        QPixmap: Annotated overview image.
+    """
+
+    width = source.width() + pad_left + pad_right
+    height = source.height() + pad_top + pad_bottom
+    canvas = QPixmap(width, height)
+    canvas.fill(QColor("#12161f"))
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    if title:
+        painter.setPen(QColor("#f8fafc"))
+        painter.setFont(QFont("Sans Serif", 14, QFont.Weight.Bold))
+        painter.drawText(
+            QRect(16, 16, width - 32, 36),
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            title,
+        )
+
+    origin = QPoint(pad_left, pad_top)
+    painter.drawPixmap(origin, source)
+    painter.setPen(QPen(QColor("#334155"), 1))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRect(QRect(origin, source.size()).adjusted(0, 0, -1, -1))
+
+    accent = QColor("#e11d48")
+    label_bg = QColor(15, 23, 42, 235)
+    label_border = QColor("#fb7185")
+    label_font = QFont("Sans Serif", 10, QFont.Weight.Bold)
+    painter.setFont(label_font)
+    metrics = QFontMetrics(label_font)
+
+    for callout in callouts:
+        anchor = QPointF(origin.x() + callout.anchor.x(), origin.y() + callout.anchor.y())
+        text_rect = metrics.boundingRect(callout.label)
+        bubble = QRect(
+            callout.label_pos.x(),
+            callout.label_pos.y(),
+            text_rect.width() + 16,
+            text_rect.height() + 10,
+        )
+        bubble_center = QPointF(bubble.center())
+        painter.setPen(QPen(accent, 2))
+        painter.drawLine(bubble_center, anchor)
+        painter.setBrush(accent)
+        painter.setPen(Qt.PenStyle.NoPen)
+        _draw_arrow_head(painter, anchor, anchor - bubble_center)
+
+        painter.setBrush(label_bg)
+        painter.setPen(QPen(label_border, 1))
+        painter.drawRoundedRect(bubble, 6, 6)
+        painter.setPen(QColor("#fff1f2"))
+        painter.drawText(bubble, Qt.AlignmentFlag.AlignCenter, callout.label)
+
+    painter.end()
+    return canvas
 
 
 def _apply_theme(app: QApplication) -> None:
@@ -469,6 +620,74 @@ def generate_capture_panel(app: QApplication) -> Path:
     return _save_widget(panel, "capture-panel.png")
 
 
+def generate_capture_panel_annotated(app: QApplication) -> Path:
+    """
+    Captures an annotated Capture panel overview with English callouts.
+
+    Args:
+        app: Qt application instance.
+
+    Returns:
+        Path: Written screenshot path.
+    """
+
+    _apply_theme(app)
+    panel = CapturePanel()
+    panel.setWindowIcon(_capture_icon())
+    panel.setStyleSheet(build_capture_accent_stylesheet(THEME_DARK))
+    panel.set_video_capture_available(True)
+    panel.delay_slider.setValue(3)
+    panel._sync_delay_label_from_slider(3)  # pylint: disable=protected-access
+    panel.adjustSize()
+    panel.resize(max(panel.sizeHint().width(), 420), max(panel.sizeHint().height(), 220))
+    panel.show()
+    QApplication.processEvents()
+    source = panel.grab()
+
+    title = panel.findChild(QLabel, "titleLabel")
+    delay_anchor = _widget_center_in(panel, panel.delay_slider)
+    buttons_anchor = _widget_center_in(panel, panel.capture_fullscreen_button)
+    color_anchor = _widget_center_in(panel, panel.pick_color_button)
+    editor_anchor = _widget_center_in(panel, panel.open_editor_button)
+    title_anchor = (
+        _widget_center_in(panel, title)
+        if title is not None
+        else QPoint(source.width() // 2, 18)
+    )
+
+    pad_left, pad_top, pad_right, pad_bottom = 210, 70, 230, 80
+    callouts = [
+        Callout(title_anchor, "App title", QPoint(24, pad_top + 8)),
+        Callout(delay_anchor, "Capture delay", QPoint(24, pad_top + delay_anchor.y() - 8)),
+        Callout(
+            buttons_anchor,
+            "Capture actions",
+            QPoint(pad_left + source.width() + 24, pad_top + buttons_anchor.y() - 10),
+        ),
+        Callout(
+            color_anchor,
+            "Screen color picker",
+            QPoint(24, pad_top + color_anchor.y() - 8),
+        ),
+        Callout(
+            editor_anchor,
+            "Open Editor",
+            QPoint(pad_left + source.width() + 24, pad_top + editor_anchor.y() - 8),
+        ),
+    ]
+    annotated = _annotate_screenshot(
+        source,
+        callouts,
+        pad_left=pad_left,
+        pad_top=pad_top,
+        pad_right=pad_right,
+        pad_bottom=pad_bottom,
+        title="Capture Panel — UI Overview",
+    )
+    panel.close()
+    return _save_pixmap(annotated, "capture-panel-annotated.png")
+
+
 def generate_region_overlay(app: QApplication) -> Path:  # pylint: disable=unused-argument
     """
     Captures the region selection overlay screenshot.
@@ -557,6 +776,90 @@ def generate_editor_window(app: QApplication) -> Path:
     editor.canvas._apply_initial_screenshot_view()  # pylint: disable=protected-access
     QApplication.processEvents()
     return _save_widget(host, "editor-window.png")
+
+
+def generate_editor_window_annotated(app: QApplication) -> Path:
+    """
+    Captures an annotated Editor window overview with English callouts.
+
+    Args:
+        app: Qt application instance.
+
+    Returns:
+        Path: Written screenshot path.
+    """
+
+    _apply_theme(app)
+    editor = EditorWindow(_build_editor_sample_screenshot())
+    editor.canvas.load_annotations(_sample_image_annotations())
+    editor.canvas.set_tool("select")
+    items = editor.canvas._annotation_items()  # pylint: disable=protected-access
+    if items:
+        items[0].setSelected(True)
+        editor.canvas._refresh_selection_info()  # pylint: disable=protected-access
+    editor._property_tabs.setCurrentIndex(editor._PROPERTY_TAB_ARRANGE)  # pylint: disable=protected-access
+    host = _build_editor_host_with_tab(editor, "Capture Workflow")
+    host.resize(1320, 860)
+    editor.canvas.refresh_workspace_theme(THEME_DARK)
+    host.show()
+    QApplication.processEvents()
+    editor.canvas._apply_initial_screenshot_view()  # pylint: disable=protected-access
+    QApplication.processEvents()
+    source = host.grab()
+
+    tabs = host.centralWidget()
+    assert isinstance(tabs, QTabWidget)
+    toolbar = editor._toolbar_widget  # pylint: disable=protected-access
+    property_tabs = editor._property_tabs  # pylint: disable=protected-access
+    canvas = editor.canvas
+    status = editor.statusBar()
+
+    pad_left, pad_top, pad_right, pad_bottom = 200, 64, 220, 70
+    menu_anchor = QPoint(80, 18)
+    tab_anchor = _widget_center_in(host, tabs.tabBar())
+    tools_anchor = _widget_center_in(host, toolbar)
+    # Prefer the tool strip row near the top of the toolbar.
+    tools_anchor = QPoint(tools_anchor.x(), min(tools_anchor.y(), toolbar.mapTo(host, QPoint(0, 28)).y()))
+    props_anchor = _widget_center_in(host, property_tabs)
+    canvas_anchor = _widget_center_in(host, canvas)
+    document_anchor = QPoint(
+        canvas.mapTo(host, QPoint(canvas.width() // 2, canvas.height() // 2)).x(),
+        canvas.mapTo(host, QPoint(canvas.width() // 2, canvas.height() // 2)).y(),
+    )
+    status_anchor = _widget_center_in(host, status)
+    history_anchor = _widget_center_in(host, editor.history_undo_button)
+    zoom_anchor = _widget_center_in(host, editor.zoom_slider)
+
+    callouts = [
+        Callout(menu_anchor, "Menu bar", QPoint(24, 40)),
+        Callout(tab_anchor, "Editor tabs", QPoint(pad_left + source.width() + 24, 48)),
+        Callout(tools_anchor, "Tool strip", QPoint(24, pad_top + 70)),
+        Callout(history_anchor, "History", QPoint(pad_left + source.width() + 24, pad_top + 90)),
+        Callout(zoom_anchor, "Zoom controls", QPoint(pad_left + source.width() + 24, pad_top + 130)),
+        Callout(props_anchor, "Property tabs (Arrange)", QPoint(24, pad_top + props_anchor.y() - 10)),
+        Callout(canvas_anchor, "Workspace", QPoint(24, pad_top + canvas_anchor.y() - 10)),
+        Callout(
+            document_anchor,
+            "Document / canvas",
+            QPoint(pad_left + source.width() + 24, pad_top + document_anchor.y() - 10),
+        ),
+        Callout(
+            status_anchor,
+            "Status bar",
+            QPoint(pad_left + status_anchor.x() - 40, pad_top + source.height() + 18),
+        ),
+    ]
+    annotated = _annotate_screenshot(
+        source,
+        callouts,
+        pad_left=pad_left,
+        pad_top=pad_top,
+        pad_right=pad_right,
+        pad_bottom=pad_bottom,
+        title="Image Editor — UI Overview",
+    )
+    host.close()
+    return _save_pixmap(annotated, "editor-window-annotated.png")
 
 
 def generate_video_editor(app: QApplication) -> Path:
@@ -727,9 +1030,11 @@ def main() -> int:
 
     outputs = [
         generate_capture_panel(app),
+        generate_capture_panel_annotated(app),
         generate_region_overlay(app),
         generate_window_overlay(app),
         generate_editor_window(app),
+        generate_editor_window_annotated(app),
         generate_video_editor(app),
         generate_tray_menu(app),
         generate_first_time_setup(app),

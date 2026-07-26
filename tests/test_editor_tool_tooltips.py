@@ -126,6 +126,30 @@ class TestEditorToolTooltips(unittest.TestCase):
         self.assertIn("opacity", tip.lower())
         window.close()
 
+    def test_arrange_and_property_controls_have_english_tooltips(self) -> None:
+        """
+        Ensures Arrange/Export controls and property tabs expose English tooltips.
+        """
+
+        pixmap = QPixmap(80, 60)
+        pixmap.fill(QColor(220, 220, 220))
+        window = EditorWindow(pixmap)
+        required = {
+            window.rotate_cw_button: "Rotate selection 15 degrees clockwise.",
+            window.flip_h_button: "Flip selection horizontally.",
+            window.skew_apply_button: "Apply skew angles to the selection.",
+            window.geometry_apply_button: "Apply X/Y/W/H values to selected layer.",
+            window.export_scale_combo: "Export resolution scale",
+        }
+        for widget, expected_fragment in required.items():
+            tip = widget.toolTip().strip()
+            self.assertTrue(tip, f"Missing tooltip on {widget}")
+            self.assertIn(expected_fragment, tip)
+        arrange_tip = window._property_tabs.tabToolTip(window._PROPERTY_TAB_ARRANGE)  # pylint: disable=protected-access
+        self.assertIn("Arrange", arrange_tip)
+        self.assertIn("align", arrange_tip.lower())
+        window.close()
+
 
 if __name__ == "__main__":
     unittest.main()

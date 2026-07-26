@@ -190,6 +190,12 @@ Artifacts land in `dist/`. Tag `v1.2.0` (or run **Release Build** in GitHub Acti
 
 ## Screenshots
 
+### Capture Panel — UI Overview
+
+Labeled English callouts for the Capture window:
+
+![Snappix Capture Panel Annotated](docs/screenshots/capture-panel-annotated.png)
+
 ### Capture Panel
 
 ![Snappix Capture Panel](docs/screenshots/capture-panel.png)
@@ -201,6 +207,12 @@ Artifacts land in `dist/`. Tag `v1.2.0` (or run **Release Build** in GitHub Acti
 ### Window Overlay
 
 ![Snappix Window Overlay](docs/screenshots/capture-window-preview.png)
+
+### Image Editor — UI Overview
+
+Labeled English callouts for the Editor window:
+
+![Snappix Editor Window Annotated](docs/screenshots/editor-window-annotated.png)
 
 ### Image Editor (tabbed host)
 

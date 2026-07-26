@@ -201,6 +201,43 @@ class TestDesignerPhase1(unittest.TestCase):
         self.assertAlmostEqual(min(lefts), max(lefts), places=2)
         window.close()
 
+    def test_align_single_selection_to_document(self) -> None:
+        """
+        Ensures a single selected item can be aligned to the document edges.
+        """
+
+        window = EditorWindow(_solid_pixmap(300, 200))
+        model = AnnotationModel(
+            annotation_type="rect",
+            x=80.0,
+            y=60.0,
+            width=40.0,
+            height=30.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[255, 0, 0, 80],
+            stroke_width=2.0,
+        )
+        window.canvas.load_annotations([model])
+        item = window.canvas._annotation_items()[0]  # pylint: disable=protected-access
+        item.setSelected(True)
+        self.assertTrue(window.canvas.align_selected("left"))
+        self.assertAlmostEqual(
+            window.canvas._item_scene_rect(item).left(),  # pylint: disable=protected-access
+            0.0,
+            places=2,
+        )
+        self.assertTrue(window.canvas.align_selected("top"))
+        self.assertAlmostEqual(
+            window.canvas._item_scene_rect(item).top(),  # pylint: disable=protected-access
+            0.0,
+            places=2,
+        )
+        window._rotate_selection(15.0)
+        self.assertAlmostEqual(item.rotation(), 15.0, places=2)
+        window._flip_selection(horizontal=True)
+        self.assertTrue(transform_payload_from_item(item)["mirror_h"])
+        window.close()
+
     def test_transform_payload_round_trip(self) -> None:
         """
         Ensures rotation and mirror survive annotation serialization.
