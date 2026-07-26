@@ -1,6 +1,6 @@
 # Snappix
 
-Snappix is a screenshot and annotation app inspired by SnagIt.  
+Snappix is a screenshot and annotation app for Linux and Windows.  
 Capture quickly, annotate in a tabbed editor, record screen regions as video, and keep projects editable as `.sfp` / `.sfpv` files. Primary platform is **Linux**; **Windows 10/11** is supported as an MVP.
 
 **[Technical Documentation](docs/TECHNICAL.md)** — architecture, modules, config schema, capture pipeline, session workspace, video editor

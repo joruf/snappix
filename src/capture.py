@@ -197,7 +197,7 @@ class DesktopSnapshot:
 
 class CapturePanel(QWidget):
     """
-    SnagIt-like compact panel to start screen captures.
+    Compact panel to start screen captures.
     """
 
     capture_requested = Signal(CaptureRequest)

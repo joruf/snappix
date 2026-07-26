@@ -57,7 +57,7 @@ Architecture: $ARCH
 Maintainer: Joachim Ruf <info@loresoft.de>
 Depends: python3, python3-venv, python3-pip, xdotool, x11-utils
 Description: Snappix screenshot editor
- Linux screenshot and annotation tool inspired by SnagIt.
+ Linux screenshot and annotation tool.
 EOF
 
 mkdir -p "$DIST_DIR"
