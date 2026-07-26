@@ -1066,6 +1066,14 @@ class AppController:
         from src.video_editor_window import VideoEditorWindow
 
         editor = VideoEditorWindow(video_path, width, height)
+        editor.apply_tool_stroke_widths(
+            self.config.tool_stroke_widths,
+            emit_signal=False,
+        )
+        editor.apply_tool_stroke_styles(
+            self.config.tool_stroke_styles,
+            emit_signal=False,
+        )
         editor.set_recovery_path(recovery_path or create_video_tab_recovery_path())
         editor.prepare_recovery_assets()
         editor.import_image_tab_requested.connect(
@@ -1196,6 +1204,14 @@ class AppController:
             )
         for editor in list(self.video_editors):
             self._apply_resize_handle_settings(editor)
+            editor.apply_tool_stroke_widths(
+                self.config.tool_stroke_widths,
+                emit_signal=False,
+            )
+            editor.apply_tool_stroke_styles(
+                self.config.tool_stroke_styles,
+                emit_signal=False,
+            )
 
     def _apply_resize_handle_settings(self, editor) -> None:
         """

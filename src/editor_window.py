@@ -577,18 +577,9 @@ class EditorWindow(QMainWindow):
         root_layout.setContentsMargins(4, 1, 4, 1)
         root_layout.setSpacing(1)
 
-        palette_colors = [
-            QColor("#e74c3c"),
-            QColor("#f39c12"),
-            QColor("#f1c40f"),
-            QColor("#2ecc71"),
-            QColor("#1abc9c"),
-            QColor("#3498db"),
-            QColor("#9b59b6"),
-            QColor("#ecf0f1"),
-            QColor("#2c3e50"),
-            QColor("#000000"),
-        ]
+        from src.draw_style_defaults import STYLE_PALETTE_COLORS
+
+        palette_colors = STYLE_PALETTE_COLORS
 
         strip = FlowLayoutWidget(
             bar,
@@ -2821,10 +2812,28 @@ class EditorWindow(QMainWindow):
             None
         """
 
+        from src.draw_style_defaults import apply_tool_default_colors
+
         self._active_tool = tool
         for key, button in self._tool_buttons.items():
             button.setChecked(key == tool)
         self.canvas.set_tool(tool)
+        style = self.canvas.style_state()
+        if apply_tool_default_colors(tool, style):
+            self._current_stroke_color = QColor(style.stroke_color)
+            self._current_fill_color = QColor(style.fill_color)
+            self._update_color_button_preview(self.stroke_button, style.stroke_color)
+            self._update_color_button_preview(self.fill_button, style.fill_color)
+            self._set_alpha_slider_value(
+                self.stroke_alpha_slider,
+                self.stroke_alpha_label,
+                style.stroke_color,
+            )
+            self._set_alpha_slider_value(
+                self.fill_alpha_slider,
+                self.fill_alpha_label,
+                style.fill_color,
+            )
         if tool in WIDTH_AWARE_TOOLS:
             minimum = 1 if tool in BRUSH_WIDTH_TOOLS else 0
             resolved = normalize_stroke_width(

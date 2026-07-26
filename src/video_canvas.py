@@ -5,12 +5,13 @@ Video playback and time-ranged annotation canvas for the Snappix video editor.
 from __future__ import annotations
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSizeF, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter
+from PySide6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
     QGraphicsEllipseItem,
     QGraphicsItem,
+    QGraphicsLineItem,
     QGraphicsPixmapItem,
     QGraphicsRectItem,
     QGraphicsScene,
@@ -28,11 +29,16 @@ from src.annotation_items import (
     StrokeLineItem,
     StyleState,
     annotation_from_item,
+    apply_stroke_width_to_pen,
     configure_graphics_item,
     create_pen,
+    create_stroke_pen,
     list_to_color,
+    normalize_stroke_style,
+    stroke_style_to_qt,
 )
-from src.annotation_shapes import TEXT_STYLE_BUBBLE, StyledTextItem
+from src.annotation_shapes import TEXT_STYLE_BUBBLE, StepBadgeItem, StyledTextItem
+from src.draw_style_defaults import create_default_style_state
 from src.crop_item import CropSelectionItem
 from src.editor_canvas import (
     DRAG_LINE_TOOLS,
@@ -152,9 +158,7 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
     if annotation.annotation_type in PATH_SHAPE_KINDS:
         item = PathShapeItem(annotation.annotation_type, rect)
         item.setPen(pen)
-        if annotation.annotation_type == Tool.HIGHLIGHT:
-            item.setBrush(list_to_color(annotation.fill_rgba) if annotation.fill_rgba else QColor(255, 235, 59, 110))
-        elif annotation.annotation_type in STAMP_MARK_TYPES:
+        if annotation.annotation_type in STAMP_MARK_TYPES:
             item.setBrush(style.stroke_color)
         else:
             item.setBrush(style.fill_color)
@@ -289,17 +293,7 @@ class VideoCanvas(QGraphicsView):
         self._player.mediaStatusChanged.connect(self._on_media_status_changed)
 
         self._tool = Tool.SELECT
-        self._style = StyleState(
-            stroke_color=QColor(231, 76, 60, 255),
-            fill_color=QColor(231, 76, 60, 70),
-            text_color=QColor(44, 62, 80, 255),
-            stroke_width=3,
-            font_size=16,
-            font_family="",
-            font_bold=False,
-            font_italic=False,
-            font_underline=False,
-        )
+        self._style = create_default_style_state()
 
         self._annotations: list[VideoAnnotationModel] = []
         self._visible_items: dict[str, QGraphicsItem] = {}
@@ -599,24 +593,13 @@ class VideoCanvas(QGraphicsView):
             None
         """
 
-        changed = False
-        for item in self._scene.selectedItems():
-            if item is self._resize_overlay_item or item is self._video_item:
-                continue
-            if target == "stroke" and hasattr(item, "setPen"):
-                pen = item.pen()
-                pen.setColor(color)
-                item.setPen(pen)
-                changed = True
-            elif target == "fill" and hasattr(item, "setBrush"):
-                item.setBrush(color)
-                changed = True
-            elif target == "text" and hasattr(item, "setDefaultTextColor"):
-                item.setDefaultTextColor(color)
-                changed = True
-        if changed and self._sync_visible_items_to_models():
-            self.content_changed.emit()
-        self._refresh_selection_style()
+        kwargs = {
+            "stroke": {"stroke_color": color},
+            "fill": {"fill_color": color},
+            "text": {"text_color": color},
+        }.get(target, {})
+        if kwargs:
+            self.update_style(**kwargs, apply_to_selection=True, update_active_style=True)
 
     def set_style(self, style: StyleState) -> None:
         """
@@ -630,6 +613,202 @@ class VideoCanvas(QGraphicsView):
         """
 
         self._style = style
+
+    def update_style(
+        self,
+        stroke_color: QColor | None = None,
+        fill_color: QColor | None = None,
+        text_color: QColor | None = None,
+        stroke_width: float | None = None,
+        font_size: int | None = None,
+        font_family: str | None = None,
+        font_bold: bool | None = None,
+        font_italic: bool | None = None,
+        font_underline: bool | None = None,
+        letter_spacing: float | None = None,
+        line_spacing_factor: float | None = None,
+        box_padding: float | None = None,
+        corner_radius: float | None = None,
+        stroke_style: str | None = None,
+        text_style: str | None = None,
+        *,
+        apply_to_selection: bool = True,
+        update_active_style: bool = True,
+    ) -> None:
+        """
+        Updates active style options and selected item style.
+
+        Args:
+            stroke_color: Optional new stroke color.
+            fill_color: Optional new fill color.
+            text_color: Optional new text color.
+            stroke_width: Optional new stroke width.
+            font_size: Optional new font size.
+            font_family: Optional new font family.
+            font_bold: Optional bold state for text.
+            font_italic: Optional italic state for text.
+            font_underline: Optional underline state for text.
+            letter_spacing: Optional letter spacing in pixels.
+            line_spacing_factor: Optional line-spacing multiplier.
+            box_padding: Optional text container padding in pixels.
+            corner_radius: Optional text container corner radius in pixels.
+            stroke_style: Optional line style name.
+            text_style: Optional text container style.
+            apply_to_selection: When False, only updates the active draw style.
+            update_active_style: When False, only updates selected annotations.
+
+        Returns:
+            None
+        """
+
+        if update_active_style:
+            if stroke_color is not None:
+                self._style.stroke_color = stroke_color
+            if fill_color is not None:
+                self._style.fill_color = fill_color
+            if stroke_width is not None:
+                self._style.stroke_width = stroke_width
+            if font_size is not None:
+                self._style.font_size = font_size
+            if text_color is not None:
+                self._style.text_color = text_color
+            if font_family is not None and font_family.strip():
+                self._style.font_family = font_family.strip()
+            if font_bold is not None:
+                self._style.font_bold = bool(font_bold)
+            if font_italic is not None:
+                self._style.font_italic = bool(font_italic)
+            if font_underline is not None:
+                self._style.font_underline = bool(font_underline)
+            if letter_spacing is not None:
+                self._style.letter_spacing = float(letter_spacing)
+            if line_spacing_factor is not None:
+                self._style.line_spacing_factor = max(0.7, float(line_spacing_factor))
+            if box_padding is not None:
+                self._style.box_padding = max(0.0, float(box_padding))
+            if corner_radius is not None:
+                self._style.corner_radius = max(0.0, float(corner_radius))
+            if stroke_style is not None:
+                self._style.stroke_style = normalize_stroke_style(stroke_style)
+            if text_style is not None:
+                self._style.text_style = text_style
+
+        if not apply_to_selection:
+            return
+
+        changed = False
+        for item in self._scene.selectedItems():
+            if item is self._resize_overlay_item or item is self._video_item:
+                continue
+            annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
+            if bool(item.data(ITEM_ROLE_LOCKED) or False):
+                continue
+            if annotation_type in SHAPE_RECT_TYPES:
+                shape_item = item
+                if annotation_type in STAMP_MARK_TYPES:
+                    mark_color = stroke_color if stroke_color is not None else fill_color
+                    if mark_color is not None:
+                        shape_item.setBrush(mark_color)
+                        shape_item.setPen(create_stroke_pen(mark_color, 0.0))
+                    changed = True
+                    continue
+                if stroke_color is not None:
+                    pen = shape_item.pen()
+                    pen.setColor(stroke_color)
+                    shape_item.setPen(pen)
+                if fill_color is not None:
+                    shape_item.setBrush(fill_color)
+                if stroke_width is not None:
+                    shape_item.setPen(
+                        apply_stroke_width_to_pen(
+                            shape_item.pen(),
+                            stroke_width,
+                            stroke_style=stroke_style,
+                        )
+                    )
+                elif stroke_style is not None and shape_item.pen().style() != Qt.PenStyle.NoPen:
+                    pen = shape_item.pen()
+                    pen.setStyle(stroke_style_to_qt(stroke_style))
+                    shape_item.setPen(pen)
+                changed = True
+            elif annotation_type == "step" and isinstance(item, StepBadgeItem):
+                if stroke_color is not None:
+                    pen = item.pen()
+                    pen.setColor(stroke_color)
+                    item.setPen(pen)
+                if fill_color is not None:
+                    item.setBrush(fill_color)
+                if stroke_width is not None:
+                    item.setPen(
+                        apply_stroke_width_to_pen(
+                            item.pen(),
+                            stroke_width,
+                            stroke_style=stroke_style,
+                        )
+                    )
+                changed = True
+            elif annotation_type in SHAPE_LINE_TYPES:
+                line_item = item
+                pen = line_item.pen()
+                if stroke_color is not None:
+                    pen.setColor(stroke_color)
+                if stroke_width is not None:
+                    pen = apply_stroke_width_to_pen(
+                        pen,
+                        stroke_width,
+                        stroke_style=stroke_style,
+                    )
+                elif stroke_style is not None and pen.style() != Qt.PenStyle.NoPen:
+                    pen.setStyle(stroke_style_to_qt(stroke_style))
+                line_item.setPen(pen)
+                changed = True
+            elif annotation_type in (Tool.TEXT, Tool.CALLOUT) and isinstance(item, StyledTextItem):
+                if text_color is not None:
+                    item.set_colors(text_color=text_color)
+                if stroke_color is not None:
+                    item.set_colors(stroke_color=stroke_color)
+                if fill_color is not None:
+                    item.set_colors(fill_color=fill_color)
+                if stroke_width is not None:
+                    item.set_stroke_width(float(stroke_width))
+                if text_style is not None:
+                    item.set_text_style(text_style)
+                if (
+                    font_size is not None
+                    or font_family is not None
+                    or font_bold is not None
+                    or font_italic is not None
+                    or font_underline is not None
+                ):
+                    font = QFont(item.font())
+                    if font_size is not None:
+                        font.setPointSize(max(1, int(font_size)))
+                    if font_family is not None and font_family.strip():
+                        font.setFamily(font_family.strip())
+                    if font_bold is not None:
+                        font.setBold(bool(font_bold))
+                    if font_italic is not None:
+                        font.setItalic(bool(font_italic))
+                    if font_underline is not None:
+                        font.setUnderline(bool(font_underline))
+                    item.set_font(font)
+                if (
+                    letter_spacing is not None
+                    or line_spacing_factor is not None
+                    or box_padding is not None
+                    or corner_radius is not None
+                ):
+                    item.set_layout_options(
+                        letter_spacing=letter_spacing,
+                        line_spacing_factor=line_spacing_factor,
+                        box_padding=box_padding,
+                        corner_radius=corner_radius,
+                    )
+                changed = True
+
+        if changed and self._sync_visible_items_to_models():
+            self.content_changed.emit()
+        self._refresh_selection_style()
 
     def set_annotations(self, annotations: list[VideoAnnotationModel]) -> None:
         """
@@ -1058,10 +1237,15 @@ class VideoCanvas(QGraphicsView):
             return
 
         if self._tool == Tool.STEP:
-            from src.annotation_shapes import StepBadgeItem
+            from src.annotation_items import create_stroke_pen
 
             badge = StepBadgeItem(self._next_step_number())
-            badge.setPen(create_pen(self._style))
+            badge.setPen(
+                create_stroke_pen(
+                    QColor(self._style.stroke_color),
+                    max(1.0, float(self._style.stroke_width) or 2.0),
+                )
+            )
             badge.setBrush(self._style.fill_color)
             badge.setPos(
                 scene_pos.x() - badge.rect().width() / 2.0,
@@ -1214,12 +1398,9 @@ class VideoCanvas(QGraphicsView):
 
             fill = self._style.fill_color
             stroke_pen = pen
-            if self._tool == Tool.HIGHLIGHT:
-                fill = QColor(255, 235, 59, 110)
-                stroke_pen = create_stroke_pen(QColor(0, 0, 0, 0), 0.0)
-            elif self._tool in STAMP_MARK_TYPES:
+            if self._tool in STAMP_MARK_TYPES:
                 fill = self._style.stroke_color
-                stroke_pen = create_stroke_pen(QColor(0, 0, 0, 0), 0.0)
+                stroke_pen = create_stroke_pen(QColor(self._style.stroke_color), 0.0)
             item = PathShapeItem(self._tool, QRectF(scene_pos, scene_pos))
             item.setPen(stroke_pen)
             item.setBrush(fill)
@@ -1260,7 +1441,7 @@ class VideoCanvas(QGraphicsView):
         ):
             rect = QRectF(start, scene_pos).normalized()
             self._preview_item.setRect(rect)
-        elif isinstance(self._preview_item, StrokeLineItem):
+        elif isinstance(self._preview_item, QGraphicsLineItem):
             self._preview_item.setLine(start.x(), start.y(), scene_pos.x(), scene_pos.y())
 
     def _finalize_annotation(

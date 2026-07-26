@@ -311,23 +311,9 @@ class EditorCanvas(QGraphicsView):
         self.refresh_workspace_theme()
 
         self._tool = Tool.SELECT
-        self._style = StyleState(
-            stroke_color=QColor(231, 76, 60, 255),
-            fill_color=QColor(231, 76, 60, 80),
-            text_color=QColor(44, 62, 80, 255),
-            stroke_width=6.0,
-            font_size=16,
-            font_family="Sans Serif",
-            font_bold=False,
-            font_italic=False,
-            font_underline=False,
-            letter_spacing=0.0,
-            line_spacing_factor=1.2,
-            box_padding=10.0,
-            corner_radius=6.0,
-            stroke_style=STROKE_STYLE_SOLID,
-            text_style=TEXT_STYLE_PLAIN,
-        )
+        from src.draw_style_defaults import create_default_style_state
+
+        self._style = create_default_style_state()
         self._rect_corner_radius = 0.0
         self._zoom_factor = 1.0
         self._initial_view_pending = False
@@ -728,6 +714,16 @@ class EditorCanvas(QGraphicsView):
             self._zoom_factor = 1.0
         self._initial_view_pending = False
         self.zoom_changed.emit(self._zoom_factor)
+
+    def style_state(self) -> StyleState:
+        """
+        Returns the active draw style used for new annotations.
+
+        Returns:
+            StyleState: Current style state.
+        """
+
+        return self._style
 
     def set_tool(self, tool: str) -> None:
         """

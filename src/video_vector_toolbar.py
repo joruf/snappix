@@ -47,18 +47,7 @@ from src.tool_reference_dialog import ToolReferenceDialog
 if TYPE_CHECKING:
     from src.video_editor_window import VideoEditorWindow
 
-PALETTE_COLORS = [
-    QColor("#e74c3c"),
-    QColor("#f39c12"),
-    QColor("#f1c40f"),
-    QColor("#2ecc71"),
-    QColor("#1abc9c"),
-    QColor("#3498db"),
-    QColor("#9b59b6"),
-    QColor("#ecf0f1"),
-    QColor("#2c3e50"),
-    QColor("#000000"),
-]
+from src.draw_style_defaults import STYLE_PALETTE_COLORS, apply_tool_default_colors
 
 VIDEO_TOOL_CATEGORIES: list[tuple[str, list[tuple[str, str]]]] = [
     ("Select", [(Tool.SELECT, "Select")]),
@@ -271,6 +260,9 @@ class VideoVectorToolbar:
         help_layout.addWidget(help_button)
         strip_widgets.append(help_box)
 
+        if hasattr(self._host, "build_history_strip_widgets"):
+            strip_widgets.extend(self._host.build_history_strip_widgets(strip))
+
         if hasattr(self._host, "build_playback_zoom_strip_widgets"):
             strip_widgets.extend(self._host.build_playback_zoom_strip_widgets(strip))
 
@@ -377,16 +369,21 @@ class VideoVectorToolbar:
                 return True
         return False
 
-    def on_content_changed(self) -> None:
+    def on_content_changed(self, action_label: str | None = None) -> None:
         """
         Applies one-shot tool completion after canvas edits.
+
+        Args:
+            action_label: Optional action label already consumed by the host.
 
         Returns:
             None
         """
 
-        action_label = self._canvas.consume_last_action_label()
-        self._apply_one_shot_tool_completion(action_label)
+        resolved_label = action_label
+        if resolved_label is None:
+            resolved_label = self._canvas.consume_last_action_label()
+        self._apply_one_shot_tool_completion(resolved_label)
 
     def on_selection_style_changed(self, payload: dict[str, Any]) -> None:
         """
@@ -401,6 +398,47 @@ class VideoVectorToolbar:
 
         self._selection_type = str(payload.get("type") or "").strip().lower()
         self._update_style_color_visibility(selection_type=self._selection_type)
+        if self._selection_type in {"", "document"}:
+            return
+
+        stroke_rgba = payload.get("stroke_rgba")
+        if isinstance(stroke_rgba, list) and len(stroke_rgba) == 4:
+            self._set_target_color(
+                "stroke",
+                QColor(
+                    int(stroke_rgba[0]),
+                    int(stroke_rgba[1]),
+                    int(stroke_rgba[2]),
+                    int(stroke_rgba[3]),
+                ),
+                apply_to_canvas=False,
+            )
+
+        fill_rgba = payload.get("fill_rgba")
+        if isinstance(fill_rgba, list) and len(fill_rgba) == 4:
+            self._set_target_color(
+                "fill",
+                QColor(
+                    int(fill_rgba[0]),
+                    int(fill_rgba[1]),
+                    int(fill_rgba[2]),
+                    int(fill_rgba[3]),
+                ),
+                apply_to_canvas=False,
+            )
+
+        text_rgba = payload.get("text_rgba")
+        if isinstance(text_rgba, list) and len(text_rgba) == 4:
+            self._set_target_color(
+                "text",
+                QColor(
+                    int(text_rgba[0]),
+                    int(text_rgba[1]),
+                    int(text_rgba[2]),
+                    int(text_rgba[3]),
+                ),
+                apply_to_canvas=False,
+            )
 
     def show_tools_reference(self) -> None:
         """
@@ -425,7 +463,7 @@ class VideoVectorToolbar:
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)
-        for color in PALETTE_COLORS:
+        for color in STYLE_PALETTE_COLORS:
             button = QPushButton()
             button.setFixedSize(18, 18)
             button.setObjectName("paletteSwatch")
@@ -495,7 +533,13 @@ class VideoVectorToolbar:
         label.setText(f"{value}%")
         self._set_target_color(target, color)
 
-    def _set_target_color(self, target: str, color: QColor) -> None:
+    def _set_target_color(
+        self,
+        target: str,
+        color: QColor,
+        *,
+        apply_to_canvas: bool = True,
+    ) -> None:
         style = self._host.style_state()
         if target == "stroke":
             style.stroke_color = QColor(color)
@@ -506,8 +550,14 @@ class VideoVectorToolbar:
         else:
             style.text_color = QColor(color)
             self.text_color_button.setStyleSheet(color_preview_button_stylesheet(color))
-        self._canvas.set_style(style)
-        self._canvas.apply_style_to_selection(target, color)
+        if apply_to_canvas:
+            kwargs = {
+                "stroke": {"stroke_color": QColor(color)},
+                "fill": {"fill_color": QColor(color)},
+                "text": {"text_color": QColor(color)},
+            }[target]
+            self._canvas.update_style(**kwargs)
+        self._sync_style_buttons()
 
     def _resolve_style_color_targets(
         self,
@@ -722,17 +772,88 @@ class VideoVectorToolbar:
         for key, button in self._tool_buttons.items():
             button.setChecked(key == tool)
         self._canvas.set_tool(tool)
+        style = self._host.style_state()
+        if apply_tool_default_colors(tool, style):
+            self._canvas.set_style(style)
+            self._sync_style_buttons()
         if tool in WIDTH_AWARE_TOOLS:
             resolved = normalize_stroke_width(self._tool_stroke_widths.get(tool, 6), minimum=0)
-            style = self._host.style_state()
             style.stroke_width = float(resolved)
             self._canvas.set_style(style)
         if tool in STYLE_AWARE_TOOLS:
-            style = self._host.style_state()
             style.stroke_style = self._tool_stroke_styles.get(tool, STROKE_STYLE_SOLID)
             self._canvas.set_style(style)
         self._update_style_color_visibility(tool=tool)
         self._host.statusBar().showMessage(f"Tool: {tool}")
+
+    def apply_tool_stroke_widths(
+        self,
+        widths: dict[str, int] | None,
+        *,
+        emit_signal: bool = False,
+    ) -> None:
+        """
+        Restores persisted per-tool stroke widths for the video toolbar.
+
+        Args:
+            widths: Tool id to width mapping.
+            emit_signal: Unused; kept for parity with the image editor API.
+
+        Returns:
+            None
+        """
+
+        _ = emit_signal
+        self._tool_stroke_widths = normalize_tool_stroke_widths(widths)
+        for tool_key, slider in self._tool_width_sliders.items():
+            resolved = self._tool_stroke_widths.get(tool_key, 6)
+            if slider.value() != resolved:
+                slider.blockSignals(True)
+                slider.setValue(resolved)
+                slider.blockSignals(False)
+        if self._active_tool in WIDTH_AWARE_TOOLS:
+            style = self._host.style_state()
+            style.stroke_width = float(
+                normalize_stroke_width(
+                    self._tool_stroke_widths.get(self._active_tool, 6),
+                    minimum=0,
+                )
+            )
+            self._canvas.set_style(style)
+
+    def apply_tool_stroke_styles(
+        self,
+        styles: dict[str, str] | None,
+        *,
+        emit_signal: bool = False,
+    ) -> None:
+        """
+        Restores persisted per-tool stroke styles for the video toolbar.
+
+        Args:
+            styles: Tool id to stroke-style mapping.
+            emit_signal: Unused; kept for parity with the image editor API.
+
+        Returns:
+            None
+        """
+
+        _ = emit_signal
+        self._tool_stroke_styles = normalize_tool_stroke_styles(styles)
+        for tool_key, combo in self._tool_style_combos.items():
+            resolved = self._tool_stroke_styles.get(tool_key, STROKE_STYLE_SOLID)
+            index = combo.findData(resolved)
+            if index >= 0 and combo.currentIndex() != index:
+                combo.blockSignals(True)
+                combo.setCurrentIndex(index)
+                combo.blockSignals(False)
+        if self._active_tool in STYLE_AWARE_TOOLS:
+            style = self._host.style_state()
+            style.stroke_style = self._tool_stroke_styles.get(
+                self._active_tool,
+                STROKE_STYLE_SOLID,
+            )
+            self._canvas.set_style(style)
 
     def sync_tool_from_canvas(self, tool_id: str) -> None:
         """

@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
+from typing import Any
 
 from PySide6.QtCore import QEvent, Qt, QSize, Signal
-from PySide6.QtGui import QAction, QColor
+from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
@@ -27,7 +29,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from src.annotation_items import StyleState
+from src.draw_style_defaults import create_default_style_state
 from src.constants import APP_NAME
 from src.flow_layout import FlowLayoutWidget
 from src.timeline_widget import TimelineWidget
@@ -78,23 +80,21 @@ class VideoEditorWindow(QMainWindow):
         self._autosave_flushing = False
         self._is_playing = False
         self._annotations: list[VideoAnnotationModel] = []
-        self._style = StyleState(
-            stroke_color=QColor(231, 76, 60, 255),
-            fill_color=QColor(231, 76, 60, 70),
-            text_color=QColor(44, 62, 80, 255),
-            stroke_width=3,
-            font_size=16,
-            font_family="",
-            font_bold=False,
-            font_italic=False,
-            font_underline=False,
-        )
+        self._style = create_default_style_state()
+        self._record_history = True
+        self._history: list[dict[str, Any]] = []
+        self._history_labels: list[str] = []
+        self._history_index = -1
+        self._pending_history_label: str | None = None
+        self._syncing_history_list = False
 
         self.canvas = VideoCanvas()
         self.canvas.set_video_size(video_width, video_height)
         self.canvas.set_style(self._style)
         self.canvas.set_annotations(self._annotations)
         self.canvas.load_video(video_path)
+
+        self._build_menu()
 
         self._vector_toolbar = VideoVectorToolbar(self)
         toolbar_widget = self._vector_toolbar.build()
@@ -112,6 +112,9 @@ class VideoEditorWindow(QMainWindow):
         self.timeline.set_annotations(self._annotations)
         self.timeline.seek_requested.connect(self.canvas.set_position)
         self.timeline.annotation_time_changed.connect(self._on_annotation_time_changed)
+        self.timeline.annotation_time_change_committed.connect(
+            self._on_annotation_time_committed
+        )
 
         timeline_pan_left = QToolButton()
         timeline_pan_left.setText("◀")
@@ -140,10 +143,10 @@ class VideoEditorWindow(QMainWindow):
         layout.addWidget(timeline_row, 1)
         self.setCentralWidget(central)
 
-        self._build_menu()
         self.setStatusBar(QStatusBar(self))
         self.statusBar().showMessage("Ready")
         self._autosave_timer = self.startTimer(30_000)
+        self._push_history_state()
 
     def _build_menu(self) -> None:
         """
@@ -189,6 +192,20 @@ class VideoEditorWindow(QMainWindow):
         import_image_action.triggered.connect(self.import_image)
         edit_menu.addAction(import_image_action)
 
+        edit_menu.addSeparator()
+
+        self.undo_action = QAction("Undo", self)
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
+        self.undo_action.setToolTip("Undo the last change.")
+        self.undo_action.triggered.connect(self.undo)
+        edit_menu.addAction(self.undo_action)
+
+        self.redo_action = QAction("Redo", self)
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
+        self.redo_action.setToolTip("Redo the last undone change.")
+        self.redo_action.triggered.connect(self.redo)
+        edit_menu.addAction(self.redo_action)
+
     def import_image(self) -> None:
         """
         Prompts for one image file and inserts it as a time-ranged overlay.
@@ -227,6 +244,44 @@ class VideoEditorWindow(QMainWindow):
 
         return self._style
 
+    def apply_tool_stroke_widths(
+        self,
+        widths: dict[str, int] | None,
+        *,
+        emit_signal: bool = False,
+    ) -> None:
+        """
+        Restores persisted per-tool stroke widths for the vector toolbar.
+
+        Args:
+            widths: Tool id to width mapping.
+            emit_signal: Unused; kept for parity with the image editor API.
+
+        Returns:
+            None
+        """
+
+        self._vector_toolbar.apply_tool_stroke_widths(widths, emit_signal=emit_signal)
+
+    def apply_tool_stroke_styles(
+        self,
+        styles: dict[str, str] | None,
+        *,
+        emit_signal: bool = False,
+    ) -> None:
+        """
+        Restores persisted per-tool stroke styles for the vector toolbar.
+
+        Args:
+            styles: Tool id to stroke-style mapping.
+            emit_signal: Unused; kept for parity with the image editor API.
+
+        Returns:
+            None
+        """
+
+        self._vector_toolbar.apply_tool_stroke_styles(styles, emit_signal=emit_signal)
+
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         """
         Forwards toolbar button events to the vector toolbar controller.
@@ -238,6 +293,51 @@ class VideoEditorWindow(QMainWindow):
         if self._vector_toolbar.handle_event_filter(watched, event):
             return True
         return super().eventFilter(watched, event)
+
+    def build_history_strip_widgets(self, parent: QWidget) -> list[QWidget]:
+        """
+        Builds the History group for the shared editor tool strip.
+
+        Args:
+            parent: Parent flow strip widget.
+
+        Returns:
+            list[QWidget]: History category box widgets.
+        """
+
+        history_box = QGroupBox("History", parent)
+        history_box.setObjectName("toolCategoryBox")
+        history_box.setSizePolicy(
+            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Maximum,
+        )
+        history_layout = QHBoxLayout(history_box)
+        history_layout.setContentsMargins(4, 10, 4, 4)
+        history_layout.setSpacing(4)
+
+        self.history_undo_button = QPushButton("Undo", history_box)
+        self.history_undo_button.setToolTip("Undo the last change.")
+        self.history_undo_button.clicked.connect(self.undo)
+        history_layout.addWidget(self.history_undo_button)
+
+        self.history_redo_button = QPushButton("Redo", history_box)
+        self.history_redo_button.setToolTip("Redo the last undone change.")
+        self.history_redo_button.clicked.connect(self.redo)
+        history_layout.addWidget(self.history_redo_button)
+
+        self.history_list_combo = QComboBox(history_box)
+        self.history_list_combo.setMinimumWidth(160)
+        self.history_list_combo.setMaxVisibleItems(16)
+        self.history_list_combo.setToolTip("History entries with action names.")
+        self.history_list_combo.currentIndexChanged.connect(self._on_history_entry_selected)
+        history_layout.addWidget(self.history_list_combo)
+
+        self.history_status_label = QLabel("1/1", history_box)
+        self.history_status_label.setToolTip("Current history position.")
+        history_layout.addWidget(self.history_status_label)
+
+        self._update_undo_redo_actions()
+        return [history_box]
 
     def build_playback_zoom_strip_widgets(self, parent: QWidget) -> list[QWidget]:
         """
@@ -416,13 +516,16 @@ class VideoEditorWindow(QMainWindow):
 
     def _on_canvas_content_changed(self) -> None:
         """
-        Applies one-shot tool behavior and marks the tab dirty.
+        Captures history state when canvas content changes.
 
         Returns:
             None
         """
 
-        self._vector_toolbar.on_content_changed()
+        action_label = self.canvas.consume_last_action_label()
+        self._set_next_history_label(action_label)
+        self._push_history_state()
+        self._vector_toolbar.on_content_changed(action_label)
         self._mark_dirty()
 
     def _on_zoom_changed(self, zoom_factor: float) -> None:
@@ -648,6 +751,206 @@ class VideoEditorWindow(QMainWindow):
         self._current_project_path = source_path.strip()
         self.canvas.refresh_visible_items()
         self.timeline.refresh()
+        self._reset_history()
+
+    def _serialize_state(self) -> dict[str, Any]:
+        """
+        Serializes the current annotation state for undo history.
+
+        Returns:
+            dict[str, Any]: Snapshot payload.
+        """
+
+        return {
+            "annotations": [
+                annotation.to_dict()
+                for annotation in self._annotations
+            ],
+        }
+
+    def _restore_state(self, snapshot: dict[str, Any]) -> None:
+        """
+        Restores annotation state from one history snapshot.
+
+        Args:
+            snapshot: Stored snapshot payload.
+
+        Returns:
+            None
+        """
+
+        annotations = [
+            VideoAnnotationModel.from_dict(item)
+            for item in list(snapshot.get("annotations", []))
+            if isinstance(item, dict)
+        ]
+
+        self._record_history = False
+        self._annotations.clear()
+        self._annotations.extend(annotations)
+        self.canvas.set_annotations(self._annotations)
+        self.timeline.set_annotations(self._annotations)
+        self.timeline.refresh()
+        self._record_history = True
+
+    def _reset_history(self) -> None:
+        """
+        Clears undo history and stores the current state as the initial entry.
+
+        Returns:
+            None
+        """
+
+        self._history.clear()
+        self._history_labels.clear()
+        self._history_index = -1
+        self._pending_history_label = None
+        self._push_history_state()
+
+    def _set_next_history_label(self, label: str) -> None:
+        """
+        Sets a pending label for the next history snapshot.
+
+        Args:
+            label: Action label shown in the history list.
+
+        Returns:
+            None
+        """
+
+        self._pending_history_label = label.strip() or "Edit"
+
+    def _consume_history_label(self) -> str:
+        """
+        Resolves the next history label from pending state or a fallback.
+
+        Returns:
+            str: Chosen history label.
+        """
+
+        if self._pending_history_label:
+            label = self._pending_history_label
+            self._pending_history_label = None
+            return label
+        return "Edit"
+
+    def _push_history_state(self) -> None:
+        """
+        Adds the current state to the undo history.
+
+        Returns:
+            None
+        """
+
+        if not self._record_history:
+            return
+        snapshot = self._serialize_state()
+        if self._history and snapshot == self._history[self._history_index]:
+            self._pending_history_label = None
+            return
+        label = self._consume_history_label()
+        self._history = self._history[: self._history_index + 1]
+        self._history_labels = self._history_labels[: self._history_index + 1]
+        self._history.append(snapshot)
+        if not self._history_labels:
+            self._history_labels.append("Initial state")
+        else:
+            self._history_labels.append(label)
+        self._history_index += 1
+        self._update_undo_redo_actions()
+
+    def _update_undo_redo_actions(self) -> None:
+        """
+        Enables or disables undo and redo controls.
+
+        Returns:
+            None
+        """
+
+        can_undo = self._history_index > 0
+        can_redo = self._history_index < len(self._history) - 1
+        if hasattr(self, "undo_action"):
+            self.undo_action.setEnabled(can_undo)
+            self.redo_action.setEnabled(can_redo)
+        if hasattr(self, "history_undo_button"):
+            self.history_undo_button.setEnabled(can_undo)
+            self.history_redo_button.setEnabled(can_redo)
+            self.history_list_combo.setEnabled(bool(self._history))
+            total_states = max(1, len(self._history))
+            current_state = max(1, self._history_index + 1)
+            self.history_status_label.setText(f"{current_state}/{total_states}")
+            self._refresh_history_list()
+
+    def _refresh_history_list(self) -> None:
+        """
+        Synchronizes visible history list entries and current position.
+
+        Returns:
+            None
+        """
+
+        self._syncing_history_list = True
+        if not hasattr(self, "history_list_combo"):
+            self._syncing_history_list = False
+            return
+        self.history_list_combo.clear()
+        for index, label in enumerate(self._history_labels, start=1):
+            self.history_list_combo.addItem(f"{index}: {label}")
+        if self._history_index >= 0:
+            self.history_list_combo.setCurrentIndex(self._history_index)
+        self._syncing_history_list = False
+
+    def _on_history_entry_selected(self, index: int) -> None:
+        """
+        Restores a specific history entry selected in the history list.
+
+        Args:
+            index: Selected history index.
+
+        Returns:
+            None
+        """
+
+        if self._syncing_history_list:
+            return
+        if index < 0 or index >= len(self._history):
+            return
+        if index == self._history_index:
+            return
+        self._history_index = index
+        self._restore_state(self._history[self._history_index])
+        self._update_undo_redo_actions()
+        self._mark_dirty()
+
+    def undo(self) -> None:
+        """
+        Restores the previous history snapshot.
+
+        Returns:
+            None
+        """
+
+        if self._history_index <= 0:
+            return
+        self._history_index -= 1
+        self._restore_state(self._history[self._history_index])
+        self._update_undo_redo_actions()
+        self._mark_dirty()
+
+    def redo(self) -> None:
+        """
+        Restores the next history snapshot.
+
+        Returns:
+            None
+        """
+
+        if self._history_index >= len(self._history) - 1:
+            return
+        self._history_index += 1
+        self._restore_state(self._history[self._history_index])
+        self._update_undo_redo_actions()
+        self._mark_dirty()
 
     def set_recovery_path(self, path: str) -> None:
         """
@@ -795,6 +1098,23 @@ class VideoEditorWindow(QMainWindow):
         """
 
         self.canvas.refresh_visible_items()
+        self.mark_recovery_dirty()
+
+    def _on_annotation_time_committed(
+        self,
+        _annotation_id: str,
+        _start_ms: int,
+        _end_ms: int,
+    ) -> None:
+        """
+        Records one undo step after a timeline drag finishes.
+
+        Returns:
+            None
+        """
+
+        self._set_next_history_label("Change annotation timing")
+        self._push_history_state()
         self._mark_dirty()
 
     def _mark_dirty(self) -> None:

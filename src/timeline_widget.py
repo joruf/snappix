@@ -38,6 +38,7 @@ class TimelineWidget(QWidget):
 
     seek_requested = Signal(int)
     annotation_time_changed = Signal(str, int, int)
+    annotation_time_change_committed = Signal(str, int, int)
     annotation_selected = Signal(str)
 
     def __init__(self) -> None:
@@ -652,6 +653,21 @@ class TimelineWidget(QWidget):
         Returns:
             None
         """
+
+        if (
+            self._drag_mode in {DRAG_MODE_MOVE, DRAG_MODE_START, DRAG_MODE_END}
+            and self._drag_annotation is not None
+        ):
+            annotation = self._drag_annotation
+            if (
+                annotation.start_ms != self._drag_orig_start
+                or annotation.end_ms != self._drag_orig_end
+            ):
+                self.annotation_time_change_committed.emit(
+                    annotation.annotation_id,
+                    annotation.start_ms,
+                    annotation.end_ms,
+                )
 
         self._drag_mode = ""
         self._drag_annotation = None
