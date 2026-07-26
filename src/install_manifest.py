@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
+from src.py_compat import dataclass, field, is_relative_to
 from pathlib import Path
 
 
@@ -24,8 +24,9 @@ def manifest_path() -> Path:
         Path: Manifest JSON path under the user config directory.
     """
 
-    return Path.home() / ".config" / "snappix" / "install-manifest.json"
+    from src.paths import user_config_dir
 
+    return user_config_dir() / "install-manifest.json"
 
 def _normalize_path(path: str | Path) -> str:
     """
@@ -44,10 +45,9 @@ def _normalize_path(path: str | Path) -> str:
     except OSError:
         resolved = expanded
     home = Path.home()
-    try:
-        return str(resolved.relative_to(home)) if resolved.is_relative_to(home) else str(resolved)
-    except ValueError:
-        return str(resolved)
+    if is_relative_to(resolved, home):
+        return str(resolved.relative_to(home))
+    return str(resolved)
 
 
 def _expand_manifest_path(path: str) -> Path:
@@ -78,6 +78,7 @@ class InstallManifest:
         package_manager: Package manager used for system installs.
         system_packages_installed: System packages Snappix installed.
         venv_created: True when Snappix created the project .venv.
+        runtime_created: True when Snappix created ``.snappix-runtime``.
         user_files: User-level files Snappix created.
     """
 
@@ -86,6 +87,7 @@ class InstallManifest:
     package_manager: str = ""
     system_packages_installed: list[str] = field(default_factory=list)
     venv_created: bool = False
+    runtime_created: bool = False
     user_files: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -102,6 +104,7 @@ class InstallManifest:
             "package_manager": self.package_manager,
             "system_packages_installed": list(self.system_packages_installed),
             "venv_created": self.venv_created,
+            "runtime_created": self.runtime_created,
             "user_files": list(self.user_files),
         }
 
@@ -125,6 +128,7 @@ class InstallManifest:
             package_manager=str(payload.get("package_manager", "")).strip(),
             system_packages_installed=[str(item).strip() for item in packages if str(item).strip()],
             venv_created=bool(payload.get("venv_created", False)),
+            runtime_created=bool(payload.get("runtime_created", False)),
             user_files=[str(item).strip() for item in files if str(item).strip()],
         )
 
@@ -261,6 +265,24 @@ def record_venv_created(project_dir: str | Path) -> None:
     _update_manifest(_apply)
 
 
+def record_runtime_created(project_dir: str | Path) -> None:
+    """
+    Marks that Snappix created the managed ``.snappix-runtime`` toolchain.
+
+    Args:
+        project_dir: Project root path.
+
+    Returns:
+        None
+    """
+
+    def _apply(manifest: InstallManifest) -> None:
+        manifest.project_dir = manifest.project_dir or _normalize_path(project_dir)
+        manifest.runtime_created = True
+
+    _update_manifest(_apply)
+
+
 def record_user_file(path: str | Path) -> None:
     """
     Records one user-level file created by Snappix.
@@ -341,3 +363,22 @@ def manifest_venv_dir(manifest: InstallManifest) -> Path | None:
     if project_dir is None or not manifest.venv_created:
         return None
     return project_dir / ".venv"
+
+
+def manifest_runtime_dir(manifest: InstallManifest) -> Path | None:
+    """
+    Resolves the managed runtime directory when Snappix created it.
+
+    Args:
+        manifest: Install manifest.
+
+    Returns:
+        Path | None: ``.snappix-runtime`` path or None.
+    """
+
+    project_dir = manifest_project_dir(manifest)
+    if project_dir is None or not manifest.runtime_created:
+        return None
+    from src.runtime_bootstrap import RUNTIME_DIRNAME
+
+    return project_dir / RUNTIME_DIRNAME

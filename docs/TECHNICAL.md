@@ -34,18 +34,20 @@ Install manifest (for deinstaller): `~/.config/snappix/install-manifest.json`
 | Main GUI | `run.py` | Tray, capture/editor host, post-capture routing, session save/restore |
 | Package | `src/__main__.py` | `python -m src` |
 | CLI | `src/cli.py` | Headless capture, export, open |
-| Installer | `install_dependencies.py` | `.venv`, system packages, pip deps, install manifest |
-| Uninstaller | `uninstall_dependencies.py` | Remove Snappix-owned packages/files only |
+| Installer | `install_dependencies.py`, `src/runtime_bootstrap.py` | Managed uv/Python 3.12, `.venv`, system packages, pip deps, install manifest |
+| Launchers | `Snappix.bat`, `snappix.sh`, `install.bat`, `install.sh` | Zero-Python bootstrap + start (or install-only) |
+| Uninstaller | `uninstall_dependencies.py` | Remove Snappix-owned packages/files/runtime only |
 | Installer UI | `src/install_progress_gui.py` | Tk splash during first-run setup |
 | Screenshot generator | `scripts/generate_readme_screenshots.py` | README UI captures |
 
 Startup:
 
-1. Re-exec into `.venv` when present.
-2. Ensure PySide6 (Tk installer UI if missing).
-3. Acquire single-instance lock.
-4. Create `QApplication`, load config, apply theme, set workspace root.
-5. Show capture panel; restore multi-tab session from workspace or open a startup project.
+1. Re-exec into `.venv` when present and supported (Python 3.11+).
+2. If the host interpreter is too old, bootstrap a managed CPython 3.12 runtime via uv, then re-exec.
+3. Ensure PySide6 (Tk installer UI if missing).
+4. Acquire single-instance lock.
+5. Create `QApplication`, load config, apply theme, set workspace root.
+6. Show capture panel; restore multi-tab session from workspace or open a startup project.
 
 ## Source Module Map
 
@@ -96,7 +98,7 @@ Startup:
 |------|----------|-------------|
 | Fullscreen | `CaptureMode.FULL_SCREEN` | Virtual desktop composite |
 | Region | `CaptureMode.REGION` | Drag selection overlay |
-| Window | `CaptureMode.WINDOW` | X11 window via `xdotool` |
+| Window | `CaptureMode.WINDOW` | Window pick (X11 `xdotool` / Windows Win32) |
 | Scroll | `CaptureMode.SCROLL` | Auto-scroll + vertical stitch |
 | Video | N/A | Region select → ffmpeg recording |
 | Color pick | N/A | Full-screen eyedropper overlay |
@@ -111,20 +113,24 @@ Before framebuffer grabs, the capture panel hides and the compositor is given a 
 
 On Wayland with `grim`/`slurp`, native tools may replace the Qt overlay.
 
-### Window (X11)
+### Window
 
-1. Desktop snapshot.
-2. `xdotool selectwindow` + `xwininfo` geometry.
-3. Crop to window rect.
+1. Desktop snapshot (`capture_full_screen`).
+2. Highlight overlay; pick target window:
+   - **Linux X11:** `xdotool selectwindow` + `xwininfo` (click-through overlay).
+   - **Windows:** Win32 `EnumWindows` hit-test (`src/win32_window.py`); overlay accepts the click.
+3. Crop snapshot to window rect → editor tab.
 
 On Wayland, window capture is not reliable; the UI recommends Area or Scroll.
 
 ### Scroll
 
-1. Window pick (same as window capture).
-2. `perform_auto_scroll_capture()` detects scrollbar, scrolls top→bottom, captures frames.
+1. Window pick (same as window capture: xdotool on Linux, Win32 overlay click on Windows).
+2. `perform_auto_scroll_capture()` focuses content, scrolls top→bottom (xdotool keys / Win32 `SendInput` PageDown), captures frames.
 3. `src/scroll_capture.py` stitches with overlap detection.
 4. Result opens in the editor; **Esc** cancels during pick.
+
+Windows scroll is best-effort for normal (non-elevated) desktop apps; custom/Electron scrollers may need focus in the right child.
 
 ### Video recording
 
@@ -263,19 +269,22 @@ Configurable via `workspace_directory` in settings (default `~/.snappix`). Set a
 
 ## Install and Uninstall
 
-### Installer (`install_dependencies.py`)
+Zero-Python entry points: `Snappix.bat` (Windows) and `snappix.sh` (Linux) download a project-local **uv** binary, install managed **CPython 3.12** under `.snappix-runtime/`, then run the Python installer and start the app.
+
+### Installer (`install_dependencies.py` + `src/runtime_bootstrap.py`)
 
 1. Detect missing required/recommended system packages.
-2. Install via apt/dnf/pacman/zypper (sudo or pkexec in GUI mode).
+2. Install via apt/dnf/pacman/zypper (Linux; sudo or pkexec in GUI mode) or winget (Windows: ffmpeg/tesseract).
 3. Record **only newly installed** packages in `install-manifest.json`.
-4. Create `.venv` and `pip install -r requirements.txt`.
-5. Record created `.venv` and user integration files (desktop entries, icons, autostart).
+4. Ensure project-local uv + managed Python 3.12, create `.venv`, and `uv pip install -r requirements.txt`.
+5. Record created `.venv`, `.snappix-runtime`, and user integration files (desktop entries, icons, autostart).
 
 ### Uninstaller (`uninstall_dependencies.py`)
 
 Reads `install-manifest.json` and removes:
 
 - Project `.venv` when Snappix created it
+- Project `.snappix-runtime` when Snappix created it
 - User files Snappix wrote (launchers, icons, autostart entry)
 - System packages Snappix installed, **only when apt dry-run shows no foreign manual dependencies**
 
@@ -376,15 +385,15 @@ Reliable on X11; Wayland depends on the compositor.
 
 ## Platform Support
 
-| Feature | X11 | Wayland |
-|---------|-----|---------|
-| Fullscreen | Yes | Yes (Qt / grim) |
-| Region | Overlay | Overlay or grim+slurp |
-| Window | xdotool | Not supported |
-| Scroll | Yes | Limited / best-effort |
-| Video recording | ffmpeg region | Not supported yet |
-| Global hotkeys | pynput | Limited |
-| Color picker | Overlay | Overlay |
+| Feature | X11 | Wayland | Windows |
+|---------|-----|---------|---------|
+| Fullscreen | Yes | Yes (Qt / grim) | Yes (Qt) |
+| Region | Overlay | Overlay or grim+slurp | Overlay |
+| Window | xdotool | Not supported | Win32 pick + snapshot crop |
+| Scroll | Yes | Limited / best-effort | Win32 PageDown + stitch (best-effort) |
+| Video recording | ffmpeg region | Not supported yet | ffmpeg gdigrab |
+| Global hotkeys | pynput | Limited | pynput |
+| Color picker | Overlay | Overlay | Overlay |
 
 ## OCR
 
@@ -451,9 +460,9 @@ System (installed on demand): `xdotool`, `x11-utils`, `tesseract-ocr`, `grim`, `
 ## Known Limitations
 
 - PDF export uses `QPdfWriter`; behavior can vary by PySide6 build.
-- Window capture needs X11 tooling.
-- Video recording and region relocate are X11-only for now.
-- Scroll stitch assumes mostly vertical scroll with overlapping frames.
+- Window capture needs X11 tooling on Linux; Windows uses Win32 pick + snapshot crop.
+- Video recording uses ffmpeg (`x11grab` / `gdigrab`); pause semantics differ by OS.
+- Scroll stitch assumes mostly vertical scroll with overlapping frames; Windows uses PageDown best-effort.
 - OCR quality depends on Tesseract language packs and image clarity.
 - Embedding `QMainWindow` tabs is intentional but unusual; destroy/autosave paths must keep Qt object validity checks.
 - Changing the workspace folder in settings applies on next path resolution; migrate data manually if needed.

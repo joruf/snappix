@@ -132,14 +132,23 @@ class GlobalHotkeyManager:
             return False
 
         mapping: dict[str, Callable[[], None]] = {}
-        bindings = [
+        from src.paths import supports_window_capture
+        from src.video_recorder import has_ffmpeg
+
+        bindings: list[tuple[str, str]] = [
             (config.hotkey_capture_region, "capture_region"),
-            (config.hotkey_capture_window, "capture_window"),
             (config.hotkey_capture_fullscreen, "capture_fullscreen"),
-            (config.hotkey_capture_video, "capture_video"),
-            (config.hotkey_recording_pause_resume, "recording_pause_resume"),
-            (config.hotkey_recording_stop, "recording_stop"),
         ]
+        if supports_window_capture():
+            bindings.append((config.hotkey_capture_window, "capture_window"))
+        if has_ffmpeg():
+            bindings.extend(
+                [
+                    (config.hotkey_capture_video, "capture_video"),
+                    (config.hotkey_recording_pause_resume, "recording_pause_resume"),
+                    (config.hotkey_recording_stop, "recording_stop"),
+                ]
+            )
         for spec, action in bindings:
             pynput_spec = hotkey_spec_to_pynput(spec)
             if pynput_spec is None:

@@ -4,7 +4,7 @@ Vertical scroll capture stitching helpers.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from src.py_compat import dataclass
 
 from PySide6.QtCore import QByteArray, QBuffer, QIODevice, Qt
 from PySide6.QtGui import QImage, QPainter, QPixmap

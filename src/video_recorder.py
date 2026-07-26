@@ -8,7 +8,9 @@ import os
 import signal
 import subprocess
 import tempfile
-from dataclasses import dataclass
+import threading
+import time
+from src.py_compat import dataclass
 from pathlib import Path
 from shutil import which
 
@@ -25,15 +27,148 @@ class RecordingState:
     PAUSED = "paused"
 
 
+def resolve_ffmpeg_path() -> str | None:
+    """
+    Resolves the ffmpeg executable path for the current machine.
+
+    Prefers ``PATH``, then common Windows install locations (including winget
+    package folders that may not yet be visible in a stale shell PATH).
+
+    Returns:
+        str | None: Absolute or bare ffmpeg path, or None when not found.
+    """
+
+    found = which("ffmpeg")
+    if found:
+        return found
+
+    from src.paths import is_windows
+
+    if not is_windows():
+        return None
+
+    candidates: list[Path] = []
+    local_app = Path(os.environ.get("LOCALAPPDATA", ""))
+    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+    program_files_x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+
+    winget_links = local_app / "Microsoft" / "WinGet" / "Links" / "ffmpeg.exe"
+    candidates.append(winget_links)
+
+    winget_packages = local_app / "Microsoft" / "WinGet" / "Packages"
+    if winget_packages.is_dir():
+        for package_dir in winget_packages.glob("Gyan.FFmpeg*"):
+            candidates.extend(package_dir.glob("**/ffmpeg.exe"))
+
+    for base in (program_files, program_files_x86, Path(r"C:\ffmpeg")):
+        candidates.append(base / "ffmpeg" / "bin" / "ffmpeg.exe")
+        candidates.extend(base.glob("ffmpeg*/bin/ffmpeg.exe"))
+
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
 def has_ffmpeg() -> bool:
     """
     Checks whether the ffmpeg binary is available.
 
     Returns:
-        bool: True when ffmpeg exists on PATH.
+        bool: True when ffmpeg exists on PATH or a known Windows install path.
     """
 
-    return which("ffmpeg") is not None
+    return resolve_ffmpeg_path() is not None
+
+
+def resolve_windows_dshow_audio_device() -> str | None:
+    """
+    Returns the first DirectShow audio capture device name, if any.
+
+    ``audio=default`` is unreliable on Windows; callers should use a concrete
+    device name from this helper or record without a microphone.
+
+    Returns:
+        str | None: Device name suitable for ``-i audio=NAME``, or None.
+    """
+
+    from src.paths import is_windows
+
+    if not is_windows():
+        return None
+
+    ffmpeg_bin = resolve_ffmpeg_path()
+    if not ffmpeg_bin:
+        return None
+
+    try:
+        result = subprocess.run(
+            [
+                ffmpeg_bin,
+                "-hide_banner",
+                "-list_devices",
+                "true",
+                "-f",
+                "dshow",
+                "-i",
+                "dummy",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+            **_windows_subprocess_kwargs(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+    text = f"{result.stderr or ''}\n{result.stdout or ''}"
+    in_audio_section = False
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        lower = line.lower()
+        if "directshow audio devices" in lower or "dshow audio devices" in lower:
+            in_audio_section = True
+            continue
+        if in_audio_section and (
+            "directshow video devices" in lower or "dshow video devices" in lower
+        ):
+            break
+        if not in_audio_section:
+            # Newer ffmpeg prints ``"Name" (audio)`` without a section header.
+            if '(audio)' in lower and '"' in line:
+                name = line.split('"', 2)
+                if len(name) >= 2 and name[1].strip():
+                    return name[1].strip()
+            continue
+        if line.startswith("Alternative name"):
+            continue
+        if '"' in line:
+            name = line.split('"', 2)
+            if len(name) >= 2 and name[1].strip():
+                return name[1].strip()
+    return None
+
+
+def _windows_subprocess_kwargs() -> dict:
+    """
+    Returns Popen kwargs that hide the ffmpeg console window on Windows.
+
+    Returns:
+        dict: Extra keyword arguments for ``subprocess.Popen`` / ``run``.
+    """
+
+    from src.paths import is_windows
+
+    if not is_windows():
+        return {}
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if not creationflags:
+        return {}
+    return {"creationflags": creationflags}
 
 
 def clamp_region_to_even_dimensions(rect: QRect) -> QRect:
@@ -99,7 +234,7 @@ def build_concat_command(list_path: Path, output_path: Path) -> list[str]:
     """
 
     return [
-        "ffmpeg",
+        resolve_ffmpeg_path() or "ffmpeg",
         "-y",
         "-f",
         "concat",
@@ -120,46 +255,79 @@ def build_record_command(
     record_microphone: bool,
     framerate: int = 30,
     display: str = ":0.0",
+    windows_audio_device: str | None = None,
 ) -> list[str]:
     """
-    Builds the ffmpeg command line for one X11 screen recording.
+    Builds the ffmpeg command line for one screen recording.
+
+    Uses ``x11grab`` on Linux and ``gdigrab`` on Windows.
 
     Args:
         rect: Capture region (already clamped to even dimensions).
         output_path: Destination MP4 file path.
         record_microphone: Whether to add a microphone audio input track.
         framerate: Capture framerate in frames per second.
-        display: X11 display identifier for x11grab.
+        display: X11 display identifier for x11grab (Linux only).
+        windows_audio_device: Concrete DirectShow audio device name on Windows.
 
     Returns:
         list[str]: Complete ffmpeg command line arguments (argv-style, no shell).
     """
 
-    command = [
-        "ffmpeg",
-        "-y",
-        "-f",
-        "x11grab",
-        "-framerate",
-        str(framerate),
-        "-video_size",
-        f"{rect.width()}x{rect.height()}",
-        "-i",
-        f"{display}+{rect.x()},{rect.y()}",
-    ]
-    if record_microphone:
-        # Pulse default source; 48 kHz stereo AAC is a modest quality bump over
-        # the previous 128k mono encode (still light enough for screen captures).
+    from src.paths import is_windows
+
+    ffmpeg_bin = resolve_ffmpeg_path() or "ffmpeg"
+    command = [ffmpeg_bin, "-y"]
+    if is_windows():
         command += [
             "-f",
-            "pulse",
+            "gdigrab",
+            "-framerate",
+            str(framerate),
+            "-offset_x",
+            str(rect.x()),
+            "-offset_y",
+            str(rect.y()),
+            "-video_size",
+            f"{rect.width()}x{rect.height()}",
             "-i",
-            "default",
-            "-ac",
-            "2",
-            "-ar",
-            "48000",
+            "desktop",
         ]
+        if record_microphone and windows_audio_device:
+            command += [
+                "-f",
+                "dshow",
+                "-i",
+                f"audio={windows_audio_device}",
+                "-ac",
+                "2",
+                "-ar",
+                "48000",
+            ]
+    else:
+        command += [
+            "-f",
+            "x11grab",
+            "-framerate",
+            str(framerate),
+            "-video_size",
+            f"{rect.width()}x{rect.height()}",
+            "-i",
+            f"{display}+{rect.x()},{rect.y()}",
+        ]
+        if record_microphone:
+            # Pulse default source; 48 kHz stereo AAC is a modest quality bump over
+            # the previous 128k mono encode (still light enough for screen captures).
+            command += [
+                "-f",
+                "pulse",
+                "-i",
+                "default",
+                "-ac",
+                "2",
+                "-ar",
+                "48000",
+            ]
 
     command += [
         "-c:v",
@@ -214,7 +382,7 @@ def build_export_command(
         list[str]: Complete ffmpeg command line arguments (argv-style, no shell).
     """
 
-    command = ["ffmpeg", "-y", "-i", str(source_video)]
+    command = [resolve_ffmpeg_path() or "ffmpeg", "-y", "-i", str(source_video)]
     for segment in overlay_segments:
         command += ["-i", str(segment.png_path)]
 
@@ -366,6 +534,9 @@ class VideoRecorder(QObject):
         """
         Starts ffmpeg recording one screen region into a new segment file.
 
+        On Windows, retries without microphone when DirectShow audio fails to
+        open so region video capture still works.
+
         Args:
             rect: Even-dimension capture region.
 
@@ -373,50 +544,131 @@ class VideoRecorder(QObject):
             bool: True when ffmpeg launched successfully.
         """
 
-        segment_path = self._segment_path()
-        command = build_record_command(
-            rect,
-            segment_path,
-            record_microphone=self._record_microphone,
-            framerate=self._framerate,
-        )
-        try:
-            self._process = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-        except OSError as exc:
-            self.failed.emit(f"Could not start ffmpeg: {exc}")
-            return False
+        from src.paths import is_windows
 
-        self._segment_paths.append(segment_path)
-        return True
+        want_mic = self._record_microphone
+        windows_audio_device: str | None = None
+        if is_windows() and want_mic:
+            windows_audio_device = resolve_windows_dshow_audio_device()
+            if windows_audio_device is None:
+                want_mic = False
+
+        attempts = [want_mic]
+        if is_windows() and want_mic:
+            attempts.append(False)
+
+        last_error = ""
+        for use_mic in attempts:
+            segment_path = self._segment_path()
+            if segment_path.exists():
+                try:
+                    segment_path.unlink()
+                except OSError:
+                    pass
+            command = build_record_command(
+                rect,
+                segment_path,
+                record_microphone=use_mic,
+                framerate=self._framerate,
+                windows_audio_device=windows_audio_device if use_mic else None,
+            )
+            try:
+                process = subprocess.Popen(
+                    command,
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    **_windows_subprocess_kwargs(),
+                )
+            except OSError as exc:
+                last_error = f"Could not start ffmpeg: {exc}"
+                continue
+
+            # Mic/dshow open can take >0.35s before failing; wait longer on Windows.
+            health_s = 1.2 if (use_mic and is_windows()) else 0.35
+            time.sleep(health_s)
+            if process.poll() is None:
+                self._process = process
+                self._record_microphone = use_mic
+                self._segment_paths.append(segment_path)
+                return True
+
+            exit_code = process.returncode
+            stderr_text = ""
+            if process.stderr is not None:
+                try:
+                    stderr_text = process.stderr.read().decode("utf-8", errors="replace")
+                except OSError:
+                    stderr_text = ""
+            last_error = (
+                stderr_text.strip().splitlines()[-1]
+                if stderr_text.strip()
+                else f"ffmpeg exited immediately (code {exit_code})."
+            )
+            if use_mic and is_windows():
+                continue
+            break
+
+        self.failed.emit(last_error or "Could not start ffmpeg.")
+        return False
 
     def _terminate_current_process_blocking(self) -> None:
         """
         Stops the active ffmpeg segment and waits for it to finalize the file.
 
+        On Windows, ``SIGINT`` is unsupported for child processes, so ffmpeg is
+        asked to quit by writing ``q`` to stdin. stderr is drained in the
+        background so a full pipe cannot deadlock the wait.
+
         Returns:
             None
         """
+
+        from src.paths import is_windows
 
         if self._process is None:
             return
 
         process = self._process
-        if self._state == RecordingState.PAUSED:
+        if (
+            not is_windows()
+            and self._state == RecordingState.PAUSED
+            and hasattr(signal, "SIGCONT")
+        ):
             try:
                 os.kill(process.pid, signal.SIGCONT)
-            except ProcessLookupError:
+            except (ProcessLookupError, AttributeError, OSError):
                 pass
 
+        # Prevent deadlock: ffmpeg logs to stderr and can block when the pipe fills.
+        if process.stderr is not None:
+            threading.Thread(
+                target=lambda: process.stderr.read(),
+                daemon=True,
+                name="snappix-ffmpeg-stderr-drain",
+            ).start()
+
+        # Graceful quit — required on Windows; also works on Linux.
         try:
-            process.send_signal(signal.SIGINT)
-        except ProcessLookupError:
-            self._process = None
-            return
+            if process.stdin is not None:
+                process.stdin.write(b"q\n")
+                process.stdin.flush()
+                process.stdin.close()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+        if not is_windows():
+            try:
+                if hasattr(signal, "SIGINT"):
+                    process.send_signal(signal.SIGINT)
+                else:
+                    process.terminate()
+            except (ProcessLookupError, AttributeError, OSError, ValueError):
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    self._process = None
+                    return
 
         try:
             process.wait(timeout=10)
@@ -440,12 +692,23 @@ class VideoRecorder(QObject):
 
         if self._segments_dir is None or not self._segments_dir.exists():
             return
+
+        def _safe_unlink(path: Path) -> None:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                # Windows may keep a short lock on just-written segment files.
+                pass
+
         for segment_path in self._segment_paths:
             if segment_path.exists():
-                segment_path.unlink(missing_ok=True)
+                _safe_unlink(segment_path)
         for leftover in self._segments_dir.glob("*"):
-            leftover.unlink(missing_ok=True)
-        self._segments_dir.rmdir()
+            _safe_unlink(leftover)
+        try:
+            self._segments_dir.rmdir()
+        except OSError:
+            pass
 
     def _assemble_segments(self, output_path: Path) -> None:
         """
@@ -487,6 +750,7 @@ class VideoRecorder(QObject):
                 capture_output=True,
                 text=True,
                 check=False,
+                **_windows_subprocess_kwargs(),
             )
         finally:
             list_path.unlink(missing_ok=True)
@@ -536,17 +800,31 @@ class VideoRecorder(QObject):
 
     def pause(self) -> None:
         """
-        Pauses the active recording by suspending the ffmpeg process.
+        Pauses the active recording.
+
+        On Linux this suspends ffmpeg with SIGSTOP. On Windows (no SIGSTOP)
+        the current segment is finalized and a new one starts on resume.
 
         Returns:
             None
         """
 
-        if self._process is None or self._state != RecordingState.RECORDING:
+        from src.paths import is_windows
+
+        if self._state != RecordingState.RECORDING:
+            return
+        if is_windows():
+            if self._process is None:
+                return
+            self._terminate_current_process_blocking()
+            self._state = RecordingState.PAUSED
+            self.state_changed.emit(self._state)
+            return
+        if self._process is None:
             return
         try:
             os.kill(self._process.pid, signal.SIGSTOP)
-        except ProcessLookupError:
+        except (ProcessLookupError, AttributeError, OSError):
             return
         self._state = RecordingState.PAUSED
         self.state_changed.emit(self._state)
@@ -559,11 +837,24 @@ class VideoRecorder(QObject):
             None
         """
 
-        if self._process is None or self._state != RecordingState.PAUSED:
+        from src.paths import is_windows
+
+        if self._state != RecordingState.PAUSED:
+            return
+        if is_windows():
+            if self._clamped_rect is None:
+                return
+            if not self._launch_segment(self._clamped_rect):
+                self.failed.emit("Could not resume recording.")
+                return
+            self._state = RecordingState.RECORDING
+            self.state_changed.emit(self._state)
+            return
+        if self._process is None:
             return
         try:
             os.kill(self._process.pid, signal.SIGCONT)
-        except ProcessLookupError:
+        except (ProcessLookupError, AttributeError, OSError):
             return
         self._state = RecordingState.RECORDING
         self.state_changed.emit(self._state)

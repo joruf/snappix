@@ -8,7 +8,7 @@ Used by automated tests and documents supported Linux session/tool combinations.
 from __future__ import annotations
 
 import sys
-from dataclasses import dataclass
+from src.py_compat import dataclass
 from enum import Enum
 
 
@@ -108,7 +108,11 @@ LINUX_WAYLAND_NO_GRIM = PlatformContext(
     available_tools=frozenset({"tesseract", "ffmpeg"}),
 )
 
-WINDOWS = PlatformContext(os_family="windows")
+WINDOWS = PlatformContext(
+    os_family="windows",
+    available_tools=frozenset({"ffmpeg", "tesseract"}),
+)
+WINDOWS_MINIMAL = PlatformContext(os_family="windows")
 DARWIN = PlatformContext(os_family="darwin")
 
 KNOWN_PROFILES: dict[str, PlatformContext] = {
@@ -118,6 +122,7 @@ KNOWN_PROFILES: dict[str, PlatformContext] = {
     "linux_wayland_grim": LINUX_WAYLAND_GRIM,
     "linux_wayland_no_grim": LINUX_WAYLAND_NO_GRIM,
     "windows": WINDOWS,
+    "windows_minimal": WINDOWS_MINIMAL,
     "darwin": DARWIN,
 }
 
@@ -150,9 +155,14 @@ def region_capture_route(context: PlatformContext) -> str:
         str: ``grim_slurp``, ``qt_overlay``, or ``unavailable``.
     """
 
-    if context.os_family != "linux":
+    if context.os_family not in {"linux", "windows"}:
         return "unavailable"
-    if context.is_wayland and context.has_tool("grim") and context.has_tool("slurp"):
+    if (
+        context.os_family == "linux"
+        and context.is_wayland
+        and context.has_tool("grim")
+        and context.has_tool("slurp")
+    ):
         return "grim_slurp"
     return "qt_overlay"
 
@@ -183,25 +193,37 @@ def evaluate_capabilities(context: PlatformContext) -> dict[str, FeatureCapabili
 
 
 def _app_launch_capability(context: PlatformContext) -> FeatureCapability:
-    if context.os_family != "linux":
+    if context.os_family == "linux":
         return FeatureCapability(
             "app_launch",
-            SupportLevel.UNSUPPORTED,
-            "Snappix targets Linux desktop sessions only.",
+            SupportLevel.FULL,
+            "PySide6 GUI is supported on Linux.",
+        )
+    if context.os_family == "windows":
+        return FeatureCapability(
+            "app_launch",
+            SupportLevel.PARTIAL,
+            "Windows MVP: editor + Qt capture + window/scroll pick + ffmpeg gdigrab.",
         )
     return FeatureCapability(
         "app_launch",
-        SupportLevel.FULL,
-        "PySide6 GUI is supported on Linux.",
+        SupportLevel.UNSUPPORTED,
+        "macOS is not supported yet.",
     )
 
 
 def _fullscreen_capture_capability(context: PlatformContext) -> FeatureCapability:
+    if context.os_family == "windows":
+        return FeatureCapability(
+            "fullscreen_capture",
+            SupportLevel.FULL,
+            "Qt desktop sampling works on Windows.",
+        )
     if context.os_family != "linux":
         return FeatureCapability(
             "fullscreen_capture",
             SupportLevel.UNSUPPORTED,
-            "Capture pipeline is Linux-only.",
+            "Fullscreen capture is not supported on this OS.",
         )
     if context.is_wayland and context.has_tool("grim"):
         return FeatureCapability(
@@ -222,13 +244,19 @@ def _region_capture_capability(context: PlatformContext) -> FeatureCapability:
         return FeatureCapability(
             "region_capture",
             SupportLevel.UNSUPPORTED,
-            "Region capture is Linux-only.",
+            "Region capture is not supported on this OS.",
         )
     if route == "grim_slurp":
         return FeatureCapability(
             "region_capture",
             SupportLevel.FULL,
             "Native Wayland region picker via grim and slurp.",
+        )
+    if context.os_family == "windows":
+        return FeatureCapability(
+            "region_capture",
+            SupportLevel.PARTIAL,
+            "Region selection uses a Qt fullscreen overlay crop on Windows.",
         )
     return FeatureCapability(
         "region_capture",
@@ -238,11 +266,17 @@ def _region_capture_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _window_capture_capability(context: PlatformContext) -> FeatureCapability:
+    if context.os_family == "windows":
+        return FeatureCapability(
+            "window_capture",
+            SupportLevel.FULL,
+            "Win32 window pick with Qt desktop snapshot crop.",
+        )
     if context.os_family != "linux":
         return FeatureCapability(
             "window_capture",
             SupportLevel.UNSUPPORTED,
-            "Window capture is Linux-only.",
+            "Window capture is not supported on this OS.",
         )
     if context.is_wayland:
         return FeatureCapability(
@@ -264,11 +298,17 @@ def _window_capture_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _scroll_capture_capability(context: PlatformContext) -> FeatureCapability:
+    if context.os_family == "windows":
+        return FeatureCapability(
+            "scroll_capture",
+            SupportLevel.PARTIAL,
+            "Win32 PageDown scroll + stitch; best-effort for normal desktop apps.",
+        )
     if context.os_family != "linux":
         return FeatureCapability(
             "scroll_capture",
             SupportLevel.UNSUPPORTED,
-            "Scroll capture is Linux-only.",
+            "Scroll capture is not supported on this OS.",
         )
     if context.is_wayland:
         return FeatureCapability(
@@ -285,16 +325,28 @@ def _scroll_capture_capability(context: PlatformContext) -> FeatureCapability:
     return FeatureCapability(
         "scroll_capture",
         SupportLevel.FULL,
-        "X11 auto-scroll stitching is available.",
+        "X11 auto-scroll via xdotool with vertical frame stitching.",
     )
 
 
 def _video_capture_capability(context: PlatformContext) -> FeatureCapability:
+    if context.os_family == "windows":
+        if not context.has_tool("ffmpeg"):
+            return FeatureCapability(
+                "video_capture",
+                SupportLevel.UNSUPPORTED,
+                "Video capture requires ffmpeg (gdigrab).",
+            )
+        return FeatureCapability(
+            "video_capture",
+            SupportLevel.FULL,
+            "Region screen recording via ffmpeg gdigrab.",
+        )
     if context.os_family != "linux":
         return FeatureCapability(
             "video_capture",
             SupportLevel.UNSUPPORTED,
-            "Video capture is Linux-only.",
+            "Video capture is not supported on this OS.",
         )
     if context.is_wayland:
         return FeatureCapability(
@@ -316,11 +368,11 @@ def _video_capture_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _ocr_capability(context: PlatformContext) -> FeatureCapability:
-    if context.os_family != "linux":
+    if context.os_family not in {"linux", "windows"}:
         return FeatureCapability(
             "ocr",
             SupportLevel.UNSUPPORTED,
-            "OCR integration is Linux-only in Snappix.",
+            "OCR is not supported on this OS.",
         )
     if not context.has_tool("tesseract"):
         return FeatureCapability(
@@ -336,11 +388,17 @@ def _ocr_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _global_hotkeys_capability(context: PlatformContext) -> FeatureCapability:
+    if context.os_family == "windows":
+        return FeatureCapability(
+            "global_hotkeys",
+            SupportLevel.PARTIAL,
+            "Global hotkeys via pynput on Windows (may need elevated privileges).",
+        )
     if context.os_family != "linux":
         return FeatureCapability(
             "global_hotkeys",
             SupportLevel.UNSUPPORTED,
-            "Global hotkeys are configured for Linux sessions.",
+            "Global hotkeys are not configured for this OS.",
         )
     if context.is_wayland:
         return FeatureCapability(
@@ -356,11 +414,17 @@ def _global_hotkeys_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _autostart_capability(context: PlatformContext) -> FeatureCapability:
+    if context.os_family == "windows":
+        return FeatureCapability(
+            "autostart",
+            SupportLevel.FULL,
+            "Windows Startup folder batch file is supported.",
+        )
     if context.os_family != "linux":
         return FeatureCapability(
             "autostart",
             SupportLevel.UNSUPPORTED,
-            "Autostart uses Linux .desktop session integration.",
+            "Autostart is not supported on this OS.",
         )
     return FeatureCapability(
         "autostart",

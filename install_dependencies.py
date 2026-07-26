@@ -16,8 +16,12 @@ from src.install_manifest import (
     record_package_manager,
     record_project_dir,
     record_system_packages_installed,
-    record_venv_created,
 )
+
+WINDOWS_WINGET_PACKAGES: dict[str, str] = {
+    "ffmpeg": "Gyan.FFmpeg",
+    "tesseract": "UB-Mannheim.TesseractOCR",
+}
 
 REQUIRED_SYSTEM_PACKAGE_MAP: dict[str, list[str]] = {
     "apt-get": [
@@ -95,7 +99,14 @@ def detect_missing_system_dependencies() -> list[str]:
         list[str]: Missing dependency keys.
     """
 
+    from src.paths import is_windows
+
     missing: list[str] = []
+    if is_windows():
+        # Qt ships with PySide6 wheels on Windows; no xcb/xdotool.
+        if which("tesseract") is None:
+            missing.append("tesseract")
+        return missing
     if find_library("xcb-cursor") is None:
         missing.append("xcb-cursor")
     if which("xdotool") is None:
@@ -119,13 +130,23 @@ def detect_missing_recommended_dependencies() -> list[str]:
         list[str]: Missing recommended dependency keys.
     """
 
+    from src.paths import is_windows
+
     missing: list[str] = []
-    if which("grim") is None:
-        missing.append("grim")
-    if which("slurp") is None:
-        missing.append("slurp")
+    if not is_windows():
+        if which("grim") is None:
+            missing.append("grim")
+        if which("slurp") is None:
+            missing.append("slurp")
     if which("ffmpeg") is None:
-        missing.append("ffmpeg")
+        # Match video_recorder discovery (winget install dirs not yet on PATH).
+        try:
+            from src.video_recorder import has_ffmpeg
+
+            if not has_ffmpeg():
+                missing.append("ffmpeg")
+        except Exception:
+            missing.append("ffmpeg")
     return missing
 
 
@@ -154,7 +175,7 @@ def with_privilege(command: list[str]) -> list[str] | None:
         list[str] | None: Privileged command or None when impossible.
     """
 
-    if os.geteuid() == 0:
+    if getattr(os, "geteuid", lambda: 1)() == 0:
         return command
     if which("sudo") is not None:
         return ["sudo", *command]
@@ -223,7 +244,10 @@ def _gui_mode_needs_pkexec() -> bool:
         bool: True when not root and stdin is not a TTY.
     """
 
-    return os.geteuid() != 0 and not sys.stdin.isatty()
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is None:
+        return False
+    return geteuid() != 0 and not sys.stdin.isatty()
 
 
 def _pkexec_env() -> dict[str, str]:
@@ -276,12 +300,86 @@ def _elevate_system_install(project_dir: Path) -> int:
     )
 
 
+def _install_windows_winget_packages(project_dir: Path, keys: list[str]) -> int:
+    """
+    Installs missing Windows tools via winget when available.
+
+    Args:
+        project_dir: Project root directory.
+        keys: Dependency keys such as ``ffmpeg`` or ``tesseract``.
+
+    Returns:
+        int: 0 when all requested packages are present afterward, else 1.
+    """
+
+    if not keys:
+        return 0
+    if which("winget") is None:
+        print(
+            "Snappix installer warning: winget is not available. "
+            "Install missing tools manually: "
+            + ", ".join(keys)
+        )
+        print(
+            "Snappix installer: recommended — "
+            "`winget install Gyan.FFmpeg` and optionally "
+            "`winget install UB-Mannheim.TesseractOCR`"
+        )
+        return 1
+
+    print("Snappix installer: installing Windows packages via winget…")
+    failures: list[str] = []
+    for key in keys:
+        package_id = WINDOWS_WINGET_PACKAGES.get(key)
+        if package_id is None:
+            failures.append(key)
+            continue
+        print(f"Snappix installer: winget install {package_id}…")
+        code = run_command(
+            [
+                "winget",
+                "install",
+                "--id",
+                package_id,
+                "-e",
+                "--accept-package-agreements",
+                "--accept-source-agreements",
+                "--source",
+                "winget",
+            ],
+            project_dir,
+        )
+        if code != 0:
+            failures.append(key)
+
+    still_missing = [
+        key
+        for key in keys
+        if which(key) is None
+    ]
+    if still_missing:
+        print(
+            "Snappix installer warning: still missing after winget: "
+            + ", ".join(still_missing)
+        )
+        return 1
+    if failures:
+        # winget may report non-zero when already installed; tools present → OK.
+        return 0
+    record_package_manager("winget")
+    record_system_packages_installed(
+        [WINDOWS_WINGET_PACKAGES[key] for key in keys if key in WINDOWS_WINGET_PACKAGES]
+    )
+    return 0
+
+
 def install_system_dependencies(project_dir: Path) -> int:
     """
-    Installs Linux runtime packages required for Qt and capture tools.
+    Installs OS runtime packages required for Qt and capture tools.
 
-    Recommended Wayland tools never fail the bootstrap. Required package
-    elevation failures are reported, but callers may continue with Python setup.
+    On Linux uses apt/dnf/pacman/zypper. On Windows uses winget when present.
+    Recommended tools never fail the bootstrap hard; required elevation failures
+    are reported, but callers may continue with Python setup.
 
     Args:
         project_dir: Project root directory.
@@ -293,6 +391,36 @@ def install_system_dependencies(project_dir: Path) -> int:
     missing = detect_missing_system_dependencies()
     recommended_missing = detect_missing_recommended_dependencies()
     print("Snappix installer: checking system packages...")
+
+    from src.paths import is_windows
+
+    if is_windows():
+        needed = [*missing, *recommended_missing]
+        if not needed:
+            print("Snappix installer: required tools are present")
+            return 0
+        print(
+            "Snappix installer: detecting missing Windows tools: "
+            + ", ".join(needed)
+        )
+        winget_code = _install_windows_winget_packages(project_dir, needed)
+        still_required = detect_missing_system_dependencies()
+        if still_required:
+            print(
+                "Snappix installer warning: required Windows tools still missing: "
+                + ", ".join(still_required)
+            )
+            return 1
+        del winget_code
+        still_recommended = detect_missing_recommended_dependencies()
+        if still_recommended:
+            print(
+                "Snappix installer warning: recommended tools still missing: "
+                + ", ".join(still_recommended)
+                + ". Video recording may be limited until ffmpeg is installed."
+            )
+        return 0
+
     if missing:
         print(
             "Snappix installer: detecting missing required packages: "
@@ -505,32 +633,35 @@ def _install_packages_with_tracking(
     return install_code
 
 
-def ensure_venv(project_dir: Path, python_bin: str) -> int:
+def ensure_venv(project_dir: Path, python_bin: str | None = None) -> int:
     """
-    Creates a virtual environment when missing.
+    Creates a virtual environment via the managed uv/Python runtime.
+
+    ``python_bin`` is ignored; Snappix always provisions CPython 3.12 through
+    the project-local uv toolchain so host Python versions do not matter.
 
     Args:
         project_dir: Project root directory.
-        python_bin: Python interpreter path.
+        python_bin: Unused; kept for call-site compatibility.
 
     Returns:
         int: Exit code.
     """
 
-    venv_dir = project_dir / ".venv"
-    if venv_dir.exists():
-        return 0
-    print("Snappix installer: creating virtual environment...")
-    create_code = run_command([python_bin, "-m", "venv", str(venv_dir)], project_dir)
-    if create_code == 0:
-        record_project_dir(project_dir)
-        record_venv_created(project_dir)
-    return create_code
+    del python_bin  # Host interpreter is intentionally ignored.
+    from src.runtime_bootstrap import ensure_venv as ensure_managed_venv
+
+    try:
+        ensure_managed_venv(project_dir)
+    except (RuntimeError, OSError) as exc:
+        print(f"Snappix installer error: could not create .venv ({exc}).")
+        return 1
+    return 0
 
 
 def install_packages(project_dir: Path) -> int:
     """
-    Installs Python packages into local virtual environment.
+    Installs Python packages into the local virtual environment via uv.
 
     Args:
         project_dir: Project root directory.
@@ -539,52 +670,54 @@ def install_packages(project_dir: Path) -> int:
         int: Exit code.
     """
 
-    venv_python = project_dir / ".venv" / "bin" / "python3"
-    if not venv_python.exists():
-        venv_python = project_dir / ".venv" / "bin" / "python"
-    if not venv_python.exists():
-        print("Snappix installer error: .venv Python executable not found.")
-        return 1
+    from src.runtime_bootstrap import install_requirements
 
-    print("Snappix installer: installing dependencies...")
-    upgrade_code = run_command(
-        [str(venv_python), "-m", "pip", "install", "--upgrade", "pip"],
-        project_dir,
-    )
-    if upgrade_code != 0:
-        return upgrade_code
-    return run_command(
-        [str(venv_python), "-m", "pip", "install", "-r", "requirements.txt"],
-        project_dir,
-    )
+    try:
+        install_requirements(project_dir)
+    except (RuntimeError, OSError) as exc:
+        print(f"Snappix installer error: {exc}")
+        return 1
+    return 0
 
 
 def bootstrap(project_dir: Path, python_bin: str | None = None) -> int:
     """
-    Runs system package setup plus local virtualenv package installation.
+    Runs system package setup plus managed virtualenv package installation.
+
+    Host ``python_bin`` is unused; the managed uv runtime supplies CPython 3.12.
 
     Args:
         project_dir: Project root directory.
-        python_bin: Python interpreter used to create the virtualenv.
+        python_bin: Unused host interpreter path (API compatibility).
 
     Returns:
         int: Exit code (0 when Python packages are installed successfully).
     """
 
-    interpreter = python_bin or sys.executable
+    del python_bin
     print("Snappix installer: checking installation requirements...")
     record_project_dir(project_dir)
     system_code = install_system_dependencies(project_dir)
-    create_code = ensure_venv(project_dir, interpreter)
-    if create_code != 0:
+
+    from src.runtime_bootstrap import bootstrap_managed_runtime
+
+    runtime_code = bootstrap_managed_runtime(project_dir)
+    if runtime_code != 0:
         print(
-            "Snappix installer error: could not create .venv. "
-            "Install python3-venv and retry."
+            "Snappix installer error: could not provision managed Python runtime. "
+            "Check network access and retry."
         )
-        return create_code
-    install_code = install_packages(project_dir)
-    if install_code != 0:
-        return install_code
+        return runtime_code
+
+    from src.paths import is_windows, venv_python_path
+
+    start_cmd = (
+        str(venv_python_path(project_dir).relative_to(project_dir))
+        if venv_python_path(project_dir).exists()
+        else (r".venv\Scripts\python.exe run.py" if is_windows() else ".venv/bin/python3 run.py")
+    )
+    if not start_cmd.endswith("run.py"):
+        start_cmd = f"{start_cmd} run.py"
 
     if system_code != 0 and detect_missing_system_dependencies():
         print(
@@ -593,12 +726,12 @@ def bootstrap(project_dir: Path, python_bin: str | None = None) -> int:
             + ", ".join(detect_missing_system_dependencies())
         )
         print("Snappix installer: done with warnings.")
-        print("Start command: .venv/bin/python3 run.py")
+        print(f"Start command: {start_cmd}")
         # Soft success: app can start; missing system tools degrade features.
         return 0
 
     print("Snappix installer: done.")
-    print("Start command: .venv/bin/python3 run.py")
+    print(f"Start command: {start_cmd}")
     return 0
 
 

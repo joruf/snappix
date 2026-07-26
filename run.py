@@ -5,7 +5,6 @@ Snappix application entry point.
 
 from __future__ import annotations
 
-import fcntl
 import os
 import shutil
 import subprocess
@@ -117,6 +116,45 @@ def _icon_path() -> Path:
     return _capture_icon_path()
 
 
+def _build_icon_from_svg(path: Path):
+    """
+    Builds a multi-resolution ``QIcon`` from an SVG so Windows taskbar picks it up.
+
+    Args:
+        path: SVG icon file path.
+
+    Returns:
+        QIcon: Rasterized icon with common taskbar sizes.
+    """
+
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QIcon, QPainter, QPixmap
+
+    icon = QIcon()
+    base = QIcon(str(path))
+    sizes = (16, 20, 24, 32, 40, 48, 64, 128, 256)
+    for size in sizes:
+        pixmap = base.pixmap(size, size)
+        if pixmap.isNull() or pixmap.width() < size:
+            # Explicit SVG render fallback when theme/plugin sizing is empty.
+            try:
+                from PySide6.QtSvg import QSvgRenderer
+
+                pixmap = QPixmap(size, size)
+                pixmap.fill(Qt.GlobalColor.transparent)
+                renderer = QSvgRenderer(str(path))
+                painter = QPainter(pixmap)
+                renderer.render(painter)
+                painter.end()
+            except (ImportError, RuntimeError):
+                continue
+        if not pixmap.isNull():
+            icon.addPixmap(pixmap)
+    if icon.availableSizes():
+        return icon
+    return base
+
+
 def _build_capture_icon():
     """
     Builds the red capture taskbar icon.
@@ -127,7 +165,8 @@ def _build_capture_icon():
 
     from PySide6.QtGui import QIcon
 
-    return QIcon.fromTheme("snappix", QIcon(str(_capture_icon_path())))
+    raster = _build_icon_from_svg(_capture_icon_path())
+    return QIcon.fromTheme("snappix", raster)
 
 
 def _build_editor_icon():
@@ -140,7 +179,8 @@ def _build_editor_icon():
 
     from PySide6.QtGui import QIcon
 
-    return QIcon.fromTheme("snappix-editor", QIcon(str(_editor_icon_path())))
+    raster = _build_icon_from_svg(_editor_icon_path())
+    return QIcon.fromTheme("snappix-editor", raster)
 
 
 def _refresh_icon_theme_cache(hicolor_dir: Path) -> None:
@@ -200,15 +240,57 @@ def _resolve_venv_python(project_root: Path) -> Path:
         Path: Python executable path.
     """
 
-    python3_path = project_root / ".venv" / "bin" / "python3"
-    if python3_path.exists():
-        return python3_path
-    return project_root / ".venv" / "bin" / "python"
+    from src.paths import venv_python_path
+
+    return venv_python_path(project_root)
+
+
+def _is_video_editor_widget(editor) -> bool:
+    """
+    Returns whether ``editor`` is a video editor tab without importing QtMultimedia.
+
+    Importing ``VideoEditorWindow`` pulls ``PySide6.QtMultimedia``. Session save
+    for image-only tabs must not depend on that module being present.
+
+    Args:
+        editor: Editor tab widget.
+
+    Returns:
+        bool: True when the widget is a ``VideoEditorWindow``.
+    """
+
+    return type(editor).__name__ == "VideoEditorWindow"
+
+
+def _reexec_with_python(python_bin: Path, project_root: Path) -> None:
+    """
+    Replaces this process with ``python_bin`` running ``run.py``.
+
+    On Windows ``os.execve`` is unreliable, so the child is started with
+    ``subprocess`` and this process exits with the child's return code.
+
+    Args:
+        python_bin: Interpreter to run.
+        project_root: Project root containing ``run.py``.
+
+    Returns:
+        None
+    """
+
+    env = dict(os.environ)
+    env["SNAPPIX_REEXECUTED"] = "1"
+    argv = [str(python_bin), str(project_root / "run.py"), *sys.argv[1:]]
+    if sys.platform == "win32":
+        raise SystemExit(subprocess.call(argv, env=env))
+    os.execve(str(python_bin), argv, env)
 
 
 def _reexec_into_venv_if_available(project_root: Path) -> None:
     """
     Re-executes current process with local .venv Python.
+
+    Skips re-exec when the venv interpreter is below the supported Python
+    version so bootstrap can recreate it with a newer host interpreter.
 
     Args:
         project_root: Project root folder.
@@ -223,16 +305,36 @@ def _reexec_into_venv_if_available(project_root: Path) -> None:
     venv_python = _resolve_venv_python(project_root)
     if not venv_python.exists():
         return
-    if Path(sys.executable).resolve() == venv_python.resolve():
-        return
+    try:
+        if Path(sys.executable).resolve() == venv_python.resolve():
+            return
+    except OSError:
+        pass
 
-    env = dict(os.environ)
-    env["SNAPPIX_REEXECUTED"] = "1"
-    os.execve(
-        str(venv_python),
-        [str(venv_python), str(project_root / "run.py"), *sys.argv[1:]],
-        env,
+    from src.py_compat import is_supported_python
+
+    probe = subprocess.run(
+        [
+            str(venv_python),
+            "-c",
+            "import sys; print(f'{sys.version_info[0]} {sys.version_info[1]}')",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
     )
+    if probe.returncode == 0:
+        parts = probe.stdout.strip().split()
+        if len(parts) == 2:
+            try:
+                venv_version = (int(parts[0]), int(parts[1]))
+            except ValueError:
+                venv_version = None
+            else:
+                if not is_supported_python(venv_version):
+                    return
+
+    _reexec_with_python(venv_python, project_root)
 
 
 def _ensure_qt_runtime() -> int:
@@ -257,13 +359,7 @@ def _ensure_qt_runtime() -> int:
             print("Snappix setup failed: .venv interpreter missing after installation.")
             return 1
 
-        env = dict(os.environ)
-        env["SNAPPIX_REEXECUTED"] = "1"
-        os.execve(
-            str(venv_python),
-            [str(venv_python), str(_project_root() / "run.py"), *sys.argv[1:]],
-            env,
-        )
+        _reexec_with_python(venv_python, _project_root())
 
     return 0
 
@@ -273,11 +369,18 @@ def _autostart_exec_command() -> str:
     Builds shell-safe autostart launch command.
 
     Returns:
-        str: Command string for desktop entry.
+        str: Command string for desktop entry or Startup batch file.
     """
 
+    from src.paths import is_windows, venv_python_path
+
     script_path = _project_root() / "run.py"
-    return f"python3 \"{script_path}\""
+    if is_windows():
+        python_exe = venv_python_path(_project_root())
+        if not python_exe.exists():
+            python_exe = Path(sys.executable)
+        return f'"{python_exe}" "{script_path}"'
+    return f'python3 "{script_path}"'
 
 
 def _user_desktop_dir() -> Path:
@@ -456,12 +559,26 @@ def _acquire_single_instance_lock() -> bool:
     """
 
     global _INSTANCE_LOCK_HANDLE
-    lock_dir = Path.home() / ".cache" / "snappix"
+    from src.paths import user_cache_dir
+
+    lock_dir = user_cache_dir()
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_path = lock_dir / "snappix.lock"
-    handle = lock_path.open("w", encoding="utf-8")
+    handle = lock_path.open("a+", encoding="utf-8")
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if sys.platform == "win32":
+            import msvcrt
+
+            handle.seek(0)
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            except OSError:
+                handle.close()
+                return False
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         handle.close()
         return False
@@ -580,11 +697,11 @@ class AppController:
         self.editors: list[EditorWindow] = []
         self.video_editors: list = []
 
-        config_dir = Path.home() / ".config" / "snappix"
+        from src.paths import default_autostart_path, user_config_dir
+
+        config_dir = user_config_dir()
         self.config_manager = ConfigManager(config_dir / "config.json")
-        self.autostart_manager = AutostartManager(
-            Path.home() / ".config" / "autostart" / "snappix.desktop"
-        )
+        self.autostart_manager = AutostartManager(default_autostart_path())
         self.config: AppConfig = self.config_manager.load()
         self._apply_workspace_directory()
         if self.autostart_manager.is_enabled():
@@ -702,7 +819,7 @@ class AppController:
         self.editor_host.close_requested.connect(self._on_editor_host_close)
         self._QFileDialog = QFileDialog
 
-        self.tray_icon = QSystemTrayIcon(self.app.windowIcon(), self.capture_panel)
+        self.tray_icon = QSystemTrayIcon(self._capture_icon, self.capture_panel)
         if self._tray_available:
             self.tray_icon.setToolTip(APP_NAME)
             tray_menu = QMenu()
@@ -713,13 +830,16 @@ class AppController:
             capture_region_action = QAction("Capture Area", tray_menu)
             capture_region_action.triggered.connect(self.capture_region_from_tray)
             tray_menu.addAction(capture_region_action)
-            capture_window_action = QAction("Capture Window Under Cursor", tray_menu)
-            capture_window_action.triggered.connect(self.capture_window_from_tray)
-            tray_menu.addAction(capture_window_action)
-            capture_video_action = QAction("Capture Video", tray_menu)
-            capture_video_action.triggered.connect(self.start_video_capture)
-            capture_video_action.setEnabled(has_ffmpeg())
-            tray_menu.addAction(capture_video_action)
+            from src.paths import supports_window_capture
+
+            if supports_window_capture():
+                capture_window_action = QAction("Capture Window Under Cursor", tray_menu)
+                capture_window_action.triggered.connect(self.capture_window_from_tray)
+                tray_menu.addAction(capture_window_action)
+            if has_ffmpeg():
+                capture_video_action = QAction("Capture Video", tray_menu)
+                capture_video_action.triggered.connect(self.start_video_capture)
+                tray_menu.addAction(capture_video_action)
             self.recording_pause_action = QAction("Pause Recording", tray_menu)
             self.recording_pause_action.triggered.connect(self._toggle_recording_pause)
             self.recording_pause_action.setVisible(False)
@@ -1063,7 +1183,16 @@ class AppController:
         """
 
         from src.session_recovery import create_video_tab_recovery_path
-        from src.video_editor_window import VideoEditorWindow
+
+        try:
+            from src.video_editor_window import VideoEditorWindow
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "Video editor requires PySide6 QtMultimedia "
+                "(install PySide6_Addons). Re-run Snappix.bat / install_dependencies.py."
+            ) from exc
+
+        from PySide6.QtCore import Qt
 
         editor = VideoEditorWindow(video_path, width, height)
         editor.apply_tool_stroke_widths(
@@ -1084,6 +1213,8 @@ class AppController:
         )
         editor.setWindowIcon(self._editor_icon)
         editor.set_minimize_to_tray_on_close(False)
+        # Embed as a plain widget so Windows does not paint a second title bar.
+        editor.setWindowFlags(Qt.WindowType.Widget)
         editor.setParent(self.editor_tabs)
         tab_index = self.editor_tabs.addTab(editor, title)
         self.editor_tabs.setCurrentIndex(tab_index)
@@ -1112,7 +1243,6 @@ class AppController:
         """
 
         from PySide6.QtCore import QTimer
-        from src.video_editor_window import VideoEditorWindow
 
         def complete_initial_recovery() -> None:
             try:
@@ -1127,7 +1257,7 @@ class AppController:
 
         QTimer.singleShot(0, complete_initial_recovery)
 
-        if isinstance(editor, VideoEditorWindow) and not getattr(editor, "_recovery_duration_hooked", False):
+        if _is_video_editor_widget(editor) and not getattr(editor, "_recovery_duration_hooked", False):
             editor._recovery_duration_hooked = True
 
             def on_duration_changed(_duration_ms: int) -> None:
@@ -1140,7 +1270,7 @@ class AppController:
 
             editor.canvas.duration_changed.connect(on_duration_changed)
 
-        if isinstance(editor, VideoEditorWindow):
+        if _is_video_editor_widget(editor):
             QTimer.singleShot(1500, complete_initial_recovery)
 
     def _on_video_editor_closed(self, editor) -> None:
@@ -1636,10 +1766,13 @@ class AppController:
             None
         """
 
-        from src.platform import apply_linux_window_identity
+        from src.platform import apply_linux_window_identity, apply_windows_window_icon
 
         self.capture_panel.setWindowIcon(self._capture_icon)
         self.app.setWindowIcon(self._capture_icon)
+        apply_windows_window_icon(self.capture_panel, self._capture_icon)
+        if self._tray_available:
+            self.tray_icon.setIcon(self._capture_icon)
         if self.capture_panel.isVisible():
             apply_linux_window_identity(
                 self.capture_panel,
@@ -1656,10 +1789,11 @@ class AppController:
             None
         """
 
-        from src.platform import apply_linux_window_identity
+        from src.platform import apply_linux_window_identity, apply_windows_window_icon
 
         self.editor_host.setWindowIcon(self._editor_icon)
         self.app.setWindowIcon(self._editor_icon)
+        apply_windows_window_icon(self.editor_host, self._editor_icon)
         apply_linux_window_identity(
             self.editor_host,
             desktop_file_name="snappix-editor",
@@ -1705,6 +1839,7 @@ class AppController:
             EditorWindow: Created editor instance.
         """
 
+        from PySide6.QtCore import Qt
         from src.editor_window import EditorWindow
         from src.session_recovery import create_tab_recovery_path
 
@@ -1766,6 +1901,8 @@ class AppController:
         )
         editor.setWindowIcon(self._editor_icon)
         editor.set_minimize_to_tray_on_close(False)
+        # Embed as a plain widget so Windows does not paint a second title bar.
+        editor.setWindowFlags(Qt.WindowType.Widget)
         editor.setParent(self.editor_tabs)
         tab_index = self.editor_tabs.addTab(editor, title)
         self.editor_tabs.setCurrentIndex(tab_index)
@@ -1792,10 +1929,8 @@ class AppController:
             None
         """
 
-        from src.video_editor_window import VideoEditorWindow
-
         try:
-            if isinstance(editor, VideoEditorWindow):
+            if _is_video_editor_widget(editor):
                 editor.flush_recovery_snapshot(force=True)
             else:
                 editor.flush_recovery_snapshot()
@@ -1811,7 +1946,6 @@ class AppController:
         """
 
         from src.session_recovery import EditorSessionTab, ensure_tab_recovery_path, tab_kind_from_recovery_path
-        from src.video_editor_window import VideoEditorWindow
 
         tabs: list[EditorSessionTab] = []
         for tab_index in range(self.editor_tabs.count()):
@@ -1826,7 +1960,7 @@ class AppController:
                 source_path = getattr(editor, "_current_project_path", "")
                 kind = (
                     "video"
-                    if isinstance(editor, VideoEditorWindow)
+                    if _is_video_editor_widget(editor)
                     or tab_kind_from_recovery_path(recovery_path) == "video"
                     else "image"
                 )
@@ -1854,13 +1988,19 @@ class AppController:
         """
         Persists all open editor tabs for startup recovery.
 
+        Failures are logged and swallowed so window-close / hide paths still
+        complete (e.g. optional video modules missing).
+
         Returns:
             None
         """
 
-        from src.session_recovery import save_editor_session
+        try:
+            from src.session_recovery import save_editor_session
 
-        save_editor_session(self._collect_editor_session_tabs())
+            save_editor_session(self._collect_editor_session_tabs())
+        except Exception as exc:
+            print(f"Snappix: could not save editor session: {exc}", file=sys.stderr)
 
     def _maybe_restore_recovery_snapshot(self) -> None:
         """
@@ -2390,6 +2530,7 @@ class AppController:
             None
         """
 
+        from PySide6.QtCore import QTimer
         from src.platform import raise_qt_window
 
         self._sync_editor_host_view()
@@ -2399,6 +2540,8 @@ class AppController:
         self.editor_host.raise_()
         self.editor_host.activateWindow()
         raise_qt_window(self.editor_host)
+        # Native frame metrics (title bar) exist only after show on Windows.
+        QTimer.singleShot(0, self._ensure_editor_host_geometry)
 
     def capture_region_from_tray(self) -> None:
         """
@@ -2461,14 +2604,15 @@ class AppController:
         Ensures the editor host fits on the monitor where it will appear.
 
         Clamps width/height to the available screen work area and keeps the
-        window frame inside that area so it never opens larger than the display.
+        native window frame (title bar + borders) inside that area so minimize,
+        maximize, and close stay reachable.
 
         Returns:
             None
         """
 
         from PySide6.QtGui import QGuiApplication
-        from src.platform import clamp_window_size_to_available
+        from src.platform import clamp_window_size_to_available, fit_top_level_window_to_available
 
         screen = self.editor_host.screen()
         if screen is None:
@@ -2483,23 +2627,16 @@ class AppController:
         available = screen.availableGeometry()
         preferred_width = self.editor_host.width() if self.editor_host.width() > 0 else 1240
         preferred_height = self.editor_host.height() if self.editor_host.height() > 0 else 860
+        # Reserve room for the native title bar / borders that appear after show().
         width, height = clamp_window_size_to_available(
             preferred_width,
             preferred_height,
             available.width(),
             available.height(),
+            margin=48,
         )
         self.editor_host.resize(width, height)
-
-        frame = self.editor_host.frameGeometry()
-        x = frame.x()
-        y = frame.y()
-        if x < available.x() or y < available.y() or not self.editor_host.isVisible():
-            x = available.x() + max(0, (available.width() - frame.width()) // 2)
-            y = available.y() + max(0, (available.height() - frame.height()) // 2)
-        x = min(max(x, available.x()), available.x() + available.width() - frame.width())
-        y = min(max(y, available.y()), available.y() + available.height() - frame.height())
-        self.editor_host.move(x, y)
+        fit_top_level_window_to_available(self.editor_host)
     def _close_editor_tab_by_index(self, index: int) -> None:
         """
         Closes one editor tab and disposes its resources.
@@ -2614,7 +2751,10 @@ class AppController:
 
         if self._is_quitting:
             return
-        self._save_editor_session()
+        try:
+            self._save_editor_session()
+        except Exception as exc:
+            print(f"Snappix: editor close save failed: {exc}", file=sys.stderr)
         self.editor_host.hide()
         self.capture_panel.show()
         self.capture_panel.raise_()
@@ -2631,7 +2771,10 @@ class AppController:
 
         if self._is_quitting:
             return
-        self._save_editor_session()
+        try:
+            self._save_editor_session()
+        except Exception as exc:
+            print(f"Snappix: capture close save failed: {exc}", file=sys.stderr)
         self.capture_panel.hide()
         if self._tray_available and self.tray_icon.isVisible():
             self.tray_icon.showMessage(
@@ -2751,25 +2894,120 @@ def _launch_gui(startup_project_path: str = "") -> int:
     if not _acquire_single_instance_lock():
         print("Snappix is already running.")
         return 0
-    _ensure_desktop_launcher()
+    from src.paths import is_linux, is_windows
+    from src.platform import set_windows_app_user_model_id
+
+    if is_windows():
+        # Before QApplication: otherwise the taskbar keeps the python.exe icon.
+        set_windows_app_user_model_id("Snappix.Capture")
+    if is_linux():
+        _ensure_desktop_launcher()
 
     from PySide6.QtGui import QGuiApplication
     from PySide6.QtWidgets import QApplication
 
-    QGuiApplication.setDesktopFileName("snappix")
+    if is_linux():
+        QGuiApplication.setDesktopFileName("snappix")
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
     capture_icon = _build_capture_icon()
     app.setWindowIcon(capture_icon)
-    _maybe_prompt_desktop_shortcut()
+    if is_linux():
+        _maybe_prompt_desktop_shortcut()
     controller = AppController(app, startup_project_path=startup_project_path)
     app.aboutToQuit.connect(controller._save_editor_session)
     controller.show()
     return app.exec()
 
 
+def _bootstrap_then_reexec(project_root: Path) -> None:
+    """
+    Runs dependency bootstrap then re-executes into the managed ``.venv``.
+
+    Used when the host Python is too old (or incomplete) but network bootstrap
+    can still provision CPython 3.12 via uv.
+
+    Args:
+        project_root: Project root folder.
+
+    Returns:
+        None
+    """
+
+    try:
+        from src.install_progress_gui import run_installer_with_progress_gui
+
+        install_code = run_installer_with_progress_gui()
+    except Exception:
+        import install_dependencies as installer
+
+        install_code = installer.bootstrap(project_root)
+
+    if install_code != 0:
+        print("Snappix setup failed while provisioning the managed runtime.", file=sys.stderr)
+        raise SystemExit(install_code)
+
+    venv_python = _resolve_venv_python(project_root)
+    if not venv_python.exists():
+        print("Snappix setup failed: .venv interpreter missing after installation.", file=sys.stderr)
+        raise SystemExit(1)
+
+    _reexec_with_python(venv_python, project_root)
+
+
+def _ensure_supported_runtime(project_root: Path) -> None:
+    """
+    Ensures the process is running on a supported Python (via ``.venv`` if needed).
+
+    Host interpreters below 3.11 are allowed only long enough to bootstrap the
+    managed runtime; afterward the process re-execs into ``.venv``.
+
+    Args:
+        project_root: Project root folder.
+
+    Returns:
+        None
+    """
+
+    from src.py_compat import is_supported_python
+
+    if is_supported_python():
+        return
+    _bootstrap_then_reexec(project_root)
+
+
+def _require_supported_python() -> None:
+    """
+    Exits with a clear message when the active interpreter is below Python 3.11.
+
+    Returns:
+        None
+    """
+
+    from src.py_compat import is_supported_python, unsupported_python_message
+
+    if is_supported_python():
+        return
+    message = unsupported_python_message()
+    print(message, file=sys.stderr)
+    try:
+        import tkinter
+        from tkinter import messagebox
+
+        root = tkinter.Tk()
+        root.withdraw()
+        messagebox.showerror("Snappix", message)
+        root.destroy()
+    except Exception:
+        pass
+    raise SystemExit(1)
+
+
 if __name__ == "__main__":
-    _reexec_into_venv_if_available(_project_root())
+    _project = _project_root()
+    _reexec_into_venv_if_available(_project)
+    _ensure_supported_runtime(_project)
+    _require_supported_python()
     raise SystemExit(main())
 

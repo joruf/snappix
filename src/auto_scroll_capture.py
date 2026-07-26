@@ -1,12 +1,12 @@
 """
-Automatic window scroll capture for X11 sessions.
+Automatic window scroll capture for X11 and Windows sessions.
 """
 
 from __future__ import annotations
 
 import subprocess
 import time
-from dataclasses import dataclass
+from src.py_compat import dataclass
 from shutil import which
 from typing import Callable, Protocol
 
@@ -376,10 +376,13 @@ def perform_auto_scroll_capture(
     restore_focus_window_id: str = "",
 ) -> AutoScrollCaptureResult:
     """
-    Scrolls one X11 window from top to bottom and stitches captured frames.
+    Scrolls one window from top to bottom and stitches captured frames.
+
+    On Linux this drives the target via xdotool. On Windows it uses Win32
+    focus + ``SendInput`` PageDown/Home keys.
 
     Args:
-        window_id: Target X11 window id.
+        window_id: Target window id (X11 id or HWND decimal string).
         window_rect: Window bounds in global desktop coordinates.
         capture_snapshot: Callable returning one fresh desktop snapshot.
         is_cancelled: Optional callback that returns True when capture should stop.
@@ -390,12 +393,21 @@ def perform_auto_scroll_capture(
         AutoScrollCaptureResult: Capture result with stitched pixmap and metadata.
     """
 
+    from src.paths import is_windows
+
     empty = QPixmap()
     window_width = window_rect.width()
     window_height = window_rect.height()
-    previous_focus = restore_focus_window_id.strip() or get_x11_focused_window_id()
+    previous_focus = restore_focus_window_id.strip() or _current_focus_window_id()
 
-    if which("xdotool") is None or not window_id or window_rect.isNull():
+    if window_rect.isNull() or not window_id:
+        return AutoScrollCaptureResult(
+            pixmap=empty,
+            window_width=window_width,
+            window_height=window_height,
+            message="Scroll capture requires a valid window.",
+        )
+    if not is_windows() and which("xdotool") is None:
         return AutoScrollCaptureResult(
             pixmap=empty,
             window_width=window_width,
@@ -433,7 +445,7 @@ def perform_auto_scroll_capture(
                 message="Scroll capture cancelled.",
             )
 
-        _pulse_scrollbar_visible(window_id)
+        _pulse_scrollbar_visible(window_id, window_rect)
 
         frames: list[QPixmap] = []
         previous_frame = QPixmap()
@@ -474,10 +486,9 @@ def perform_auto_scroll_capture(
                 frames.append(frame)
                 break
 
-            if scrollbar_mode:
-                frames.append(frame)
-                previous_frame = frame
-            elif len(frames) >= MIN_CAPTURED_FRAMES and not previous_frame.isNull():
+            # Always apply content-based stop — including scrollbar_mode when the
+            # thumb never reports "at bottom" (common with Firefox overlay bars).
+            if not previous_frame.isNull() and len(frames) >= MIN_CAPTURED_FRAMES:
                 should_stop, stationary_confirmations = _should_stop_without_scrollbar(
                     previous_frame,
                     frame,
@@ -485,11 +496,9 @@ def perform_auto_scroll_capture(
                 )
                 if should_stop:
                     break
-                frames.append(frame)
-                previous_frame = frame
-            else:
-                frames.append(frame)
-                previous_frame = frame
+
+            frames.append(frame)
+            previous_frame = frame
 
             if frame_index + 1 >= MAX_SCROLL_FRAMES:
                 break
@@ -543,7 +552,7 @@ def perform_auto_scroll_capture(
         )
     finally:
         if previous_focus and previous_focus != window_id:
-            restore_x11_window_focus(previous_focus)
+            _restore_focus_window(previous_focus)
 
 
 def _strip_vertical_uniformity(image: QImage, x_start: int, x_end: int) -> float:
@@ -596,19 +605,66 @@ def _crop_window_from_snapshot(snapshot: DesktopSnapshotLike, window_rect: QRect
     return snapshot.pixmap.copy(local_rect)
 
 
+def _current_focus_window_id() -> str:
+    """
+    Returns the currently focused window id for the active OS.
+
+    Returns:
+        str: Window id / HWND string, or empty when unknown.
+    """
+
+    from src.paths import is_windows
+
+    if is_windows():
+        from src.win32_window import get_foreground_hwnd
+
+        hwnd = get_foreground_hwnd()
+        return str(hwnd) if hwnd else ""
+    return get_x11_focused_window_id()
+
+
+def _restore_focus_window(window_id: str) -> None:
+    """
+    Restores focus to one previously focused window.
+
+    Args:
+        window_id: Window id / HWND string.
+
+    Returns:
+        None
+    """
+
+    from src.paths import is_windows
+
+    if is_windows():
+        from src.win32_window import restore_window_focus
+
+        restore_window_focus(window_id)
+        return
+    restore_x11_window_focus(window_id)
+
+
 def _focus_window_content(window_id: str, window_rect: QRect) -> None:
     """
     Focuses the scrollable content area inside one window.
 
     Args:
-        window_id: Target X11 window id.
+        window_id: Target window id / HWND string.
         window_rect: Window bounds in global desktop coordinates.
 
     Returns:
         None
     """
 
+    from src.paths import is_windows
+
     if window_rect.width() <= 0 or window_rect.height() <= 0:
+        return
+    if is_windows():
+        from src.win32_window import focus_window_content
+
+        focus_window_content(int(window_id), window_rect)
+        time.sleep(0.12)
         return
     click_x = max(1, window_rect.width() // 2)
     click_y = max(96, int(window_rect.height() * _CONTENT_FOCUS_Y_RATIO))
@@ -619,15 +675,23 @@ def _focus_window_content(window_id: str, window_rect: QRect) -> None:
 
 def _scroll_window_to_top(window_id: str, window_rect: QRect) -> None:
     """
-    Moves one window scroll position to the top without stealing global focus.
+    Moves one window scroll position to the top.
 
     Args:
-        window_id: Target X11 window id.
+        window_id: Target window id / HWND string.
         window_rect: Window bounds in global desktop coordinates.
 
     Returns:
         None
     """
+
+    from src.paths import is_windows
+
+    if is_windows():
+        from src.win32_window import scroll_window_to_top
+
+        scroll_window_to_top(int(window_id), window_rect)
+        return
 
     _focus_window_content(window_id, window_rect)
     for _ in range(3):
@@ -640,30 +704,47 @@ def _scroll_window_to_top(window_id: str, window_rect: QRect) -> None:
 
 def _scroll_window_down(window_id: str, window_rect: QRect) -> None:
     """
-    Scrolls one window down by roughly one viewport step without mouse input.
+    Scrolls one window down by roughly one viewport step.
 
     Args:
-        window_id: Target X11 window id.
+        window_id: Target window id / HWND string.
         window_rect: Window bounds in global desktop coordinates.
 
     Returns:
         None
     """
 
+    from src.paths import is_windows
+
+    if is_windows():
+        from src.win32_window import scroll_window_down
+
+        scroll_window_down(int(window_id), window_rect)
+        return
+
     _xdotool("key", "--window", window_id, "Page_Down")
     time.sleep(SCROLL_SETTLE_SECONDS)
 
 
-def _pulse_scrollbar_visible(window_id: str) -> None:
+def _pulse_scrollbar_visible(window_id: str, window_rect: QRect | None = None) -> None:
     """
     Briefly scrolls one window so overlay scrollbars become visible in captures.
 
     Args:
-        window_id: Target X11 window id.
+        window_id: Target window id / HWND string.
+        window_rect: Optional window bounds for Windows content focus.
 
     Returns:
         None
     """
+
+    from src.paths import is_windows
+
+    if is_windows():
+        from src.win32_window import pulse_scrollbar_visible
+
+        pulse_scrollbar_visible(int(window_id), window_rect)
+        return
 
     _xdotool("key", "--window", window_id, "Down")
     time.sleep(0.06)

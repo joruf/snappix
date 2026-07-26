@@ -4,7 +4,7 @@ Canvas size presets and validation helpers.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from src.py_compat import dataclass
 
 MIN_CANVAS_SIZE = 1
 MAX_CANVAS_SIZE = 16384

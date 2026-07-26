@@ -41,18 +41,20 @@ class TestOsCompatibilityMatrix(unittest.TestCase):
         self.assertIn("windows", KNOWN_PROFILES)
         self.assertIn("darwin", KNOWN_PROFILES)
 
-    def test_non_linux_profiles_are_not_runnable(self) -> None:
+    def test_non_linux_profiles(self) -> None:
         """
-        Ensures Windows and macOS are marked unsupported for app launch.
+        Ensures Windows MVP launch is partial and macOS remains unsupported.
         """
 
-        for profile in (WINDOWS, DARWIN):
-            with self.subTest(profile=profile.os_family):
-                capabilities = evaluate_capabilities(profile)
-                self.assertEqual(
-                    capabilities["app_launch"].level,
-                    SupportLevel.UNSUPPORTED,
-                )
+        windows = evaluate_capabilities(WINDOWS)
+        self.assertEqual(windows["app_launch"].level, SupportLevel.PARTIAL)
+        self.assertEqual(windows["fullscreen_capture"].level, SupportLevel.FULL)
+        self.assertEqual(windows["video_capture"].level, SupportLevel.FULL)
+        self.assertEqual(windows["window_capture"].level, SupportLevel.FULL)
+        self.assertEqual(windows["scroll_capture"].level, SupportLevel.PARTIAL)
+
+        darwin = evaluate_capabilities(DARWIN)
+        self.assertEqual(darwin["app_launch"].level, SupportLevel.UNSUPPORTED)
 
     def test_linux_x11_full_supports_capture_features(self) -> None:
         """
@@ -139,8 +141,18 @@ class TestOsCompatibilityMatrix(unittest.TestCase):
                 "video_capture": SupportLevel.UNSUPPORTED,
             },
             "windows": {
-                "app_launch": SupportLevel.UNSUPPORTED,
-                "region_capture": SupportLevel.UNSUPPORTED,
+                "app_launch": SupportLevel.PARTIAL,
+                "region_capture": SupportLevel.PARTIAL,
+                "fullscreen_capture": SupportLevel.FULL,
+                "video_capture": SupportLevel.FULL,
+                "window_capture": SupportLevel.FULL,
+                "scroll_capture": SupportLevel.PARTIAL,
+                "autostart": SupportLevel.FULL,
+            },
+            "windows_minimal": {
+                "app_launch": SupportLevel.PARTIAL,
+                "video_capture": SupportLevel.UNSUPPORTED,
+                "ocr": SupportLevel.UNSUPPORTED,
             },
             "darwin": {
                 "app_launch": SupportLevel.UNSUPPORTED,
@@ -197,15 +209,22 @@ class TestRegionCaptureRouteParity(unittest.TestCase):
     Verifies compatibility routing matches capture.py decision points.
     """
 
-    def test_route_unavailable_outside_linux(self) -> None:
+    def test_route_unavailable_outside_linux_and_windows(self) -> None:
         """
-        Ensures non-Linux profiles cannot select a capture route.
+        Ensures macOS cannot select a capture route.
         """
 
         self.assertEqual(
-            region_capture_route(PlatformContext(os_family="windows")),
+            region_capture_route(PlatformContext(os_family="darwin")),
             "unavailable",
         )
+
+    def test_route_uses_overlay_on_windows(self) -> None:
+        """
+        Ensures Windows region capture uses the Qt overlay route.
+        """
+
+        self.assertEqual(region_capture_route(WINDOWS), "qt_overlay")
 
     def test_route_prefers_grim_on_wayland_when_available(self) -> None:
         """

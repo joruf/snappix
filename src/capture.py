@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 import subprocess
 import time
-from dataclasses import dataclass
+from src.py_compat import dataclass
 from shutil import which
 from typing import Callable
 
@@ -218,6 +218,8 @@ class CapturePanel(QWidget):
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.WindowTitleHint
+            | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinimizeButtonHint
             | Qt.WindowType.WindowCloseButtonHint
         )
         self._initial_position_done = False
@@ -313,6 +315,8 @@ class CapturePanel(QWidget):
             "Select a screen region and record it to video."
         )
         self.capture_video_button.clicked.connect(self.video_capture_requested.emit)
+        # Hidden until ffmpeg availability is confirmed by the app controller.
+        self.capture_video_button.hide()
         button_widgets.append(self.capture_video_button)
 
         self.pick_color_button = QPushButton("")
@@ -332,10 +336,58 @@ class CapturePanel(QWidget):
         button_widgets.append(self.open_editor_button)
 
         buttons_flow.set_flow_widgets(button_widgets)
+        self._apply_platform_feature_availability()
+
+    def _apply_platform_feature_availability(self) -> None:
+        """
+        Hides capture modes that are not available on the current OS.
+
+        Window and scroll capture are available on Linux (X11) and Windows.
+        Video visibility is controlled separately via
+        ``set_video_capture_available``.
+
+        Returns:
+            None
+        """
+
+        from src.paths import supports_scroll_capture, supports_window_capture
+
+        self.capture_window_button.setVisible(supports_window_capture())
+        self.capture_scroll_button.setVisible(supports_scroll_capture())
+        self._refresh_capture_button_flow()
+
+    def _refresh_capture_button_flow(self) -> None:
+        """
+        Rebuilds the capture button flow from currently visible controls.
+
+        Returns:
+            None
+        """
+
+        candidates = [
+            self.capture_fullscreen_button,
+            self.capture_area_button,
+            self.capture_window_button,
+            self.capture_scroll_button,
+            self.capture_video_button,
+            self.pick_color_button,
+            self.open_editor_button,
+        ]
+        visible_buttons = [button for button in candidates if not button.isHidden()]
+        self._buttons_flow.set_flow_widgets(visible_buttons)
+        row_buttons = [
+            button
+            for button in candidates
+            if button is not self.open_editor_button and not button.isHidden()
+        ]
+        self._capture_buttons_row_width = self._measure_row_width(
+            row_buttons,
+            self._buttons_flow.flow_layout.horizontalSpacing(),
+        )
 
     def set_video_capture_available(self, available: bool) -> None:
         """
-        Enables or disables the video capture button based on ffmpeg availability.
+        Shows or hides the video capture button based on ffmpeg availability.
 
         Args:
             available: Whether ffmpeg was found on the system.
@@ -344,6 +396,7 @@ class CapturePanel(QWidget):
             None
         """
 
+        self.capture_video_button.setVisible(available)
         self.capture_video_button.setEnabled(available)
         if available:
             self.capture_video_button.setToolTip(
@@ -353,6 +406,7 @@ class CapturePanel(QWidget):
             self.capture_video_button.setToolTip(
                 "Video capture requires ffmpeg. Please install ffmpeg to enable this feature."
             )
+        self._refresh_capture_button_flow()
 
     def _emit_request_for_mode(self, mode: str) -> None:
         """
@@ -396,15 +450,16 @@ class CapturePanel(QWidget):
             None
         """
 
-        from src.platform import apply_linux_window_identity
+        from src.platform import apply_linux_window_identity, apply_windows_window_icon
 
+        super().showEvent(event)
+        apply_windows_window_icon(self, self.windowIcon())
         apply_linux_window_identity(
             self,
             desktop_file_name="snappix",
             wm_instance="snappix",
             wm_class="snappix",
         )
-        super().showEvent(event)
 
     def set_autostart_checked(self, enabled: bool) -> None:
         """
@@ -516,6 +571,14 @@ class CapturePanel(QWidget):
         margin = 12
         x = available.x() + available.width() - self.width() - margin
         y = available.y() + margin
+        self.move(x, y)
+        from src.platform import fit_top_level_window_to_available
+
+        fit_top_level_window_to_available(self, margin=margin)
+        # Keep the capture panel docked top-right after frame metrics settle.
+        frame = self.frameGeometry()
+        x = available.x() + max(0, available.width() - frame.width() - margin)
+        y = max(available.y() + margin, min(frame.y(), available.y() + max(0, available.height() - frame.height())))
         self.move(x, y)
         self._initial_position_done = True
 
@@ -1166,6 +1229,8 @@ def execute_scroll_capture(
         None
     """
 
+    from src.paths import is_windows, supports_scroll_capture
+
     if is_wayland_session():
         QMessageBox.information(
             None,
@@ -1176,7 +1241,17 @@ def execute_scroll_capture(
         on_cancel()
         return
 
-    if which("xdotool") is None or which("xwininfo") is None:
+    if not supports_scroll_capture():
+        QMessageBox.information(
+            None,
+            "Scroll Capture",
+            "Automatic scroll capture is not available on this operating system yet.\n"
+            "Use Capture Area instead.",
+        )
+        on_cancel()
+        return
+
+    if not is_windows() and (which("xdotool") is None or which("xwininfo") is None):
         QMessageBox.warning(
             None,
             "Scroll Capture Unavailable",
@@ -1189,6 +1264,14 @@ def execute_scroll_capture(
     snapshot = capture_full_screen()
     if snapshot.pixmap.isNull() or snapshot.virtual_geometry.isNull():
         on_cancel()
+        return
+
+    if is_windows():
+        _execute_scroll_capture_windows(
+            snapshot=snapshot,
+            on_capture=on_capture,
+            on_cancel=on_cancel,
+        )
         return
 
     overlay = WindowCaptureOverlay(snapshot.pixmap, snapshot.virtual_geometry)
@@ -1253,76 +1336,181 @@ def execute_scroll_capture(
             on_cancel()
             return
 
-        progress = ScrollCaptureProgressDialog(
-            global_rect.width(),
-            global_rect.height(),
-        )
-        previous_focus_window_id = get_x11_focused_window_id()
-        progress.show_centered()
-
-        cancelled = {"value": False}
-        progress.canceled.connect(lambda: cancelled.__setitem__("value", True))
-        capture_settle_seconds = 0.08
-
-        def capture_without_progress_dialog():
-            was_visible = progress.isVisible()
-            progress.hide()
-            QApplication.processEvents()
-            time.sleep(0.03)
-            QApplication.processEvents()
-            try:
-                raise_x11_window(window_id)
-                time.sleep(capture_settle_seconds)
-                QApplication.processEvents()
-                return capture_full_screen()
-            finally:
-                if was_visible and not cancelled["value"]:
-                    progress.show_centered()
-
-        result = perform_auto_scroll_capture(
+        _run_scroll_capture_after_pick(
             window_id=window_id,
-            window_rect=global_rect,
-            capture_snapshot=capture_without_progress_dialog,
-            is_cancelled=lambda: cancelled["value"] or progress.wasCanceled(),
-            progress_callback=progress.update_progress,
-            restore_focus_window_id=previous_focus_window_id,
+            global_rect=global_rect,
+            on_capture=on_capture,
+            on_cancel=on_cancel,
+            raise_window=raise_x11_window,
+            previous_focus_window_id=get_x11_focused_window_id(),
         )
-        progress.hide()
-        QApplication.processEvents()
-        progress.close()
-
-        if result.cancelled:
-            on_cancel()
-            return
-
-        if not result.succeeded:
-            QMessageBox.warning(
-                None,
-                "Scroll Capture",
-                result.message or "Scroll capture did not produce an image.",
-            )
-            on_cancel()
-            return
-
-        if result.frame_count <= 1 and result.pixmap.height() <= global_rect.height() + 4:
-            answer = QMessageBox.question(
-                None,
-                "Scroll Capture",
-                (
-                    f"{result.message}\n\n"
-                    "Only one frame was captured. The window may not have scrollable "
-                    "content.\nOpen this result anyway?"
-                ),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.Yes,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
-                on_cancel()
-                return
-
-        on_capture(result.pixmap)
 
     QTimer.singleShot(70, check_selection_process)
+
+
+def _execute_scroll_capture_windows(
+    *,
+    snapshot,
+    on_capture: Callable[[QPixmap], None],
+    on_cancel: Callable[[], None],
+) -> None:
+    """
+    Windows scroll pick: overlay click → Win32 HWND → auto-scroll stitch.
+
+    Args:
+        snapshot: Pre-captured desktop snapshot for the pick overlay.
+        on_capture: Callback invoked with stitched pixmap.
+        on_cancel: Callback when capture is cancelled.
+
+    Returns:
+        None
+    """
+
+    from src.win32_window import get_foreground_hwnd, raise_window
+
+    overlay = WindowCaptureOverlay(
+        snapshot.pixmap,
+        snapshot.virtual_geometry,
+        accept_mouse_input=True,
+    )
+    _track_overlay(overlay)
+    selection_state = {"done": False}
+
+    def finish_cancel() -> None:
+        if selection_state["done"]:
+            return
+        selection_state["done"] = True
+        _untrack_overlay(overlay)
+        overlay.close()
+        on_cancel()
+
+    def on_window_selected(window_id: str, global_rect: QRect, _pixmap: QPixmap) -> None:
+        if selection_state["done"]:
+            return
+        selection_state["done"] = True
+        _untrack_overlay(overlay)
+        overlay.close()
+        if not window_id or global_rect.isNull():
+            on_cancel()
+            return
+        previous_focus = str(get_foreground_hwnd() or "")
+        _run_scroll_capture_after_pick(
+            window_id=window_id,
+            global_rect=global_rect,
+            on_capture=on_capture,
+            on_cancel=on_cancel,
+            raise_window=lambda hwnd_str: raise_window(int(hwnd_str)),
+            previous_focus_window_id=previous_focus,
+        )
+
+    def on_capture_done_without_id(pixmap: QPixmap) -> None:
+        # Fallback if only capture_done fired without window_selected.
+        if selection_state["done"]:
+            return
+        # Prefer window_selected; ignore bare pixmap-only completion here.
+        _ = pixmap
+
+    overlay.window_selected.connect(on_window_selected)
+    overlay.capture_done.connect(on_capture_done_without_id)
+    overlay.capture_cancelled.connect(finish_cancel)
+    overlay.show()
+    overlay.raise_()
+    overlay.activateWindow()
+    overlay.grabKeyboard()
+    overlay.repaint()
+
+
+def _run_scroll_capture_after_pick(
+    *,
+    window_id: str,
+    global_rect: QRect,
+    on_capture: Callable[[QPixmap], None],
+    on_cancel: Callable[[], None],
+    raise_window: Callable[[str], bool],
+    previous_focus_window_id: str,
+) -> None:
+    """
+    Runs the auto-scroll loop after a window has been selected.
+
+    Args:
+        window_id: Target window id / HWND string.
+        global_rect: Window geometry in global coordinates.
+        on_capture: Success callback.
+        on_cancel: Cancel/failure callback.
+        raise_window: Callable that raises the target window before each grab.
+        previous_focus_window_id: Window to restore after capture.
+
+    Returns:
+        None
+    """
+
+    progress = ScrollCaptureProgressDialog(
+        global_rect.width(),
+        global_rect.height(),
+    )
+    progress.show_centered()
+
+    cancelled = {"value": False}
+    progress.canceled.connect(lambda: cancelled.__setitem__("value", True))
+    capture_settle_seconds = 0.08
+
+    def capture_without_progress_dialog():
+        was_visible = progress.isVisible()
+        progress.hide()
+        QApplication.processEvents()
+        time.sleep(0.03)
+        QApplication.processEvents()
+        try:
+            raise_window(window_id)
+            time.sleep(capture_settle_seconds)
+            QApplication.processEvents()
+            return capture_full_screen()
+        finally:
+            if was_visible and not cancelled["value"]:
+                progress.show_centered()
+
+    result = perform_auto_scroll_capture(
+        window_id=window_id,
+        window_rect=global_rect,
+        capture_snapshot=capture_without_progress_dialog,
+        is_cancelled=lambda: cancelled["value"] or progress.wasCanceled(),
+        progress_callback=progress.update_progress,
+        restore_focus_window_id=previous_focus_window_id,
+    )
+    progress.hide()
+    QApplication.processEvents()
+    progress.close()
+
+    if result.cancelled:
+        on_cancel()
+        return
+
+    if not result.succeeded:
+        QMessageBox.warning(
+            None,
+            "Scroll Capture",
+            result.message or "Scroll capture did not produce an image.",
+        )
+        on_cancel()
+        return
+
+    if result.frame_count <= 1 and result.pixmap.height() <= global_rect.height() + 4:
+        answer = QMessageBox.question(
+            None,
+            "Scroll Capture",
+            (
+                f"{result.message}\n\n"
+                "Only one frame was captured. The window may not have scrollable "
+                "content.\nOpen this result anyway?"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            on_cancel()
+            return
+
+    on_capture(result.pixmap)
 
 
 class WindowCaptureOverlay(QWidget):
@@ -1334,12 +1522,22 @@ class WindowCaptureOverlay(QWidget):
     window_selected = Signal(str, QRect, QPixmap)
     capture_cancelled = Signal()
 
-    def __init__(self, screenshot: QPixmap, virtual_geometry: QRect) -> None:
+    def __init__(
+        self,
+        screenshot: QPixmap,
+        virtual_geometry: QRect,
+        *,
+        accept_mouse_input: bool = False,
+    ) -> None:
         """
         Initializes window detection overlay.
 
         Args:
             screenshot: Current desktop screenshot.
+            virtual_geometry: Combined virtual desktop geometry.
+            accept_mouse_input: When True (Windows), the overlay receives clicks
+                and completes capture via ``mouseReleaseEvent``. When False
+                (Linux X11), the overlay is click-through so ``xdotool`` can pick.
         """
 
         super().__init__()
@@ -1347,21 +1545,42 @@ class WindowCaptureOverlay(QWidget):
         self._virtual_geometry = virtual_geometry
         self._hover_rect = QRect()
         self._hover_label = ""
+        self._exclude_hwnds: tuple[int, ...] = ()
+        self._accept_mouse_input = accept_mouse_input
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(70)
         self._poll_timer.timeout.connect(self._update_hover_from_cursor)
-        self.setWindowFlags(
+        flags = (
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.WindowTransparentForInput
         )
+        if not accept_mouse_input:
+            flags |= Qt.WindowType.WindowTransparentForInput
+        self.setWindowFlags(flags)
         self.setGeometry(self._virtual_geometry)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCursor(Qt.CursorShape.CrossCursor)
         self._escape_shortcut = _install_escape_shortcut(self, self._cancel_capture)
         self._poll_timer.start()
+
+    def showEvent(self, event) -> None:
+        """
+        Records this overlay HWND so Win32 hit-tests can skip it.
+
+        Args:
+            event: Qt show event.
+
+        Returns:
+            None
+        """
+
+        super().showEvent(event)
+        try:
+            self._exclude_hwnds = (int(self.winId()),)
+        except (RuntimeError, TypeError, ValueError):
+            self._exclude_hwnds = ()
 
     def paintEvent(self, _) -> None:
         """
@@ -1418,7 +1637,10 @@ class WindowCaptureOverlay(QWidget):
             None
         """
 
-        rect = detect_window_geometry(event.globalPosition().toPoint())
+        rect = detect_window_geometry(
+            event.globalPosition().toPoint(),
+            exclude_hwnds=self._exclude_hwnds,
+        )
         if rect != self._hover_rect:
             self._hover_rect = rect
             if rect.isNull():
@@ -1442,9 +1664,17 @@ class WindowCaptureOverlay(QWidget):
 
         if event.button() != Qt.MouseButton.LeftButton:
             return
-        window_id, global_rect = detect_window_at_point(event.globalPosition().toPoint())
+        window_id, global_rect = detect_window_at_point(
+            event.globalPosition().toPoint(),
+            exclude_hwnds=self._exclude_hwnds,
+        )
         if global_rect.width() > 2 and global_rect.height() > 2:
             local_rect = self._to_local_rect(global_rect)
+            local_rect = local_rect.intersected(self._screenshot.rect())
+            if local_rect.width() <= 1 or local_rect.height() <= 1:
+                self.capture_cancelled.emit()
+                self.close()
+                return
             pixmap = self._screenshot.copy(local_rect)
             self.capture_done.emit(pixmap)
             if window_id:
@@ -1502,7 +1732,7 @@ class WindowCaptureOverlay(QWidget):
             None
         """
 
-        rect = detect_window_geometry(QCursor.pos())
+        rect = detect_window_geometry(QCursor.pos(), exclude_hwnds=self._exclude_hwnds)
         if rect == self._hover_rect:
             return
         self._hover_rect = rect
@@ -1690,16 +1920,37 @@ class ColorPickerOverlay(QWidget):
         image = self._screenshot.toImage()
         return image.pixelColor(local_pos)
 
-def detect_window_at_point(global_pos: QPoint) -> tuple[str, QRect]:
+def detect_window_at_point(
+    global_pos: QPoint,
+    *,
+    exclude_hwnds: tuple[int, ...] | list[int] = (),
+) -> tuple[str, QRect]:
     """
-    Detects the X11 window id and geometry below one global cursor position.
+    Detects the top-level window id and geometry below one global cursor position.
+
+    On Linux this uses xdotool/xwininfo. On Windows it uses Win32 EnumWindows.
 
     Args:
         global_pos: Global cursor position.
+        exclude_hwnds: Optional HWNDs to ignore (Windows overlay, etc.).
 
     Returns:
         tuple[str, QRect]: Window id and geometry, or empty values when unknown.
     """
+
+    from src.paths import is_windows
+
+    if is_windows():
+        from src.win32_window import window_at_point
+
+        hwnd, geometry = window_at_point(
+            global_pos.x(),
+            global_pos.y(),
+            exclude_hwnds=exclude_hwnds,
+        )
+        if not hwnd or geometry.isNull():
+            return "", QRect()
+        return str(hwnd), geometry
 
     if which("xdotool") is None or which("xwininfo") is None:
         return "", QRect()
@@ -1722,18 +1973,26 @@ def detect_window_at_point(global_pos: QPoint) -> tuple[str, QRect]:
         return "", QRect()
 
 
-def detect_window_geometry(global_pos: QPoint) -> QRect:
+def detect_window_geometry(
+    global_pos: QPoint,
+    *,
+    exclude_hwnds: tuple[int, ...] | list[int] = (),
+) -> QRect:
     """
-    Detects geometry of the X11 window below current cursor position.
+    Detects geometry of the window below the current cursor position.
 
     Args:
         global_pos: Global cursor position fallback.
+        exclude_hwnds: Optional HWNDs to ignore on Windows.
 
     Returns:
         QRect: Detected window rectangle or fallback empty rectangle.
     """
 
-    _window_id, geometry = detect_window_at_point(global_pos)
+    _window_id, geometry = detect_window_at_point(
+        global_pos,
+        exclude_hwnds=exclude_hwnds,
+    )
     return geometry
 
 
@@ -2240,6 +2499,43 @@ def execute_capture_request(
                 "Use Capture Area or Scroll capture instead.",
             )
             on_cancel()
+            return
+
+        from src.paths import is_windows, supports_window_capture
+
+        if not supports_window_capture():
+            QMessageBox.information(
+                None,
+                "Window Capture",
+                "Window capture is not available on this operating system yet.\n"
+                "Use Capture Area instead.",
+            )
+            on_cancel()
+            return
+
+        if is_windows():
+            overlay = WindowCaptureOverlay(
+                screenshot,
+                virtual_geometry,
+                accept_mouse_input=True,
+            )
+            _track_overlay(overlay)
+
+            def on_windows_capture(pixmap: QPixmap) -> None:
+                _untrack_overlay(overlay)
+                on_capture(pixmap)
+
+            def on_windows_cancel() -> None:
+                _untrack_overlay(overlay)
+                on_cancel()
+
+            overlay.capture_done.connect(on_windows_capture)
+            overlay.capture_cancelled.connect(on_windows_cancel)
+            overlay.show()
+            overlay.raise_()
+            overlay.activateWindow()
+            overlay.grabKeyboard()
+            overlay.repaint()
             return
 
         if which("xdotool") is None or which("xwininfo") is None:

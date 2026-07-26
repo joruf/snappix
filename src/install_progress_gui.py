@@ -37,9 +37,17 @@ def map_installer_line_to_status(line: str) -> str | None:
         return _trim_status(normalized)
     if "installing system dependencies" in lowered:
         return "Installing Linux system packages…"
+    if "installing windows packages via winget" in lowered or "winget install" in lowered:
+        return "Installing Windows tools via winget…"
+    if "installing uv" in lowered or "uv toolchain" in lowered:
+        return "Installing uv toolchain…"
+    if "downloading" in lowered and "uv" in lowered:
+        return "Downloading uv toolchain…"
+    if "ensuring python" in lowered or "python 3.12 runtime" in lowered:
+        return "Downloading Python 3.12 runtime…"
     if "requesting administrator rights via pkexec" in lowered:
         return "Waiting for administrator password dialog…"
-    if "required system packages are present" in lowered:
+    if "required system packages are present" in lowered or "required tools are present" in lowered:
         return "System packages ready — continuing setup…"
     if "trying recommended tools" in lowered:
         return "Checking recommended capture tools…"
@@ -340,7 +348,9 @@ def run_installer_with_progress_gui() -> int:
             "Dependency installation failed.\n\n"
             f"{details}\n\n"
             "You can retry with:\n"
-            "python3 install_dependencies.py",
+            "Snappix.bat   (Windows)\n"
+            "./snappix.sh  (Linux)\n"
+            "or: python install_dependencies.py",
         )
 
     root.destroy()

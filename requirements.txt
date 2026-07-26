@@ -1,7 +1,13 @@
 # Pinned exactly: an unpinned install could silently pull in a newer major
 # version with breaking API/behavior changes and break the whole app on next
 # fresh install. Bump these deliberately, then test, rather than floating.
+#
+# Pin Essentials + Addons explicitly: QtMultimedia / QtSvg live in Addons.
+# Installing only the meta package can leave a partial tree on interrupted runs.
 PySide6==6.11.1
+PySide6_Essentials==6.11.1
+PySide6_Addons==6.11.1
+shiboken6==6.11.1
 Pillow==12.3.0
 requests==2.34.2
 pynput==1.8.2

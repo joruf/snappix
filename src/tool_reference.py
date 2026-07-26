@@ -4,7 +4,7 @@ Shared tool names and help text for tooltips and the tools reference table.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from src.py_compat import dataclass
 
 from src.editor_canvas import Tool
 

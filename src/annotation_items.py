@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import base64
 import math
-from dataclasses import dataclass
+from src.py_compat import dataclass
 from typing import cast
 from uuid import uuid4
 

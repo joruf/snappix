@@ -24,6 +24,7 @@ class TestInstallDependencies(unittest.TestCase):
 
         project_dir = Path("/tmp/snappix-test")
         with (
+            patch("src.paths.is_windows", return_value=False),
             patch.object(installer, "detect_missing_system_dependencies", return_value=[]),
             patch.object(
                 installer,
@@ -48,6 +49,7 @@ class TestInstallDependencies(unittest.TestCase):
 
         project_dir = Path("/tmp/snappix-test")
         with (
+            patch("src.paths.is_windows", return_value=False),
             patch.object(installer, "detect_missing_system_dependencies", return_value=[]),
             patch.object(
                 installer,
@@ -71,6 +73,7 @@ class TestInstallDependencies(unittest.TestCase):
 
         project_dir = Path("/tmp/snappix-test")
         with (
+            patch("src.paths.is_windows", return_value=False),
             patch.object(
                 installer,
                 "detect_missing_system_dependencies",
@@ -87,14 +90,16 @@ class TestInstallDependencies(unittest.TestCase):
 
     def test_bootstrap_continues_python_install_after_system_warning(self) -> None:
         """
-        Ensures venv/pip still succeed when system elevation fails.
+        Ensures managed runtime still succeeds when system elevation fails.
         """
 
         project_dir = Path("/tmp/snappix-test")
         with (
             patch.object(installer, "install_system_dependencies", return_value=1),
-            patch.object(installer, "ensure_venv", return_value=0) as venv_mock,
-            patch.object(installer, "install_packages", return_value=0) as pip_mock,
+            patch(
+                "src.runtime_bootstrap.bootstrap_managed_runtime",
+                return_value=0,
+            ) as runtime_mock,
             patch.object(
                 installer,
                 "detect_missing_system_dependencies",
@@ -104,25 +109,24 @@ class TestInstallDependencies(unittest.TestCase):
             code = installer.bootstrap(project_dir, "/usr/bin/python3")
 
         self.assertEqual(code, 0)
-        venv_mock.assert_called_once_with(project_dir, "/usr/bin/python3")
-        pip_mock.assert_called_once_with(project_dir)
+        runtime_mock.assert_called_once_with(project_dir)
 
-    def test_bootstrap_fails_when_venv_cannot_be_created(self) -> None:
+    def test_bootstrap_fails_when_managed_runtime_cannot_be_created(self) -> None:
         """
-        Ensures missing python3-venv still fails the installer clearly.
+        Ensures a failed managed Python/uv bootstrap fails the installer clearly.
         """
 
         project_dir = Path("/tmp/snappix-test")
         with (
             patch.object(installer, "install_system_dependencies", return_value=0),
-            patch.object(installer, "ensure_venv", return_value=1),
-            patch.object(installer, "install_packages") as pip_mock,
+            patch(
+                "src.runtime_bootstrap.bootstrap_managed_runtime",
+                return_value=1,
+            ),
         ):
             code = installer.bootstrap(project_dir, "/usr/bin/python3")
 
         self.assertEqual(code, 1)
-        pip_mock.assert_not_called()
-
     def test_build_install_commands_for_apt(self) -> None:
         """
         Ensures apt commands include update plus package install.
@@ -175,6 +179,18 @@ class TestInstallProgressGuiHelpers(unittest.TestCase):
             "virtual environment",
             map_installer_line_to_status(
                 "Snappix installer: creating virtual environment..."
+            ).lower(),
+        )
+        self.assertIn(
+            "python 3.12",
+            map_installer_line_to_status(
+                "Snappix installer: ensuring Python 3.12 runtime…"
+            ).lower(),
+        )
+        self.assertIn(
+            "uv",
+            map_installer_line_to_status(
+                "Snappix installer: installing uv toolchain…"
             ).lower(),
         )
         self.assertIsNone(map_installer_line_to_status("   "))

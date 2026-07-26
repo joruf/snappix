@@ -5,7 +5,7 @@ Application configuration model and persistence.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from src.py_compat import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -207,10 +207,12 @@ def default_workspace_directory() -> str:
     Returns the default workspace folder for unsaved editor session data.
 
     Returns:
-        str: Absolute path under the user home directory.
+        str: Absolute path under the user data directory.
     """
 
-    return str(Path.home() / ".snappix")
+    from src.paths import user_data_dir
+
+    return str(user_data_dir())
 
 
 def resolve_workspace_directory(raw: str = "") -> Path:

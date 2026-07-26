@@ -4,7 +4,7 @@ Data models for Snappix projects.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from src.py_compat import dataclass, field
 from typing import Any
 
 from src.constants import PROJECT_FORMAT_NAME, PROJECT_FORMAT_VERSION

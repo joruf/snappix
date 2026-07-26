@@ -4,7 +4,7 @@ Application theme definitions and Qt Style Sheet generation.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from src.py_compat import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

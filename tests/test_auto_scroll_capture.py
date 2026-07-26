@@ -5,7 +5,7 @@ Unit tests for automatic window scroll capture helpers.
 from __future__ import annotations
 
 import unittest
-from dataclasses import dataclass
+from src.py_compat import dataclass
 from unittest.mock import MagicMock, patch
 
 try:
@@ -356,6 +356,7 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
 
         cls._app = ensure_qapp()
 
+    @patch("src.paths.is_windows", return_value=False)
     @patch("src.auto_scroll_capture.restore_x11_window_focus")
     @patch("src.auto_scroll_capture.get_x11_focused_window_id", return_value="999")
     @patch("src.auto_scroll_capture.time.sleep")
@@ -368,6 +369,7 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
         _mock_sleep: MagicMock,
         _mock_focus_get: MagicMock,
         _mock_focus_restore: MagicMock,
+        _mock_is_windows: MagicMock,
     ) -> None:
         """
         Ensures simulated scroll capture merges all frames into one tall image.
@@ -393,6 +395,7 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
         self.assertGreaterEqual(result.pixmap.height(), 900)
         self.assertLessEqual(result.pixmap.height(), 980)
 
+    @patch("src.paths.is_windows", return_value=False)
     @patch("src.auto_scroll_capture.restore_x11_window_focus")
     @patch("src.auto_scroll_capture.get_x11_focused_window_id", return_value="999")
     @patch("src.auto_scroll_capture.time.sleep")
@@ -405,6 +408,7 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
         _mock_sleep: MagicMock,
         _mock_focus_get: MagicMock,
         _mock_focus_restore: MagicMock,
+        _mock_is_windows: MagicMock,
     ) -> None:
         """
         Ensures duplicate trailing frames do not append the last page multiple times.
@@ -431,6 +435,7 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
         self.assertLessEqual(result.pixmap.height(), 760)
         self.assertGreaterEqual(result.pixmap.height(), 680)
 
+    @patch("src.paths.is_windows", return_value=False)
     @patch("src.auto_scroll_capture.restore_x11_window_focus")
     @patch("src.auto_scroll_capture.get_x11_focused_window_id", return_value="999")
     @patch("src.auto_scroll_capture.time.sleep")
@@ -443,6 +448,7 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
         _mock_sleep: MagicMock,
         _mock_focus_get: MagicMock,
         _mock_focus_restore: MagicMock,
+        _mock_is_windows: MagicMock,
     ) -> None:
         """
         Ensures short two-page documents stop after a few frames instead of scrolling endlessly.
@@ -468,3 +474,54 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
         self.assertGreaterEqual(result.frame_count, 2)
         self.assertGreaterEqual(result.pixmap.height(), 430)
         self.assertLessEqual(result.pixmap.height(), 520)
+
+    @patch("src.paths.is_windows", return_value=False)
+    @patch("src.auto_scroll_capture.restore_x11_window_focus")
+    @patch("src.auto_scroll_capture.get_x11_focused_window_id", return_value="999")
+    @patch("src.auto_scroll_capture.time.sleep")
+    @patch("src.auto_scroll_capture._xdotool", return_value=True)
+    @patch("src.auto_scroll_capture.which", return_value="/usr/bin/xdotool")
+    def test_stops_when_scrollbar_mode_never_reports_bottom(
+        self,
+        _mock_which: MagicMock,
+        _mock_xdotool: MagicMock,
+        _mock_sleep: MagicMock,
+        _mock_focus_get: MagicMock,
+        _mock_focus_restore: MagicMock,
+        _mock_is_windows: MagicMock,
+    ) -> None:
+        """
+        Ensures stationary content stops capture even if scrollbar thumb never
+        reports at the bottom (Firefox-style overlay scrollbar false positive).
+        """
+
+        document = _build_scrollable_document(320, 480)
+        window_rect = QRect(0, 100, 320, 240)
+        simulator = _ScrollSnapshotSimulator(document, window_rect, step_rows=200)
+        stuck_scrollbar = ScrollbarInfo(
+            track_rect=QRect(300, 0, 12, 240),
+            thumb_rect=QRect(300, 80, 12, 60),
+        )
+
+        def fake_scroll_down(_window_id: str, *_args: object) -> None:
+            simulator.scroll_down()
+
+        with patch(
+            "src.auto_scroll_capture._scroll_window_down", side_effect=fake_scroll_down
+        ), patch(
+            "src.auto_scroll_capture.detect_vertical_scrollbar",
+            return_value=stuck_scrollbar,
+        ), patch(
+            "src.auto_scroll_capture._is_scrollbar_reliable", return_value=True
+        ), patch(
+            "src.auto_scroll_capture._is_scrollbar_at_bottom", return_value=False
+        ):
+            result = perform_auto_scroll_capture(
+                window_id="88888",
+                window_rect=window_rect,
+                capture_snapshot=simulator.capture,
+            )
+
+        self.assertTrue(result.succeeded, result.message)
+        self.assertLessEqual(result.frame_count, 5)
+        self.assertGreaterEqual(result.frame_count, 2)

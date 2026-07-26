@@ -73,9 +73,10 @@ class TestBuildRecordCommand(unittest.TestCase):
         """
 
         rect = QRect(100, 200, 640, 480)
-        command = build_record_command(
-            rect, Path("/tmp/out.mp4"), record_microphone=False
-        )
+        with patch("src.paths.is_windows", return_value=False):
+            command = build_record_command(
+                rect, Path("/tmp/out.mp4"), record_microphone=False
+            )
         self.assertIn("x11grab", command)
         self.assertIn("640x480", command)
         self.assertIn(":0.0+100,200", command)
@@ -88,9 +89,10 @@ class TestBuildRecordCommand(unittest.TestCase):
         """
 
         rect = QRect(0, 0, 640, 480)
-        command = build_record_command(
-            rect, Path("/tmp/out.mp4"), record_microphone=True
-        )
+        with patch("src.paths.is_windows", return_value=False):
+            command = build_record_command(
+                rect, Path("/tmp/out.mp4"), record_microphone=True
+            )
         self.assertIn("pulse", command)
         self.assertIn("default", command)
         self.assertIn("aac", command)
@@ -100,6 +102,27 @@ class TestBuildRecordCommand(unittest.TestCase):
         # Stereo capture for clearer playback than the previous mono track.
         ac_index = command.index("-ac")
         self.assertEqual(command[ac_index + 1], "2")
+
+    def test_windows_command_uses_gdigrab(self) -> None:
+        """
+        Ensures Windows recordings use ffmpeg gdigrab with desktop offsets.
+        """
+
+        rect = QRect(100, 200, 640, 480)
+        with patch("src.paths.is_windows", return_value=True), patch(
+            "src.video_recorder.resolve_ffmpeg_path", return_value="ffmpeg"
+        ):
+            command = build_record_command(
+                rect, Path(r"C:\tmp\out.mp4"), record_microphone=False
+            )
+        self.assertEqual(command[0], "ffmpeg")
+        self.assertIn("gdigrab", command)
+        self.assertIn("desktop", command)
+        self.assertIn("-offset_x", command)
+        self.assertIn("100", command)
+        self.assertIn("-offset_y", command)
+        self.assertIn("200", command)
+        self.assertNotIn("x11grab", command)
 
 
 class TestBuildExportCommand(unittest.TestCase):
@@ -148,8 +171,8 @@ class TestBuildExportCommand(unittest.TestCase):
         filter_complex = command[filter_index]
         self.assertIn("between(t,0.0,1.5)", filter_complex)
         self.assertIn("between(t,1.5,3.0)", filter_complex)
-        self.assertEqual(command.count("/tmp/a.png"), 1)
-        self.assertEqual(command.count("/tmp/b.png"), 1)
+        self.assertEqual(command.count(str(Path("/tmp/a.png"))), 1)
+        self.assertEqual(command.count(str(Path("/tmp/b.png"))), 1)
         self.assertIn("0:a?", command)
         self.assertIn("192k", command)
 
@@ -184,6 +207,11 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         """
 
         ensure_qapp()
+        # Host Python on Windows lacks these attrs; Linux production code needs them.
+        if not hasattr(signal, "SIGSTOP"):
+            signal.SIGSTOP = 19  # type: ignore[attr-defined]
+        if not hasattr(signal, "SIGCONT"):
+            signal.SIGCONT = 18  # type: ignore[attr-defined]
 
     def _make_recorder_with_mock_process(self, poll_return_values=None):
         """
@@ -199,11 +227,18 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         recorder = VideoRecorder()
         mock_process = MagicMock()
         mock_process.pid = 4242
-        mock_process.poll.side_effect = poll_return_values or [0]
+        # None => still running during launch health check; then test-specific values.
+        if poll_return_values is None:
+            mock_process.poll.return_value = None
+        else:
+            mock_process.poll.side_effect = [None, *list(poll_return_values)]
         mock_process.wait.return_value = 0
+        mock_process.stderr = None
         with patch("src.video_recorder.has_ffmpeg", return_value=True), patch(
-            "subprocess.Popen", return_value=mock_process
-        ):
+            "src.video_recorder.resolve_ffmpeg_path", return_value="ffmpeg"
+        ), patch("src.paths.is_windows", return_value=False), patch(
+            "src.video_recorder.time.sleep"
+        ), patch("subprocess.Popen", return_value=mock_process):
             started = recorder.start(
                 QRect(0, 0, 640, 480), Path("/tmp/rec.mp4"), record_microphone=False
             )
@@ -219,7 +254,7 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         """
 
         recorder, mock_process = self._make_recorder_with_mock_process()
-        with patch("os.kill") as mock_kill:
+        with patch("src.paths.is_windows", return_value=False), patch("os.kill") as mock_kill:
             recorder.pause()
             mock_kill.assert_called_once_with(mock_process.pid, signal.SIGSTOP)
         self.assertEqual(recorder.state, RecordingState.PAUSED)
@@ -230,9 +265,9 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         """
 
         recorder, mock_process = self._make_recorder_with_mock_process()
-        with patch("os.kill"):
+        with patch("src.paths.is_windows", return_value=False), patch("os.kill"):
             recorder.pause()
-        with patch("os.kill") as mock_kill:
+        with patch("src.paths.is_windows", return_value=False), patch("os.kill") as mock_kill:
             recorder.resume()
             mock_kill.assert_called_once_with(mock_process.pid, signal.SIGCONT)
         self.assertEqual(recorder.state, RecordingState.RECORDING)
@@ -244,10 +279,10 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         """
 
         recorder, mock_process = self._make_recorder_with_mock_process()
-        with patch("os.kill"):
+        with patch("src.paths.is_windows", return_value=False), patch("os.kill"):
             recorder.pause()
 
-        with patch("os.kill") as mock_kill:
+        with patch("src.paths.is_windows", return_value=False), patch("os.kill") as mock_kill:
             recorder.stop()
             mock_kill.assert_called_once_with(mock_process.pid, signal.SIGCONT)
         mock_process.send_signal.assert_called_once_with(signal.SIGINT)
@@ -259,10 +294,25 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         """
 
         recorder, mock_process = self._make_recorder_with_mock_process()
-        with patch("os.kill") as mock_kill:
+        with patch("src.paths.is_windows", return_value=False), patch("os.kill") as mock_kill:
             recorder.stop()
             mock_kill.assert_not_called()
         mock_process.send_signal.assert_called_once_with(signal.SIGINT)
+        mock_process.stdin.write.assert_called_once_with(b"q\n")
+
+    def test_windows_stop_quits_via_stdin_without_sigint(self) -> None:
+        """
+        Ensures Windows stop uses stdin ``q`` because SIGINT is unsupported.
+        """
+
+        recorder, mock_process = self._make_recorder_with_mock_process()
+        mock_process.send_signal.side_effect = ValueError("Unsupported signal: 2")
+        with patch("src.paths.is_windows", return_value=True), patch("os.kill") as mock_kill:
+            recorder.stop()
+            mock_kill.assert_not_called()
+        mock_process.send_signal.assert_not_called()
+        mock_process.stdin.write.assert_called_once_with(b"q\n")
+        self.assertEqual(recorder.state, RecordingState.IDLE)
 
     def test_stop_emits_finished_with_output_path(self) -> None:
         """
@@ -272,9 +322,9 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         recorder, _mock_process = self._make_recorder_with_mock_process()
         received: list[str] = []
         recorder.finished.connect(received.append)
-        with patch("os.kill"):
+        with patch("src.paths.is_windows", return_value=False), patch("os.kill"):
             recorder.stop()
-        self.assertEqual(received, ["/tmp/rec.mp4"])
+        self.assertEqual(received, [str(Path("/tmp/rec.mp4"))])
 
     def test_relocate_starts_new_segment_at_new_position(self) -> None:
         """
@@ -282,7 +332,9 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         """
 
         recorder, mock_process = self._make_recorder_with_mock_process()
-        with patch("subprocess.Popen", return_value=mock_process) as popen_mock:
+        with patch("src.paths.is_windows", return_value=False), patch(
+            "subprocess.Popen", return_value=mock_process
+        ) as popen_mock:
             moved = recorder.relocate(QRect(200, 120, 640, 480))
         self.assertTrue(moved)
         self.assertNotEqual(recorder.clamped_rect.topLeft(), QPoint(0, 0))

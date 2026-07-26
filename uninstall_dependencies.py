@@ -54,7 +54,8 @@ def with_privilege(command: list[str]) -> list[str] | None:
         list[str] | None: Privileged command or None when impossible.
     """
 
-    if os.geteuid() == 0:
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is not None and geteuid() == 0:
         return command
     if which("sudo") is not None:
         return ["sudo", *command]
@@ -295,6 +296,30 @@ def remove_virtual_environment(manifest: InstallManifest) -> Path | None:
     return venv_dir
 
 
+def remove_managed_runtime(manifest: InstallManifest) -> Path | None:
+    """
+    Removes the managed ``.snappix-runtime`` directory when Snappix created it.
+
+    Args:
+        manifest: Install manifest.
+
+    Returns:
+        Path | None: Removed runtime directory or None.
+    """
+
+    from src.install_manifest import manifest_runtime_dir
+
+    runtime_path = manifest_runtime_dir(manifest)
+    if runtime_path is None or not runtime_path.exists():
+        return None
+    try:
+        shutil.rmtree(runtime_path)
+    except OSError as exc:
+        print(f"Snappix uninstaller warning: could not remove {runtime_path}: {exc}")
+        return None
+    return runtime_path
+
+
 def remove_initialized_marker(manifest: InstallManifest) -> Path | None:
     """
     Removes the first-run marker in the project directory.
@@ -330,12 +355,14 @@ def remove_user_config(*, assume_yes: bool) -> Path | None:
         Path | None: Removed config directory or None.
     """
 
-    config_dir = Path.home() / ".config" / "snappix"
+    from src.paths import user_config_dir
+
+    config_dir = user_config_dir()
     config_file = config_dir / "config.json"
     if not config_file.is_file():
         return None
     if not assume_yes:
-        answer = input("Remove Snappix user settings (~/.config/snappix/config.json)? [y/N] ").strip().lower()
+        answer = input(f"Remove Snappix user settings ({config_file})? [y/N] ").strip().lower()
         if answer not in {"y", "yes"}:
             return None
     try:
@@ -376,6 +403,10 @@ def uninstall(
             print("  System packages:", ", ".join(manifest.system_packages_installed))
         if manifest.venv_created:
             print("  Virtual environment:", manifest_venv_dir(manifest))
+        if manifest.runtime_created:
+            from src.install_manifest import manifest_runtime_dir
+
+            print("  Managed runtime:", manifest_runtime_dir(manifest))
         if manifest.user_files:
             print("  User files:", ", ".join(manifest.user_files))
         answer = input("Continue? [y/N] ").strip().lower()
@@ -399,6 +430,10 @@ def uninstall(
     removed_venv = remove_virtual_environment(manifest)
     if removed_venv is not None:
         print(f"Snappix uninstaller: removed virtual environment: {removed_venv}")
+
+    removed_runtime = remove_managed_runtime(manifest)
+    if removed_runtime is not None:
+        print(f"Snappix uninstaller: removed managed runtime: {removed_runtime}")
 
     removed_marker = remove_initialized_marker(manifest)
     if removed_marker is not None:

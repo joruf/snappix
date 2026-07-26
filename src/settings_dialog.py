@@ -129,9 +129,15 @@ class SettingsDialog(QDialog):
         self.hotkey_region_edit.setPlaceholderText("ctrl+shift+a")
         form.addRow("Capture area:", self.hotkey_region_edit)
 
+        from src.paths import supports_window_capture
+        from src.video_recorder import has_ffmpeg
+
         self.hotkey_window_edit = QLineEdit(config.hotkey_capture_window)
         self.hotkey_window_edit.setPlaceholderText("ctrl+shift+w")
-        form.addRow("Capture window:", self.hotkey_window_edit)
+        if supports_window_capture():
+            form.addRow("Capture window:", self.hotkey_window_edit)
+        else:
+            self.hotkey_window_edit.hide()
 
         self.hotkey_fullscreen_edit = QLineEdit(config.hotkey_capture_fullscreen)
         self.hotkey_fullscreen_edit.setPlaceholderText("ctrl+shift+f")
@@ -139,19 +145,22 @@ class SettingsDialog(QDialog):
 
         self.hotkey_video_edit = QLineEdit(config.hotkey_capture_video)
         self.hotkey_video_edit.setPlaceholderText("ctrl+shift+v")
-        form.addRow("Capture video:", self.hotkey_video_edit)
-
         self.hotkey_recording_pause_resume_edit = QLineEdit(
             config.hotkey_recording_pause_resume
         )
         self.hotkey_recording_pause_resume_edit.setPlaceholderText("ctrl+shift+p")
-        form.addRow(
-            "Pause/resume recording:", self.hotkey_recording_pause_resume_edit
-        )
-
         self.hotkey_recording_stop_edit = QLineEdit(config.hotkey_recording_stop)
         self.hotkey_recording_stop_edit.setPlaceholderText("ctrl+shift+r")
-        form.addRow("Stop recording:", self.hotkey_recording_stop_edit)
+        if has_ffmpeg():
+            form.addRow("Capture video:", self.hotkey_video_edit)
+            form.addRow(
+                "Pause/resume recording:", self.hotkey_recording_pause_resume_edit
+            )
+            form.addRow("Stop recording:", self.hotkey_recording_stop_edit)
+        else:
+            self.hotkey_video_edit.hide()
+            self.hotkey_recording_pause_resume_edit.hide()
+            self.hotkey_recording_stop_edit.hide()
 
         self.post_capture_combo = QComboBox()
         for action_key, action_label in POST_CAPTURE_ACTIONS.items():
@@ -518,14 +527,32 @@ class SettingsDialog(QDialog):
         """
 
         checks = [
-            ("Capture area", config.hotkey_capture_region),
-            ("Capture window", config.hotkey_capture_window),
-            ("Capture fullscreen", config.hotkey_capture_fullscreen),
-            ("Capture video", config.hotkey_capture_video),
-            ("Pause/resume recording", config.hotkey_recording_pause_resume),
-            ("Stop recording", config.hotkey_recording_stop),
+            ("Capture area", config.hotkey_capture_region, True),
+            (
+                "Capture window",
+                config.hotkey_capture_window,
+                not self.hotkey_window_edit.isHidden(),
+            ),
+            ("Capture fullscreen", config.hotkey_capture_fullscreen, True),
+            (
+                "Capture video",
+                config.hotkey_capture_video,
+                not self.hotkey_video_edit.isHidden(),
+            ),
+            (
+                "Pause/resume recording",
+                config.hotkey_recording_pause_resume,
+                not self.hotkey_recording_pause_resume_edit.isHidden(),
+            ),
+            (
+                "Stop recording",
+                config.hotkey_recording_stop,
+                not self.hotkey_recording_stop_edit.isHidden(),
+            ),
         ]
-        for label, spec in checks:
+        for label, spec, enabled in checks:
+            if not enabled:
+                continue
             if hotkey_spec_to_pynput(spec) is None:
                 return label
         return None

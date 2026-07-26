@@ -1,7 +1,7 @@
 # Snappix
 
-Snappix is a Linux screenshot and annotation app inspired by SnagIt.  
-Capture quickly, annotate in a tabbed editor, record screen regions as video, and keep projects editable as `.sfp` / `.sfpv` files.
+Snappix is a screenshot and annotation app inspired by SnagIt.  
+Capture quickly, annotate in a tabbed editor, record screen regions as video, and keep projects editable as `.sfp` / `.sfpv` files. Primary platform is **Linux**; **Windows 10/11** is supported as an MVP.
 
 **[Technical Documentation](docs/TECHNICAL.md)** — architecture, modules, config schema, capture pipeline, session workspace, video editor
 
@@ -9,39 +9,101 @@ Capture quickly, annotate in a tabbed editor, record screen regions as video, an
 
 ## Install and Run
 
+You do **not** need a suitable system Python. The launchers download a project-local `uv` toolchain, install managed **Python 3.12**, create `.venv`, install pinned packages, set up OS tools where possible, and start Snappix.
+
 ```bash
 git clone https://github.com/joruf/snappix.git
 cd snappix
-python3 run.py
 ```
 
-On first start Snappix creates a local `.venv`, installs Python packages, checks system dependencies, and relaunches automatically.
-
-### Manual system packages (if the first-run installer is blocked)
+### Linux
 
 ```bash
-# Debian / Ubuntu
+chmod +x snappix.sh install.sh
+./snappix.sh          # install (if needed) + start
+# or install only:
+./install.sh
+```
+
+On first run the installer may ask for administrator rights (`sudo` / `pkexec`) to install packages such as `libxcb-cursor0`, `xdotool`, `xwininfo`, `tesseract-ocr`, and recommended tools (`ffmpeg`, `grim`, `slurp`).
+
+**Manual system packages** (if the first-run installer is blocked):
+
+```bash
+# Debian / Ubuntu / Linux Mint
 sudo apt install libxcb-cursor0 python3-tk python3-venv xdotool x11-utils tesseract-ocr grim slurp ffmpeg
 ```
 
 | Package | Why |
 |---------|-----|
 | `libxcb-cursor0` | Qt cursor support |
-| `python3-tk` / `python3-venv` | First-run installer UI and venv |
+| `python3-tk` / `python3-venv` | First-run installer UI (when using system Python) |
 | `xdotool`, `x11-utils` | Window / scroll capture on X11 |
 | `tesseract-ocr` | OCR tool |
 | `grim`, `slurp` | Recommended for Wayland region / fullscreen capture |
 | `ffmpeg` | Video recording and MP4 export |
 
-### Supported operating systems
+**Fallback** when Python 3.11+ is already installed:
 
-Snappix is built for **Linux desktop** sessions only. Windows and macOS are not supported.
+```bash
+python3 run.py
+```
+
+### Windows
+
+```bat
+Snappix.bat
+```
+
+Or double-click `Snappix.bat` in Explorer. Install-only (no GUI start): `install.bat`.
+
+On first run Snappix:
+
+1. Downloads project-local `uv` and managed Python 3.12 into `.snappix-runtime\`
+2. Creates `.venv` and installs PySide6 / Pillow / requests / pynput
+3. Tries to install **ffmpeg** and **tesseract** via `winget` when available
+
+If `winget` is missing or blocked, install tools yourself (then restart the terminal / Snappix):
+
+```bat
+winget install --id Gyan.FFmpeg -e --source winget
+winget install --id UB-Mannheim.TesseractOCR -e --source winget
+```
+
+**Fallback** when Python 3.11+ is already on PATH:
+
+```bat
+py -3.12 run.py
+```
+
+Avoid the Microsoft Store `python.exe` stub under `WindowsApps` (it prints an install hint and does nothing useful). Prefer `Snappix.bat`, `py -3.12`, or the python.org installer path.
+
+**Windows capture modes:** Fullscreen, Area, Color Picker, **Capture Window**, and **Scroll** are available. **Capture Video** appears when `ffmpeg` is found (PATH or common winget install locations).
+
+### Uninstall Snappix-owned dependencies
+
+Snappix records which system packages and integration files **it** installed. To remove only those artifacts (plus `.venv` / `.snappix-runtime` when created by Snappix):
+
+```bash
+# Linux
+python3 uninstall_dependencies.py
+python3 uninstall_dependencies.py -y --remove-config
+
+# Windows (from the project folder, using the venv if present)
+.venv\Scripts\python.exe uninstall_dependencies.py
+.venv\Scripts\python.exe uninstall_dependencies.py -y --remove-config
+```
+
+Pre-existing system packages are left untouched.
+
+### Supported operating systems
 
 | Environment | Screenshots | Video recording | Window / scroll capture |
 |-------------|----------------|-----------------|-------------------------|
 | **Linux + X11** (tools installed) | Yes | Yes (`ffmpeg` x11grab) | Yes (`xdotool`, `xwininfo`) |
 | **Linux + Wayland** | Yes (prefer `grim`/`slurp`; else Qt overlay) | No (X11-only) | No (X11-only) |
-| **Windows / macOS** | No | No | No |
+| **Windows** (MVP) | Yes (Qt overlay) | Yes (`ffmpeg` gdigrab; button shown when ffmpeg is found) | Window + Scroll (Win32; scroll best-effort) |
+| **macOS** | No | No | No |
 
 #### Tested and verified
 
@@ -50,16 +112,19 @@ Snappix is built for **Linux desktop** sessions only. Windows and macOS are not 
 | **[Linux Mint](https://linuxmint.com/) 22.3 + X11** | Primary development platform. Real probes: fullscreen screenshot CLI, 1 s video capture via `ffmpeg` x11grab, window/scroll tools present, OCR/ffmpeg/grim/slurp available, compatibility unit tests green. |
 | **Linux Mint 22.3 + Wayland (tool check)** | `grim`/`slurp` present; video and window/scroll marked X11-only (as designed). |
 | **Ubuntu 22.04 / 24.04 (CI)** | Automated `unittest` suite on GitHub Actions with Python 3.11 and 3.12 (headless / offscreen). |
+| **Windows** | Code paths + unit tests for gdigrab, Win32 window/scroll pick, `%APPDATA%` config, Startup-folder autostart. |
 
-Other Debian/Ubuntu-based desktops with the packages below should work similarly; detailed probe logs live under [`docs/vm-compat-reports/`](docs/vm-compat-reports/COMPATIBILITY.md).
+Other Debian/Ubuntu-based desktops with the packages above should work similarly; detailed probe logs live under [`docs/vm-compat-reports`](docs/vm-compat-reports/COMPATIBILITY.md).
 
 ### Requirements
 
-- Python **3.11+**
-- Linux desktop (X11 or Wayland)
-- Python packages (installed into `.venv`): PySide6, Pillow, requests, pynput
+- No system Python required when using `Snappix.bat` / `./snappix.sh` (they provision managed Python **3.12**)
+- Or any host Python that can start bootstrap; the app itself runs on **3.11+** inside `.venv`
+- Linux desktop (X11 or Wayland), or **Windows 10/11** (MVP)
+- Network access on first run (download `uv` / Python / pip packages)
+- Python packages (installed into `.venv`): PySide6 (+ Addons/Essentials), Pillow, requests, pynput
 
-### Packages / releases
+### Packages / releases (Linux packaging)
 
 ```bash
 # Debian package
@@ -71,17 +136,6 @@ Other Debian/Ubuntu-based desktops with the packages below should work similarly
 
 Artifacts land in `dist/`. Tag `v1.2.0` (or run **Release Build** in GitHub Actions) to publish `.deb` and AppImage.
 
-### Uninstall Snappix-owned dependencies
-
-Snappix records which system packages and integration files **it** installed during first-run setup. To remove only those artifacts:
-
-```bash
-python3 uninstall_dependencies.py
-python3 uninstall_dependencies.py -y --remove-config   # non-interactive, incl. user settings
-```
-
-This removes the local `.venv`, desktop launchers, and system packages Snappix added — not packages that were already on your system.
-
 ---
 
 ## Key Features
@@ -89,10 +143,11 @@ This removes the local `.venv`, desktop launchers, and system packages Snappix a
 ### Capture
 
 - Compact **Capture Panel** with delay (0–20 s)
-- Modes: **Fullscreen**, **Area**, **Window**, **Scroll**, **Color Picker**, **Capture Video**
-- **Auto scroll capture** for long pages (scrollbar detect + stitch)
+- Modes: **Fullscreen**, **Area**, **Color Picker**, **Capture Window**, **Scroll**; **Capture Video** when tools are present
+- On Windows: Scroll uses Win32 PageDown (best-effort); Capture Video appears when `ffmpeg` is available
+- **Auto scroll capture** for long pages on Linux (scrollbar detect + stitch)
 - Post-capture: open editor, copy clipboard, or save to folder
-- Global hotkeys (default `Ctrl+Shift+A/W/F/V/P/R`)
+- Global hotkeys (defaults include `Ctrl+Shift+A/W/F/V/P/R`; unavailable modes are not registered)
 - Wayland region capture via `grim` + `slurp` when available
 
 ### Video (X11)
@@ -179,7 +234,7 @@ Regenerate after UI changes (requires Qt display + optional `ffmpeg` for the vid
 |---------|--------|
 | Capture Fullscreen | Full virtual desktop |
 | Capture Area | Drag-selection overlay |
-| Capture Window | X11 window pick (on Wayland prefer Area/Scroll) |
+| Capture Window | Window pick (X11 via xdotool; Windows via Win32); on Wayland prefer Area/Scroll |
 | Scroll | Auto-scroll + stitch long content |
 | Capture Video | Select region and record (X11, requires `ffmpeg`) |
 | Color picker | Sample screen color → clipboard |

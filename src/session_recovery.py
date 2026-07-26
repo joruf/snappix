@@ -8,7 +8,7 @@ import json
 import os
 import shutil
 import tempfile
-from dataclasses import dataclass
+from src.py_compat import dataclass, is_relative_to
 from pathlib import Path
 from uuid import uuid4
 
@@ -217,15 +217,9 @@ def _recovery_path_is_managed(existing_path: str) -> bool:
         target = Path(existing_path).expanduser()
     root = _session_root_dir()
     tabs_root = tabs_dir()
-    try:
-        if target.is_relative_to(tabs_root):
-            return True
-    except ValueError:
-        pass
-    try:
-        return target.is_relative_to(root)
-    except ValueError:
-        return False
+    if is_relative_to(target, tabs_root):
+        return True
+    return is_relative_to(target, root)
 
 
 def ensure_tab_recovery_path(existing_path: str) -> str:

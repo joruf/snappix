@@ -393,6 +393,111 @@ def apply_linux_window_identity(
         return
 
 
+def set_windows_app_user_model_id(app_id: str) -> bool:
+    """
+    Sets the process AppUserModelID so Windows uses Snappix icons, not python.exe.
+
+    Must be called before the first top-level window is shown.
+
+    Args:
+        app_id: Stable application id, e.g. ``Snappix.Capture``.
+
+    Returns:
+        bool: True when the AppUserModelID was applied.
+    """
+
+    import sys
+
+    if sys.platform != "win32" or not app_id.strip():
+        return False
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id.strip())
+        return True
+    except (AttributeError, OSError):
+        return False
+
+
+def apply_windows_window_icon(widget, icon) -> None:
+    """
+    Re-applies a window icon after the native HWND exists (needed on Windows).
+
+    Args:
+        widget: Top-level widget.
+        icon: ``QIcon`` to show in the title bar / taskbar.
+
+    Returns:
+        None
+    """
+
+    import sys
+
+    if sys.platform != "win32" or icon is None:
+        return
+    try:
+        widget.setWindowIcon(icon)
+        # Force native window creation so the shell picks up the icon.
+        _ = int(widget.winId())
+        widget.setWindowIcon(icon)
+    except (RuntimeError, TypeError, ValueError):
+        return
+
+
+def fit_top_level_window_to_available(widget, *, margin: int = 12) -> None:
+    """
+    Moves and shrinks a top-level window so its native frame stays on-screen.
+
+    On Windows, ``frameGeometry`` is unreliable until after the first show; callers
+    should invoke this again via ``QTimer.singleShot(0, ...)`` after ``show()``.
+    When the frame is taller/wider than the work area, the position is pinned to
+    the top-left of ``availableGeometry`` (never a negative upper bound that
+    would push the title-bar buttons off-screen).
+
+    Args:
+        widget: Top-level window to fit.
+        margin: Extra inset from the work-area edges in pixels.
+
+    Returns:
+        None
+    """
+
+    from PySide6.QtGui import QGuiApplication
+
+    screen = widget.screen()
+    if screen is None:
+        screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return
+
+    available = screen.availableGeometry()
+    frame = widget.frameGeometry()
+    client = widget.geometry()
+    frame_w = max(frame.width(), client.width())
+    frame_h = max(frame.height(), client.height())
+    deco_w = max(0, frame_w - client.width())
+    deco_h = max(0, frame_h - client.height())
+
+    max_client_w = max(320, available.width() - deco_w - margin * 2)
+    max_client_h = max(240, available.height() - deco_h - margin * 2)
+    if client.width() > max_client_w or client.height() > max_client_h:
+        widget.resize(min(client.width(), max_client_w), min(client.height(), max_client_h))
+        frame = widget.frameGeometry()
+
+    max_x = available.x() + max(0, available.width() - frame.width())
+    max_y = available.y() + max(0, available.height() - frame.height())
+    x = min(max(frame.x(), available.x()), max_x)
+    y = min(max(frame.y(), available.y()), max_y)
+    if x != frame.x() or y != frame.y() or not widget.isVisible():
+        # Prefer centered placement the first time the window is shown.
+        if not widget.isVisible():
+            x = available.x() + max(0, (available.width() - frame.width()) // 2)
+            y = available.y() + max(0, (available.height() - frame.height()) // 2)
+            x = min(max(x, available.x()), max_x)
+            y = min(max(y, available.y()), max_y)
+        widget.move(x, y)
+
+
 def clamp_window_size_to_available(
     preferred_width: int,
     preferred_height: int,

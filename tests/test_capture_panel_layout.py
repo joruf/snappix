@@ -100,23 +100,29 @@ class TestCapturePanelLayout(unittest.TestCase):
 
     def test_default_window_width_fits_all_capture_buttons_on_one_row(self) -> None:
         """
-        Ensures the panel's default size places all six capture buttons on one row
+        Ensures the panel's default size places visible capture buttons on one row
         with the Open Editor link wrapping onto the row below, and stays no taller
         than needed to show that layout.
         """
 
         panel = CapturePanel()
+        panel.set_video_capture_available(True)
         panel.show()
         panel._apply_initial_window_geometry()
 
         capture_buttons = [
-            panel.capture_fullscreen_button,
-            panel.capture_area_button,
-            panel.capture_window_button,
-            panel.capture_scroll_button,
-            panel.capture_video_button,
-            panel.pick_color_button,
+            button
+            for button in (
+                panel.capture_fullscreen_button,
+                panel.capture_area_button,
+                panel.capture_window_button,
+                panel.capture_scroll_button,
+                panel.capture_video_button,
+                panel.pick_color_button,
+            )
+            if not button.isHidden()
         ]
+        self.assertGreaterEqual(len(capture_buttons), 3)
         reference = capture_buttons[0].geometry()
         for button in capture_buttons[1:]:
             self.assertTrue(_vertical_ranges_overlap(reference, button.geometry()))
@@ -125,6 +131,19 @@ class TestCapturePanelLayout(unittest.TestCase):
         )
         self.assertGreater(panel.open_editor_button.geometry().y(), reference.y())
         self.assertEqual(panel.height(), panel.minimumSizeHint().height())
+
+    def test_unsupported_modes_are_hidden_not_just_disabled(self) -> None:
+        """
+        Ensures window/scroll buttons are hidden when the OS does not support them.
+        """
+
+        from src.paths import supports_scroll_capture, supports_window_capture
+
+        panel = CapturePanel()
+        panel.set_video_capture_available(False)
+        self.assertEqual(panel.capture_window_button.isHidden(), not supports_window_capture())
+        self.assertEqual(panel.capture_scroll_button.isHidden(), not supports_scroll_capture())
+        self.assertTrue(panel.capture_video_button.isHidden())
 
 
 if __name__ == "__main__":
