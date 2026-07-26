@@ -109,7 +109,9 @@ class TestVideoEditorHistory(unittest.TestCase):
             self.assertIsNotNone(item)
             item.setSelected(True)
             self.assertTrue(editor.canvas.delete_selected_annotations())
-            # content_changed is wired to _on_canvas_content_changed in the editor.
+            editor.canvas._last_action_label = "Delete selection"  # pylint: disable=protected-access
+            editor.canvas.annotations_removed.emit()
+            editor.canvas.content_changed.emit()
 
             self.assertEqual(editor._history_labels[-1], "Delete selection")  # pylint: disable=protected-access
             editor.undo()

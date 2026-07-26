@@ -11,6 +11,7 @@ from typing import Any
 from PySide6.QtCore import QEvent, Qt, QSize, Signal
 from PySide6.QtGui import QAction, QColor, QKeySequence
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -398,6 +399,24 @@ class VideoEditorWindow(QMainWindow):
         self._sync_playback_action_icons()
         strip_widgets.append(playback_box)
 
+        view_box = QGroupBox("View", parent)
+        view_box.setObjectName("toolCategoryBox")
+        view_box.setSizePolicy(
+            QSizePolicy.Policy.Maximum,
+            QSizePolicy.Policy.Maximum,
+        )
+        view_layout = QHBoxLayout(view_box)
+        view_layout.setContentsMargins(4, 10, 4, 4)
+        view_layout.setSpacing(4)
+        self.show_all_objects_checkbox = QCheckBox("Show all objects", view_box)
+        self.show_all_objects_checkbox.setToolTip(
+            "Display every drawing object on the canvas, even when the playhead "
+            "is outside its timeline range."
+        )
+        self.show_all_objects_checkbox.toggled.connect(self._on_show_all_objects_toggled)
+        view_layout.addWidget(self.show_all_objects_checkbox)
+        strip_widgets.append(view_box)
+
         zoom_box = QGroupBox("Zoom", parent)
         zoom_box.setObjectName("toolCategoryBox")
         zoom_box.setSizePolicy(
@@ -599,6 +618,19 @@ class VideoEditorWindow(QMainWindow):
 
         self.canvas.set_audio_muted(not enabled)
         self._sync_playback_action_icons()
+
+    def _on_show_all_objects_toggled(self, enabled: bool) -> None:
+        """
+        Shows or hides out-of-range annotations on the video canvas.
+
+        Args:
+            enabled: True to display every drawing object regardless of playhead time.
+
+        Returns:
+            None
+        """
+
+        self.canvas.set_show_all_annotations(enabled)
 
     def _on_duration_changed(self, duration_ms: int) -> None:
         """

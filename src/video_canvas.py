@@ -315,6 +315,7 @@ class VideoCanvas(QGraphicsView):
         self._resize_handle_position = DEFAULT_RESIZE_HANDLE_POSITION
         self._pending_selection_id: str | None = None
         self._rebuilding_visible_items = False
+        self._show_all_annotations = False
         self._rect_corner_radius = 0.0
         self._last_action_label = "Edit"
         self._scene.selectionChanged.connect(self._on_selection_changed)
@@ -844,6 +845,33 @@ class VideoCanvas(QGraphicsView):
 
         self._rebuild_visible_items()
 
+    def show_all_annotations(self) -> bool:
+        """
+        Returns whether every annotation is shown regardless of playhead time.
+
+        Returns:
+            bool: True when all drawing objects are visible on the canvas.
+        """
+
+        return self._show_all_annotations
+
+    def set_show_all_annotations(self, enabled: bool) -> None:
+        """
+        Shows every annotation on the canvas, ignoring timeline time ranges.
+
+        Args:
+            enabled: When True, all drawing objects stay visible for layout work.
+
+        Returns:
+            None
+        """
+
+        resolved = bool(enabled)
+        if resolved == self._show_all_annotations:
+            return
+        self._show_all_annotations = resolved
+        self._rebuild_visible_items()
+
     def position_ms(self) -> int:
         """
         Returns the current playhead position.
@@ -1032,9 +1060,22 @@ class VideoCanvas(QGraphicsView):
         self._player.play()
         QTimer.singleShot(150, self._player.pause)
 
+    def _annotation_visible_at_playhead(self, annotation: VideoAnnotationModel) -> bool:
+        """
+        Checks whether one annotation's timeline range includes the playhead.
+
+        Args:
+            annotation: Annotation to test.
+
+        Returns:
+            bool: True when the current playhead lies inside the annotation range.
+        """
+
+        return annotation.start_ms <= self._position_ms <= annotation.end_ms
+
     def _rebuild_visible_items(self) -> None:
         """
-        Shows only the annotations whose time range covers the current position.
+        Rebuilds canvas items for annotations active at the playhead, or all of them.
 
         Returns:
             None
@@ -1060,7 +1101,10 @@ class VideoCanvas(QGraphicsView):
             self._visible_items.clear()
 
             for annotation in self._annotations:
-                if not (annotation.start_ms <= self._position_ms <= annotation.end_ms):
+                if (
+                    not self._show_all_annotations
+                    and not self._annotation_visible_at_playhead(annotation)
+                ):
                     continue
                 item = build_annotation_item(annotation)
                 if item is None:

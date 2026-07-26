@@ -63,6 +63,87 @@ class TestVideoCanvasSelection(unittest.TestCase):
             payload={},
         )
 
+    def test_playhead_hides_out_of_range_annotations_by_default(self) -> None:
+        """
+        Ensures annotations outside the current playhead time are hidden by default.
+        """
+
+        canvas = VideoCanvas()
+        canvas.resize(640, 480)
+        canvas.set_video_size(640, 480)
+        canvas.show()
+        self._app.processEvents()
+        early = VideoAnnotationModel(
+            annotation_type=Tool.RECT,
+            start_ms=0,
+            end_ms=1000,
+            x=10.0,
+            y=10.0,
+            width=40.0,
+            height=30.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[255, 0, 0, 80],
+            stroke_width=2.0,
+        )
+        late = VideoAnnotationModel(
+            annotation_type=Tool.RECT,
+            start_ms=5000,
+            end_ms=7000,
+            x=80.0,
+            y=60.0,
+            width=40.0,
+            height=30.0,
+            stroke_rgba=[0, 0, 255, 255],
+            fill_rgba=[0, 0, 255, 80],
+            stroke_width=2.0,
+        )
+        canvas.set_annotations([early, late])
+        canvas._on_position_changed(6000)  # pylint: disable=protected-access
+
+        self.assertNotIn(early.annotation_id, canvas._visible_items)  # pylint: disable=protected-access
+        self.assertIn(late.annotation_id, canvas._visible_items)  # pylint: disable=protected-access
+
+    def test_show_all_annotations_reveals_out_of_range_items(self) -> None:
+        """
+        Ensures the show-all mode displays every drawing object at once.
+        """
+
+        canvas = VideoCanvas()
+        canvas.resize(640, 480)
+        canvas.set_video_size(640, 480)
+        canvas.show()
+        self._app.processEvents()
+        early = VideoAnnotationModel(
+            annotation_type=Tool.RECT,
+            start_ms=0,
+            end_ms=1000,
+            x=10.0,
+            y=10.0,
+            width=40.0,
+            height=30.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[255, 0, 0, 80],
+            stroke_width=2.0,
+        )
+        late = VideoAnnotationModel(
+            annotation_type=Tool.RECT,
+            start_ms=5000,
+            end_ms=7000,
+            x=80.0,
+            y=60.0,
+            width=40.0,
+            height=30.0,
+            stroke_rgba=[0, 0, 255, 255],
+            fill_rgba=[0, 0, 255, 80],
+            stroke_width=2.0,
+        )
+        canvas.set_annotations([early, late])
+        canvas._on_position_changed(6000)  # pylint: disable=protected-access
+        canvas.set_show_all_annotations(True)
+
+        self.assertIn(early.annotation_id, canvas._visible_items)  # pylint: disable=protected-access
+        self.assertIn(late.annotation_id, canvas._visible_items)  # pylint: disable=protected-access
+
     def test_build_annotation_item_is_selectable(self) -> None:
         """
         Ensures built video annotation items expose Qt selection flags.
