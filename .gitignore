@@ -10,3 +10,4 @@ docs/screenshots/_sample-video.mp4
 /scripts/vm_compat
 /.build
 /dist
+/scripts/__pycache__
