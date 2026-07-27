@@ -153,14 +153,14 @@ class TestCaptureUiSettle(unittest.TestCase):
             overlay.close()
             capture_module._untrack_overlay(overlay)  # pylint: disable=protected-access
 
-    @patch("src.capture.which", return_value="/usr/bin/xdotool")
+    @patch("src.capture.has_xdotool_and_xwininfo", return_value=True)
     @patch("src.capture.is_wayland_session", return_value=False)
     @patch("src.capture.capture_full_screen")
     def test_immediate_window_capture_waits_for_settle(
         self,
         mock_capture: MagicMock,
         _mock_wayland: MagicMock,
-        _mock_which: MagicMock,
+        _mock_has_xdotool: MagicMock,
     ) -> None:
         """
         Ensures window capture snapshots only after the UI settle delay.

@@ -40,6 +40,7 @@ from src.annotation_items import (
 from src.editor_canvas import Tool
 from src.flow_layout import FlowLayoutWidget
 from src.theme import color_preview_button_stylesheet, palette_button_stylesheet
+from src.tool_categories import SHARED_SHAPE_TOOL_CATEGORIES, build_tool_category_strip
 from src.tool_icons import build_tool_icon
 from src.tool_reference import format_tool_tooltip
 from src.tool_reference_dialog import ToolReferenceDialog
@@ -51,36 +52,7 @@ from src.draw_style_defaults import STYLE_PALETTE_COLORS, apply_tool_default_col
 
 VIDEO_TOOL_CATEGORIES: list[tuple[str, list[tuple[str, str]]]] = [
     ("Select", [(Tool.SELECT, "Select")]),
-    (
-        "Shapes",
-        [
-            (Tool.RECT, "Rectangle"),
-            (Tool.ELLIPSE, "Circle"),
-            (Tool.TRIANGLE, "Triangle"),
-            (Tool.STAR, "Star"),
-            (Tool.POLYGON, "Polygon"),
-        ],
-    ),
-    (
-        "Lines",
-        [
-            (Tool.LINE, "Line"),
-            (Tool.POLYLINE, "Polyline"),
-            (Tool.ARROW, "Arrow"),
-            (Tool.DOUBLE_ARROW, "Double Arrow"),
-            (Tool.BENT_ARROW, "Bent Arrow"),
-        ],
-    ),
-    (
-        "Marks",
-        [
-            (Tool.CROSS, "Cross"),
-            (Tool.CHECKMARK, "Checkmark"),
-            (Tool.SPOTLIGHT, "Spotlight"),
-            (Tool.STEP, "Step"),
-        ],
-    ),
-    ("Text", [(Tool.TEXT, "Text"), (Tool.CALLOUT, "Callout")]),
+    *SHARED_SHAPE_TOOL_CATEGORIES,
 ]
 
 _COLOR_TARGETS_STROKE_FILL = frozenset({"stroke", "fill"})
@@ -217,33 +189,18 @@ class VideoVectorToolbar:
         strip.setObjectName("editorToolStrip")
         strip_widgets: list[QWidget] = []
 
-        for category_title, tools in VIDEO_TOOL_CATEGORIES:
-            category_box = QGroupBox(category_title, strip)
-            category_box.setObjectName("toolCategoryBox")
-            category_layout = QHBoxLayout(category_box)
-            category_layout.setContentsMargins(4, 10, 4, 4)
-            category_layout.setSpacing(4)
-            for tool_key, label in tools:
-                button = QToolButton(category_box)
-                button.setText(label)
-                button.setCheckable(True)
-                button.setIcon(build_tool_icon(tool_key))
-                button.setIconSize(strip.sizeHint())  # placeholder, set below
-                from PySide6.QtCore import QSize
-
-                button.setIconSize(QSize(28, 28))
-                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-                button.setFixedSize(38, 34)
-                button.setToolTip(format_tool_tooltip(tool_key))
-                button.clicked.connect(
-                    lambda _checked=False, t=tool_key: self._on_tool_button_clicked(t)
-                )
-                button.installEventFilter(self._host)
-                self._tool_buttons[tool_key] = button
-                self._tool_button_order.append(tool_key)
-                self._tool_button_to_key[button] = tool_key
-                category_layout.addWidget(button)
-            strip_widgets.append(category_box)
+        strip_widgets.extend(
+            build_tool_category_strip(
+                strip,
+                VIDEO_TOOL_CATEGORIES,
+                on_tool_clicked=self._on_tool_button_clicked,
+                tool_buttons=self._tool_buttons,
+                tool_button_order=self._tool_button_order,
+                tool_button_to_key=self._tool_button_to_key,
+                tooltip_for=lambda tool_key, _label: format_tool_tooltip(tool_key),
+                event_filter_target=self._host,
+            )
+        )
 
         self._tool_buttons[Tool.SELECT].setChecked(True)
         self._setup_stroke_width_tool_menus()
@@ -459,12 +416,32 @@ class VideoVectorToolbar:
         dialog.exec()
 
     def _create_gap(self, width: int = 6) -> QWidget:
+        """
+        Creates a fixed-width spacer widget for toolbar layout separation.
+
+        Args:
+            width: Spacer width in pixels.
+
+        Returns:
+            QWidget: Invisible spacer widget.
+        """
+
         gap = QWidget()
         gap.setFixedWidth(max(1, width))
         gap.setFixedHeight(1)
         return gap
 
     def _create_palette_row(self, target: str) -> QWidget:
+        """
+        Builds a row of quick-pick color swatch buttons for one style target.
+
+        Args:
+            target: ``stroke``, ``fill``, or ``text``.
+
+        Returns:
+            QWidget: Row widget containing one button per palette color.
+        """
+
         row = QWidget()
         row.setObjectName("paletteSwatchRow")
         layout = QHBoxLayout(row)
@@ -483,6 +460,13 @@ class VideoVectorToolbar:
         return row
 
     def _sync_style_buttons(self) -> None:
+        """
+        Refreshes color-preview buttons and alpha sliders from the active style.
+
+        Returns:
+            None
+        """
+
         style = self._host.style_state()
         self.stroke_button.setStyleSheet(
             color_preview_button_stylesheet(style.stroke_color)
@@ -499,6 +483,16 @@ class VideoVectorToolbar:
         self.text_alpha_label.setText(f"{self.text_alpha_slider.value()}%")
 
     def _choose_color(self, target: str) -> None:
+        """
+        Opens a color picker dialog and applies the chosen color to one style target.
+
+        Args:
+            target: ``stroke``, ``fill``, or ``text``.
+
+        Returns:
+            None
+        """
+
         from PySide6.QtWidgets import QColorDialog
 
         style = self._host.style_state()
@@ -514,6 +508,17 @@ class VideoVectorToolbar:
         self._set_target_color(target, chosen)
 
     def _apply_palette_color(self, target: str, color: QColor) -> None:
+        """
+        Applies a quick-pick palette color to one style target, keeping its alpha.
+
+        Args:
+            target: ``stroke``, ``fill``, or ``text``.
+            color: Chosen palette color.
+
+        Returns:
+            None
+        """
+
         style = self._host.style_state()
         current = {
             "stroke": style.stroke_color,
@@ -525,6 +530,17 @@ class VideoVectorToolbar:
         self._set_target_color(target, chosen)
 
     def _alpha_changed(self, target: str, value: int) -> None:
+        """
+        Applies an alpha-slider percentage change to one style target's color.
+
+        Args:
+            target: ``stroke``, ``fill``, or ``text``.
+            value: New alpha percentage (0-100).
+
+        Returns:
+            None
+        """
+
         style = self._host.style_state()
         color = {
             "stroke": QColor(style.stroke_color),
@@ -547,6 +563,19 @@ class VideoVectorToolbar:
         *,
         apply_to_canvas: bool = True,
     ) -> None:
+        """
+        Sets one style target's color, updates its preview button, and optionally
+        applies it to the active style and current selection.
+
+        Args:
+            target: ``stroke``, ``fill``, or ``text``.
+            color: New color for the target.
+            apply_to_canvas: When False, only updates local widget state.
+
+        Returns:
+            None
+        """
+
         style = self._host.style_state()
         if target == "stroke":
             style.stroke_color = QColor(color)
@@ -572,6 +601,18 @@ class VideoVectorToolbar:
         tool: str | None = None,
         selection_type: str | None = None,
     ) -> frozenset[str]:
+        """
+        Resolves which style color pickers (stroke/fill/text) apply to a
+        tool or selection context.
+
+        Args:
+            tool: Tool id to resolve for; defaults to the active tool.
+            selection_type: Selected annotation kind; defaults to the current selection.
+
+        Returns:
+            frozenset[str]: Applicable color target names.
+        """
+
         resolved_tool = str(tool or self._active_tool)
         resolved_type = str(selection_type if selection_type is not None else self._selection_type)
         if resolved_type == "document":
@@ -588,6 +629,17 @@ class VideoVectorToolbar:
         tool: str | None = None,
         selection_type: str | None = None,
     ) -> None:
+        """
+        Shows or hides the Style tab's color pickers to match the active tool/selection.
+
+        Args:
+            tool: Tool id to resolve for; defaults to the active tool.
+            selection_type: Selected annotation kind; defaults to the current selection.
+
+        Returns:
+            None
+        """
+
         if self._property_tabs is None:
             return
         targets = self._resolve_style_color_targets(tool=tool, selection_type=selection_type)
@@ -605,6 +657,16 @@ class VideoVectorToolbar:
         self._property_tabs.setTabVisible(0, bool(targets))
 
     def _configure_menu_tool_button(self, button: QToolButton) -> None:
+        """
+        Styles one tool button to show a dropdown-menu affordance.
+
+        Args:
+            button: Tool button with an attached options menu.
+
+        Returns:
+            None
+        """
+
         button.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
         button.setFixedSize(50, 34)
         button.setProperty("menuTool", True)
@@ -615,6 +677,13 @@ class VideoVectorToolbar:
         button.update()
 
     def _setup_stroke_width_tool_menus(self) -> None:
+        """
+        Attaches a stroke width/style/radius popup menu to each shape/line tool button.
+
+        Returns:
+            None
+        """
+
         width_tools = (
             Tool.RECT,
             Tool.ELLIPSE,
@@ -691,6 +760,16 @@ class VideoVectorToolbar:
             self._configure_menu_tool_button(button)
 
     def _tool_menu_width_changed(self, value: int) -> None:
+        """
+        Stores a tool's stroke-width menu change and applies it if that tool is active.
+
+        Args:
+            value: New stroke width in pixels.
+
+        Returns:
+            None
+        """
+
         slider = self.sender()
         if not isinstance(slider, QSlider):
             return
@@ -704,6 +783,16 @@ class VideoVectorToolbar:
             self._canvas.set_style(style)
 
     def _tool_menu_style_changed(self, _index: int) -> None:
+        """
+        Stores a tool's stroke-style menu change and applies it if that tool is active.
+
+        Args:
+            _index: New combo box index (unused; current data is read from the sender).
+
+        Returns:
+            None
+        """
+
         combo = self.sender()
         if not isinstance(combo, QComboBox):
             return
@@ -717,6 +806,16 @@ class VideoVectorToolbar:
             self._canvas.set_style(style)
 
     def _tool_menu_radius_changed(self, value: float) -> None:
+        """
+        Applies a rectangle corner-radius menu change to new rectangle annotations.
+
+        Args:
+            value: New corner radius in pixels.
+
+        Returns:
+            None
+        """
+
         spin = self.sender()
         if not isinstance(spin, QDoubleSpinBox):
             return
@@ -724,6 +823,16 @@ class VideoVectorToolbar:
         self._canvas.set_rect_corner_radius(self._rect_corner_radius)
 
     def _on_tool_button_clicked(self, tool: str) -> None:
+        """
+        Handles a single tool-button click, including lock/one-shot/menu-reopen logic.
+
+        Args:
+            tool: Clicked tool id.
+
+        Returns:
+            None
+        """
+
         if self._locked_tool is not None and tool == self._locked_tool:
             self._clear_tool_lock()
             self._set_tool(Tool.SELECT)
@@ -745,6 +854,16 @@ class VideoVectorToolbar:
                 button.showMenu()
 
     def _toggle_tool_lock(self, tool: str) -> None:
+        """
+        Toggles keep-this-tool-active locking for one lockable tool (double-click).
+
+        Args:
+            tool: Tool id to lock or unlock.
+
+        Returns:
+            None
+        """
+
         if tool not in _LOCKABLE_TOOLS:
             self._one_shot_tool = None
             self._set_tool(tool)
@@ -760,10 +879,24 @@ class VideoVectorToolbar:
         self._set_tool(tool)
 
     def _clear_tool_lock(self) -> None:
+        """
+        Releases the currently locked tool, if any.
+
+        Returns:
+            None
+        """
+
         self._locked_tool = None
         self._update_tool_lock_visuals()
 
     def _update_tool_lock_visuals(self) -> None:
+        """
+        Refreshes tool button icons/tooltips to reflect the current lock state.
+
+        Returns:
+            None
+        """
+
         for tool_key in self._tool_button_order:
             button = self._tool_buttons[tool_key]
             locked = tool_key == self._locked_tool
@@ -775,6 +908,16 @@ class VideoVectorToolbar:
                 button.setToolTip(base_tip)
 
     def _set_tool(self, tool: str) -> None:
+        """
+        Activates one tool on the canvas and syncs button/style state to match.
+
+        Args:
+            tool: Tool id to activate.
+
+        Returns:
+            None
+        """
+
         self._active_tool = tool
         for key, button in self._tool_buttons.items():
             button.setChecked(key == tool)
@@ -878,6 +1021,16 @@ class VideoVectorToolbar:
             button.setChecked(key == tool_id)
 
     def _apply_one_shot_tool_completion(self, action_label: str) -> None:
+        """
+        Switches back to Select after a one-shot tool finishes its matching action.
+
+        Args:
+            action_label: Last completed canvas action label.
+
+        Returns:
+            None
+        """
+
         if self._one_shot_tool is None or self._locked_tool is not None:
             return
         expected = _ONE_SHOT_ACTIONS.get(self._one_shot_tool)

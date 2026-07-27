@@ -7,14 +7,13 @@ from __future__ import annotations
 import subprocess
 import time
 from src.py_compat import dataclass
-from shutil import which
 from typing import Callable, Protocol
 
 from PySide6.QtCore import QRect
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QApplication
 
-from src.platform import get_x11_focused_window_id, restore_x11_window_focus
+from src.platform import get_x11_focused_window_id, has_xdotool, restore_x11_window_focus
 from src.scroll_capture import (
     dedupe_scroll_frames,
     estimate_scroll_progress_rows,
@@ -407,7 +406,7 @@ def perform_auto_scroll_capture(
             window_height=window_height,
             message="Scroll capture requires a valid window.",
         )
-    if not is_windows() and which("xdotool") is None:
+    if not is_windows() and not has_xdotool():
         return AutoScrollCaptureResult(
             pixmap=empty,
             window_width=window_width,
@@ -763,7 +762,7 @@ def _xdotool(*args: str) -> bool:
         bool: True when command succeeded.
     """
 
-    if which("xdotool") is None:
+    if not has_xdotool():
         return False
     try:
         subprocess.run(

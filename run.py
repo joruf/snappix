@@ -1203,6 +1203,7 @@ class AppController:
         from PySide6.QtCore import Qt
 
         editor = VideoEditorWindow(video_path, width, height)
+        editor.apply_editor_shortcuts(self.config.editor_shortcuts)
         editor.apply_tool_stroke_widths(
             self.config.tool_stroke_widths,
             emit_signal=False,
@@ -1342,6 +1343,7 @@ class AppController:
             )
         for editor in list(self.video_editors):
             self._apply_resize_handle_settings(editor)
+            editor.apply_editor_shortcuts(self.config.editor_shortcuts)
             editor.apply_tool_stroke_widths(
                 self.config.tool_stroke_widths,
                 emit_signal=False,

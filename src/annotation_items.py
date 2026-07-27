@@ -4,7 +4,6 @@ Annotation item definitions and conversion helpers.
 
 from __future__ import annotations
 
-import base64
 import math
 from src.py_compat import dataclass
 from typing import cast
@@ -14,12 +13,10 @@ from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
-    QImage,
     QPainter,
     QPainterPath,
     QPainterPathStroker,
     QPen,
-    QPixmap,
     QTransform,
 )
 from PySide6.QtWidgets import (
@@ -34,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from src.annotation_shapes import TEXT_STYLE_PLAIN
 from src.models import AnnotationModel
+from src.storage import base64_png_to_pixmap
 
 ITEM_ROLE_TYPE = 1001
 ITEM_ROLE_ID = 1002
@@ -1069,7 +1067,7 @@ def add_annotation_to_scene(
         encoded = str(annotation.payload.get("image_png_base64", ""))
         if not encoded:
             return None
-        item = QGraphicsPixmapItem(_decode_base64_to_pixmap(encoded))
+        item = QGraphicsPixmapItem(base64_png_to_pixmap(encoded))
         item.setPos(annotation.x, annotation.y)
         configure_graphics_item(item, "image")
         item.setData(2001, encoded)
@@ -1099,21 +1097,4 @@ def _stroke_style_from_pen(pen: QPen) -> str:
         if pen.style() == value:
             return key
     return STROKE_STYLE_SOLID
-
-
-def _decode_base64_to_pixmap(value: str) -> QPixmap:
-    """
-    Decodes Base64 PNG data to QPixmap.
-
-    Args:
-        value: Base64 encoded PNG bytes.
-
-    Returns:
-        QPixmap: Decoded pixmap.
-    """
-
-    data = base64.b64decode(value.encode("utf-8"))
-    image = QImage()
-    image.loadFromData(data, "PNG")
-    return QPixmap.fromImage(image)
 

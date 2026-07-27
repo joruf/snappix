@@ -361,10 +361,10 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
     @patch("src.auto_scroll_capture.get_x11_focused_window_id", return_value="999")
     @patch("src.auto_scroll_capture.time.sleep")
     @patch("src.auto_scroll_capture._xdotool", return_value=True)
-    @patch("src.auto_scroll_capture.which", return_value="/usr/bin/xdotool")
+    @patch("src.auto_scroll_capture.has_xdotool", return_value=True)
     def test_perform_auto_scroll_capture_stitches_full_document(
         self,
-        _mock_which: MagicMock,
+        _mock_has_xdotool: MagicMock,
         mock_xdotool: MagicMock,
         _mock_sleep: MagicMock,
         _mock_focus_get: MagicMock,
@@ -400,10 +400,10 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
     @patch("src.auto_scroll_capture.get_x11_focused_window_id", return_value="999")
     @patch("src.auto_scroll_capture.time.sleep")
     @patch("src.auto_scroll_capture._xdotool", return_value=True)
-    @patch("src.auto_scroll_capture.which", return_value="/usr/bin/xdotool")
+    @patch("src.auto_scroll_capture.has_xdotool", return_value=True)
     def test_perform_auto_scroll_capture_ignores_duplicate_tail_frames(
         self,
-        _mock_which: MagicMock,
+        _mock_has_xdotool: MagicMock,
         _mock_xdotool: MagicMock,
         _mock_sleep: MagicMock,
         _mock_focus_get: MagicMock,
@@ -440,10 +440,10 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
     @patch("src.auto_scroll_capture.get_x11_focused_window_id", return_value="999")
     @patch("src.auto_scroll_capture.time.sleep")
     @patch("src.auto_scroll_capture._xdotool", return_value=True)
-    @patch("src.auto_scroll_capture.which", return_value="/usr/bin/xdotool")
+    @patch("src.auto_scroll_capture.has_xdotool", return_value=True)
     def test_perform_auto_scroll_capture_stops_after_short_two_page_document(
         self,
-        _mock_which: MagicMock,
+        _mock_has_xdotool: MagicMock,
         _mock_xdotool: MagicMock,
         _mock_sleep: MagicMock,
         _mock_focus_get: MagicMock,
@@ -480,10 +480,10 @@ class TestAutoScrollCaptureIntegration(unittest.TestCase):
     @patch("src.auto_scroll_capture.get_x11_focused_window_id", return_value="999")
     @patch("src.auto_scroll_capture.time.sleep")
     @patch("src.auto_scroll_capture._xdotool", return_value=True)
-    @patch("src.auto_scroll_capture.which", return_value="/usr/bin/xdotool")
+    @patch("src.auto_scroll_capture.has_xdotool", return_value=True)
     def test_stops_when_scrollbar_mode_never_reports_bottom(
         self,
-        _mock_which: MagicMock,
+        _mock_has_xdotool: MagicMock,
         _mock_xdotool: MagicMock,
         _mock_sleep: MagicMock,
         _mock_focus_get: MagicMock,

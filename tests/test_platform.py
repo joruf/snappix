@@ -17,6 +17,8 @@ from src.platform import (
     get_x11_focused_window_id,
     has_grim_and_slurp,
     has_tesseract,
+    has_xdotool,
+    has_xdotool_and_xwininfo,
     is_wayland_session,
     raise_qt_window,
 )
@@ -81,6 +83,29 @@ class TestPlatform(unittest.TestCase):
         self.assertFalse(has_tesseract())
         mock_which.return_value = "/usr/bin/tesseract"
         self.assertTrue(has_tesseract())
+
+    @patch("src.platform.which")
+    def test_has_xdotool(self, mock_which: MagicMock) -> None:
+        """
+        Ensures xdotool availability is detected via PATH lookup.
+        """
+
+        mock_which.return_value = None
+        self.assertFalse(has_xdotool())
+        mock_which.return_value = "/usr/bin/xdotool"
+        self.assertTrue(has_xdotool())
+
+    @patch("src.platform.which")
+    def test_has_xdotool_and_xwininfo_requires_both(self, mock_which: MagicMock) -> None:
+        """
+        Ensures xdotool and xwininfo must both be present on PATH.
+        """
+
+        mock_which.side_effect = lambda name: "/usr/bin/xdotool" if name == "xdotool" else None
+        self.assertFalse(has_xdotool_and_xwininfo())
+
+        mock_which.side_effect = lambda name: f"/usr/bin/{name}"
+        self.assertTrue(has_xdotool_and_xwininfo())
 
     @patch("src.platform.has_grim_and_slurp", return_value=False)
     def test_capture_region_with_grim_slurp_without_tools(self, _mock_tools: MagicMock) -> None:

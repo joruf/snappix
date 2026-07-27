@@ -4,7 +4,6 @@ Editable screenshot canvas for Snappix.
 
 from __future__ import annotations
 
-import base64
 import copy
 import json
 from pathlib import Path
@@ -12,10 +11,7 @@ from typing import Any
 
 import requests
 from PySide6.QtCore import (
-    QByteArray,
-    QBuffer,
     QElapsedTimer,
-    QIODevice,
     QPoint,
     QPointF,
     QRect,
@@ -85,11 +81,9 @@ from src.annotation_items import (
     configure_graphics_item,
     create_pen,
     create_stroke_pen,
-    apply_stroke_width_to_pen,
     pen_stroke_width,
     merge_transform_into_payload,
     normalize_stroke_style,
-    stroke_style_to_qt,
     transform_payload_from_item,
 )
 from src.annotation_items import _stroke_style_from_pen as stroke_style_from_pen
@@ -100,6 +94,7 @@ from src.annotation_shapes import (
     TEXT_STYLE_BUBBLE,
     TEXT_STYLE_PLAIN,
 )
+from src.annotation_style_apply import apply_style_to_annotation_item
 from src.shape_items import (
     PATH_SHAPE_KINDS,
     SHAPE_LINE_TYPES,
@@ -112,6 +107,7 @@ from src.shape_items import (
 )
 from src.brush_paint import paint_soft_brush_segment
 from src.crop_item import CropSelectionItem
+from src.geometry_utils import union_rect
 from src.image_effects import pixelate_qimage_region
 from src.models import AnnotationModel
 from src.ocr import extract_text_from_png_bytes, format_ocr_copied_status
@@ -131,7 +127,9 @@ from src.pixel_selection import (
     unite_masks,
 )
 from src.platform import has_tesseract
+from src.resize_overlay import ResizeOverlayMixin, rect_or_line_geometry_rect
 from src.scroll_capture import pixmap_to_png_bytes
+from src.storage import base64_png_to_pixmap, pixmap_to_base64_png
 from src.theme import (
     THEME_LIGHT,
     THEME_SEPIA,
@@ -140,6 +138,7 @@ from src.theme import (
     get_theme_colors,
     normalize_theme_name,
 )
+from src.zoomable_canvas import ZoomableCanvasMixin
 
 _WORKSPACE_MARGIN_MIN = 96.0
 _WORKSPACE_MARGIN_RATIO = 0.15
@@ -150,41 +149,6 @@ _CLIPBOARD_IMAGE_SUFFIXES = frozenset(
 )
 _CANVAS_CLIPBOARD_MIME = "application/x-snappix-canvas"
 _ANNOTATIONS_CLIPBOARD_MIME = "application/x-snappix-annotations"
-
-
-def decode_base64_to_pixmap(value: str) -> QPixmap:
-    """
-    Decodes Base64 PNG data to a pixmap.
-
-    Args:
-        value: Base64 encoded PNG bytes.
-
-    Returns:
-        QPixmap: Decoded pixmap.
-    """
-
-    data = base64.b64decode(value.encode("utf-8"))
-    image = QImage()
-    image.loadFromData(data, "PNG")
-    return QPixmap.fromImage(image)
-
-
-def encode_pixmap_to_base64(pixmap: QPixmap) -> str:
-    """
-    Encodes a pixmap to Base64 PNG data.
-
-    Args:
-        pixmap: Source pixmap.
-
-    Returns:
-        str: Base64 encoded PNG data.
-    """
-
-    byte_array = QByteArray()
-    buffer = QBuffer(byte_array)
-    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-    pixmap.save(buffer, "PNG")
-    return bytes(byte_array.toBase64()).decode("utf-8")
 
 
 class Tool:
@@ -246,7 +210,7 @@ ERASE_MODE_TRANSPARENT = "transparent"
 ERASE_MODE_FILL = "fill"
 
 
-class EditorCanvas(QGraphicsView):
+class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
     """
     Interactive graphics canvas for screenshot annotations.
     """
@@ -1063,114 +1027,31 @@ class EditorCanvas(QGraphicsView):
         if not apply_to_selection:
             return
         for item in self._scene.selectedItems():
+            if apply_style_to_annotation_item(
+                item,
+                stroke_color=stroke_color,
+                fill_color=fill_color,
+                text_color=text_color,
+                stroke_width=stroke_width,
+                font_size=font_size,
+                font_family=font_family,
+                font_bold=font_bold,
+                font_italic=font_italic,
+                font_underline=font_underline,
+                letter_spacing=letter_spacing,
+                line_spacing_factor=line_spacing_factor,
+                box_padding=box_padding,
+                corner_radius=corner_radius,
+                stroke_style=stroke_style,
+                text_style=text_style,
+            ):
+                changed = True
+                continue
+
             annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
             if bool(item.data(ITEM_ROLE_LOCKED) or False):
                 continue
-            if annotation_type in SHAPE_RECT_TYPES:
-                shape_item = item
-                if annotation_type in STAMP_MARK_TYPES:
-                    # Cross/checkmark are filled stamps: Border and Fill both
-                    # update the visible mark color (brush), keeping NoPen.
-                    mark_color = stroke_color if stroke_color is not None else fill_color
-                    if mark_color is not None:
-                        shape_item.setBrush(mark_color)
-                        shape_item.setPen(create_stroke_pen(mark_color, 0.0))
-                    changed = True
-                    continue
-                if stroke_color is not None:
-                    pen = shape_item.pen()
-                    pen.setColor(stroke_color)
-                    shape_item.setPen(pen)
-                if fill_color is not None:
-                    shape_item.setBrush(fill_color)
-                if stroke_width is not None:
-                    shape_item.setPen(
-                        apply_stroke_width_to_pen(
-                            shape_item.pen(),
-                            stroke_width,
-                            stroke_style=stroke_style,
-                        )
-                    )
-                elif stroke_style is not None and shape_item.pen().style() != Qt.PenStyle.NoPen:
-                    pen = shape_item.pen()
-                    pen.setStyle(stroke_style_to_qt(stroke_style))
-                    shape_item.setPen(pen)
-                changed = True
-            elif annotation_type == "step" and isinstance(item, StepBadgeItem):
-                if stroke_color is not None:
-                    pen = item.pen()
-                    pen.setColor(stroke_color)
-                    item.setPen(pen)
-                if fill_color is not None:
-                    item.setBrush(fill_color)
-                if stroke_width is not None:
-                    item.setPen(
-                        apply_stroke_width_to_pen(
-                            item.pen(),
-                            stroke_width,
-                            stroke_style=stroke_style,
-                        )
-                    )
-                changed = True
-            elif annotation_type in SHAPE_LINE_TYPES:
-                line_item = item
-                pen = line_item.pen()
-                if stroke_color is not None:
-                    pen.setColor(stroke_color)
-                if stroke_width is not None:
-                    pen = apply_stroke_width_to_pen(
-                        pen,
-                        stroke_width,
-                        stroke_style=stroke_style,
-                    )
-                elif stroke_style is not None and pen.style() != Qt.PenStyle.NoPen:
-                    pen.setStyle(stroke_style_to_qt(stroke_style))
-                line_item.setPen(pen)
-                changed = True
-            elif annotation_type == "text" and isinstance(item, StyledTextItem):
-                if text_color is not None:
-                    item.set_colors(text_color=text_color)
-                if stroke_color is not None:
-                    item.set_colors(stroke_color=stroke_color)
-                if fill_color is not None:
-                    item.set_colors(fill_color=fill_color)
-                if stroke_width is not None:
-                    item.set_stroke_width(float(stroke_width))
-                if text_style is not None:
-                    item.set_text_style(text_style)
-                if (
-                    font_size is not None
-                    or font_family is not None
-                    or font_bold is not None
-                    or font_italic is not None
-                    or font_underline is not None
-                ):
-                    font = QFont(item.font())
-                    if font_size is not None:
-                        font.setPointSize(max(1, int(font_size)))
-                    if font_family is not None and font_family.strip():
-                        font.setFamily(font_family.strip())
-                    if font_bold is not None:
-                        font.setBold(bool(font_bold))
-                    if font_italic is not None:
-                        font.setItalic(bool(font_italic))
-                    if font_underline is not None:
-                        font.setUnderline(bool(font_underline))
-                    item.set_font(font)
-                if (
-                    letter_spacing is not None
-                    or line_spacing_factor is not None
-                    or box_padding is not None
-                    or corner_radius is not None
-                ):
-                    item.set_layout_options(
-                        letter_spacing=letter_spacing,
-                        line_spacing_factor=line_spacing_factor,
-                        box_padding=box_padding,
-                        corner_radius=corner_radius,
-                    )
-                changed = True
-            elif annotation_type == "text" and isinstance(item, QGraphicsTextItem):
+            if annotation_type == "text" and isinstance(item, QGraphicsTextItem):
                 text_item = item
                 if text_color is not None:
                     text_item.setDefaultTextColor(text_color)
@@ -2022,26 +1903,6 @@ class EditorCanvas(QGraphicsView):
                 return True
         return False
 
-    def zoom_in(self) -> None:
-        """
-        Zooms into the canvas.
-
-        Returns:
-            None
-        """
-
-        self._apply_zoom(1.06)
-
-    def zoom_out(self) -> None:
-        """
-        Zooms out of the canvas.
-
-        Returns:
-            None
-        """
-
-        self._apply_zoom(1.0 / 1.06)
-
     def reset_zoom(self) -> None:
         """
         Resets zoom to default fit level.
@@ -2054,47 +1915,16 @@ class EditorCanvas(QGraphicsView):
         self.fitInView(self.document_rect(), Qt.AspectRatioMode.KeepAspectRatio)
         self._zoom_factor = 1.0
         self.zoom_changed.emit(self._zoom_factor)
-        if not self._selected_annotation_items():
-            self._refresh_selection_info()
+        self._on_zoom_applied()
 
-    def set_zoom_factor(self, target_zoom: float) -> None:
+    def _on_zoom_applied(self) -> None:
         """
-        Sets zoom to an absolute factor value.
-
-        Args:
-            target_zoom: Target zoom factor (1.0 = 100%).
+        Refreshes the selection-info panel after a zoom change with no selection.
 
         Returns:
             None
         """
 
-        bounded_zoom = max(0.1, min(8.0, target_zoom))
-        if abs(bounded_zoom - self._zoom_factor) < 0.0001:
-            return
-        scale_factor = bounded_zoom / self._zoom_factor
-        self.scale(scale_factor, scale_factor)
-        self._zoom_factor = bounded_zoom
-        self.zoom_changed.emit(self._zoom_factor)
-        if not self._selected_annotation_items():
-            self._refresh_selection_info()
-
-    def _apply_zoom(self, factor: float) -> None:
-        """
-        Applies a multiplicative zoom factor.
-
-        Args:
-            factor: Scale factor.
-
-        Returns:
-            None
-        """
-
-        new_zoom = self._zoom_factor * factor
-        if new_zoom < 0.1 or new_zoom > 8.0:
-            return
-        self.scale(factor, factor)
-        self._zoom_factor = new_zoom
-        self.zoom_changed.emit(self._zoom_factor)
         if not self._selected_annotation_items():
             self._refresh_selection_info()
 
@@ -3262,14 +3092,7 @@ class EditorCanvas(QGraphicsView):
             QRectF: Scene-space bounding rectangle, empty when nothing selected.
         """
 
-        bounds = QRectF()
-        for item in self._selected_annotation_items():
-            item_rect = self._item_scene_rect(item)
-            if bounds.isNull():
-                bounds = item_rect
-            else:
-                bounds = bounds.united(item_rect)
-        return bounds
+        return union_rect(self._item_scene_rect(item) for item in self._selected_annotation_items())
 
     def load_annotations(self, models: list[AnnotationModel]) -> None:
         """
@@ -3532,7 +3355,7 @@ class EditorCanvas(QGraphicsView):
             screenshot_data = payload.get("screenshot_png_base64")
             if not isinstance(screenshot_data, str) or not screenshot_data:
                 return False
-            source_screenshot = decode_base64_to_pixmap(screenshot_data)
+            source_screenshot = base64_png_to_pixmap(screenshot_data)
             if source_screenshot.isNull():
                 return False
             return self.merge_canvas_payload(source_screenshot, annotations)
@@ -3749,44 +3572,6 @@ class EditorCanvas(QGraphicsView):
         """
 
         return bool(self._auto_crop_on_shrink)
-
-    def set_resize_handle_style(self, *, size: float, position: str) -> None:
-        """
-        Configures resize-overlay handle size and placement.
-
-        Args:
-            size: Handle edge length in pixels.
-            position: One of ``center``, ``inside``, or ``outside``.
-
-        Returns:
-            None
-        """
-
-        from src.config import normalize_resize_handle_position, normalize_resize_handle_size
-
-        self._resize_handle_size = float(normalize_resize_handle_size(size))
-        self._resize_handle_position = normalize_resize_handle_position(position)
-        if self._resize_overlay_item is not None:
-            self._resize_overlay_item.set_handle_style(
-                size=self._resize_handle_size,
-                position=self._resize_handle_position,
-            )
-
-    def _apply_resize_handle_style(self, overlay: CropSelectionItem) -> None:
-        """
-        Applies the current resize-handle settings to one overlay item.
-
-        Args:
-            overlay: Selection overlay item.
-
-        Returns:
-            None
-        """
-
-        overlay.set_handle_style(
-            size=self._resize_handle_size,
-            position=self._resize_handle_position,
-        )
 
     def _content_bounds_rect(self) -> QRectF:
         """
@@ -4447,7 +4232,7 @@ class EditorCanvas(QGraphicsView):
         item = QGraphicsPixmapItem(pixmap)
         item.setPos(position)
         configure_graphics_item(item, "image")
-        item.setData(2001, encode_pixmap_to_base64(pixmap))
+        item.setData(2001, pixmap_to_base64_png(pixmap))
         self._scene.addItem(item)
         self._scene.clearSelection()
         item.setSelected(True)
@@ -4496,7 +4281,7 @@ class EditorCanvas(QGraphicsView):
             fill_rgba=[0, 0, 0, 0],
             stroke_width=0.0,
             payload={
-                "image_png_base64": encode_pixmap_to_base64(source_screenshot),
+                "image_png_base64": pixmap_to_base64_png(source_screenshot),
                 "z_index": max_z + 1.0,
             },
         )
@@ -4551,18 +4336,15 @@ class EditorCanvas(QGraphicsView):
         if not source_annotations:
             return False
 
-        source_bounds = QRectF()
-        for annotation in source_annotations:
-            item_rect = QRectF(
+        source_bounds = union_rect(
+            QRectF(
                 float(annotation.x),
                 float(annotation.y),
                 max(1.0, float(annotation.width)),
                 max(1.0, float(annotation.height)),
             )
-            if source_bounds.isNull():
-                source_bounds = item_rect
-            else:
-                source_bounds = source_bounds.united(item_rect)
+            for annotation in source_annotations
+        )
 
         center_scene = self.mapToScene(self.viewport().rect().center())
         desired_top_left = QPointF(
@@ -4658,24 +4440,6 @@ class EditorCanvas(QGraphicsView):
         annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
         return annotation_type in (SHAPE_RECT_TYPES | SHAPE_LINE_TYPES | {"text", "image"})
 
-    def _item_scene_rect(self, item: QGraphicsItem) -> QRectF:
-        """
-        Returns a normalized scene-space geometry rectangle for one item.
-
-        Args:
-            item: Scene item.
-
-        Returns:
-            QRectF: Normalized scene rectangle.
-        """
-
-        rect = self._target_geometry_rect(item).normalized()
-        if rect.width() < 2:
-            rect.setWidth(2)
-        if rect.height() < 2:
-            rect.setHeight(2)
-        return rect
-
     def _target_geometry_rect(self, item: QGraphicsItem) -> QRectF:
         """
         Returns geometry bounds for one annotation without pen inflation artifacts.
@@ -4687,14 +4451,10 @@ class EditorCanvas(QGraphicsView):
             QRectF: Geometry rectangle in scene coordinates.
         """
 
+        shared_rect = rect_or_line_geometry_rect(item)
+        if shared_rect is not None:
+            return shared_rect
         annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-        if annotation_type in SHAPE_RECT_TYPES:
-            return item.mapRectToScene(item.rect()).normalized()
-        if annotation_type in SHAPE_LINE_TYPES:
-            line = item.line()
-            p1 = item.mapToScene(line.p1())
-            p2 = item.mapToScene(line.p2())
-            return QRectF(p1, p2).normalized()
         if annotation_type == "image" and isinstance(item, QGraphicsPixmapItem):
             pixmap = item.pixmap()
             ratio = max(1.0, float(pixmap.devicePixelRatio()))
@@ -4707,67 +4467,41 @@ class EditorCanvas(QGraphicsView):
             return item.mapRectToScene(local).normalized()
         return item.sceneBoundingRect().normalized()
 
-    def _sync_resize_overlay_with_target(self, target: QGraphicsItem | None = None) -> None:
+    def _resize_overlay_is_movable(self, target: QGraphicsItem) -> bool:
         """
-        Aligns interactive resize handles to the current selected target item.
+        Allows the resize-overlay box itself to be dragged to move the annotation.
 
         Args:
-            target: Optional explicit selected item.
+            target: Annotation the overlay is attached to.
 
         Returns:
-            None
+            bool: Always True for the image editor.
         """
 
-        if self._updating_resize_overlay:
-            return
-        if target is None:
-            selected = self._scene.selectedItems()
-            if len(selected) != 1:
-                self._clear_resize_overlay()
-                return
-            target = selected[0]
-        if not self._can_resize_item(target):
-            self._clear_resize_overlay()
-            return
+        return True
 
-        target_rect = self._item_scene_rect(target)
+    def _resize_overlay_interior_interactive(self, target: QGraphicsItem) -> bool:
+        """
+        Keeps the overlay interior passive for lines so their own hit-testing works.
+
+        Args:
+            target: Annotation the overlay is attached to.
+
+        Returns:
+            bool: False for line-family annotations, True otherwise.
+        """
+
         annotation_type = str(target.data(ITEM_ROLE_TYPE) or "")
-        pass_through_interior = annotation_type in SHAPE_LINE_TYPES
-        if self._resize_overlay_item is None:
-            overlay = CropSelectionItem(target_rect)
-            overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
-            overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
-            overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
-            overlay.set_always_show_handles(True)
-            overlay.set_aspect_ratio_lock_enabled(True)
-            overlay.set_interior_interactive(not pass_through_interior)
-            overlay.on_geometry_changed = self._apply_resize_overlay_to_target
-            overlay.setZValue(1400)
-            self._scene.addItem(overlay)
-            self._resize_overlay_item = overlay
-        else:
-            self._updating_resize_overlay = True
-            self._resize_overlay_item.set_interior_interactive(not pass_through_interior)
-            self._resize_overlay_item.setPos(target_rect.topLeft())
-            self._resize_overlay_item.setRect(
-                QRectF(0.0, 0.0, target_rect.width(), target_rect.height())
-            )
-            self._updating_resize_overlay = False
-        self._apply_resize_handle_style(self._resize_overlay_item)
-        self._resize_overlay_target = target
+        return annotation_type not in SHAPE_LINE_TYPES
 
-    def _clear_resize_overlay(self) -> None:
+    def _on_resize_overlay_cleared(self) -> None:
         """
-        Removes interactive resize handles from the scene.
+        Clears alignment guides shown while the resize overlay was active.
 
         Returns:
             None
         """
 
-        if self._resize_overlay_item is not None and self._resize_overlay_item.scene() is self._scene:
-            self._scene.removeItem(self._resize_overlay_item)
-        self._resize_overlay_item = None
-        self._resize_overlay_target = None
         self._alignment_guides.clear()
         self._alignment_labels.clear()
 

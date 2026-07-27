@@ -193,6 +193,16 @@ def evaluate_capabilities(context: PlatformContext) -> dict[str, FeatureCapabili
 
 
 def _app_launch_capability(context: PlatformContext) -> FeatureCapability:
+    """
+    Evaluates whether the app itself can launch on one platform profile.
+
+    Args:
+        context: Platform profile to evaluate.
+
+    Returns:
+        FeatureCapability: Support level and explanatory note.
+    """
+
     if context.os_family == "linux":
         return FeatureCapability(
             "app_launch",
@@ -213,6 +223,16 @@ def _app_launch_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _fullscreen_capture_capability(context: PlatformContext) -> FeatureCapability:
+    """
+    Evaluates fullscreen capture support on one platform profile.
+
+    Args:
+        context: Platform profile to evaluate.
+
+    Returns:
+        FeatureCapability: Support level and explanatory note.
+    """
+
     if context.os_family == "windows":
         return FeatureCapability(
             "fullscreen_capture",
@@ -239,6 +259,16 @@ def _fullscreen_capture_capability(context: PlatformContext) -> FeatureCapabilit
 
 
 def _region_capture_capability(context: PlatformContext) -> FeatureCapability:
+    """
+    Evaluates region-selection capture support on one platform profile.
+
+    Args:
+        context: Platform profile to evaluate.
+
+    Returns:
+        FeatureCapability: Support level and explanatory note.
+    """
+
     route = region_capture_route(context)
     if route == "unavailable":
         return FeatureCapability(
@@ -266,6 +296,16 @@ def _region_capture_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _window_capture_capability(context: PlatformContext) -> FeatureCapability:
+    """
+    Evaluates per-window capture support on one platform profile.
+
+    Args:
+        context: Platform profile to evaluate.
+
+    Returns:
+        FeatureCapability: Support level and explanatory note.
+    """
+
     if context.os_family == "windows":
         return FeatureCapability(
             "window_capture",
@@ -298,6 +338,16 @@ def _window_capture_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _scroll_capture_capability(context: PlatformContext) -> FeatureCapability:
+    """
+    Evaluates automatic scroll capture support on one platform profile.
+
+    Args:
+        context: Platform profile to evaluate.
+
+    Returns:
+        FeatureCapability: Support level and explanatory note.
+    """
+
     if context.os_family == "windows":
         return FeatureCapability(
             "scroll_capture",
@@ -330,6 +380,16 @@ def _scroll_capture_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _video_capture_capability(context: PlatformContext) -> FeatureCapability:
+    """
+    Evaluates screen video recording support on one platform profile.
+
+    Args:
+        context: Platform profile to evaluate.
+
+    Returns:
+        FeatureCapability: Support level and explanatory note.
+    """
+
     if context.os_family == "windows":
         if not context.has_tool("ffmpeg"):
             return FeatureCapability(
@@ -368,6 +428,16 @@ def _video_capture_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _ocr_capability(context: PlatformContext) -> FeatureCapability:
+    """
+    Evaluates OCR text-recognition support on one platform profile.
+
+    Args:
+        context: Platform profile to evaluate.
+
+    Returns:
+        FeatureCapability: Support level and explanatory note.
+    """
+
     if context.os_family not in {"linux", "windows"}:
         return FeatureCapability(
             "ocr",
@@ -388,6 +458,16 @@ def _ocr_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _global_hotkeys_capability(context: PlatformContext) -> FeatureCapability:
+    """
+    Evaluates global-hotkey support on one platform profile.
+
+    Args:
+        context: Platform profile to evaluate.
+
+    Returns:
+        FeatureCapability: Support level and explanatory note.
+    """
+
     if context.os_family == "windows":
         return FeatureCapability(
             "global_hotkeys",
@@ -414,6 +494,16 @@ def _global_hotkeys_capability(context: PlatformContext) -> FeatureCapability:
 
 
 def _autostart_capability(context: PlatformContext) -> FeatureCapability:
+    """
+    Evaluates launch-on-login autostart support on one platform profile.
+
+    Args:
+        context: Platform profile to evaluate.
+
+    Returns:
+        FeatureCapability: Support level and explanatory note.
+    """
+
     if context.os_family == "windows":
         return FeatureCapability(
             "autostart",

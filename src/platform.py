@@ -45,6 +45,28 @@ def has_grim_and_slurp() -> bool:
     return which("grim") is not None and which("slurp") is not None
 
 
+def has_xdotool() -> bool:
+    """
+    Checks whether the xdotool X11 automation tool is available.
+
+    Returns:
+        bool: True when xdotool exists.
+    """
+
+    return which("xdotool") is not None
+
+
+def has_xdotool_and_xwininfo() -> bool:
+    """
+    Checks whether xdotool and xwininfo are both available for window capture.
+
+    Returns:
+        bool: True when both tools exist.
+    """
+
+    return which("xdotool") is not None and which("xwininfo") is not None
+
+
 def capture_desktop_png_bytes(geometry: str | None = None) -> bytes | None:
     """
     Captures the desktop or one region using grim.
@@ -193,7 +215,7 @@ def restore_x11_window_focus(window_id: str) -> bool:
         bool: True when focus restoration was attempted successfully.
     """
 
-    if which("xdotool") is None:
+    if not has_xdotool():
         return False
     normalized = window_id.strip()
     if not normalized or normalized == "0":
@@ -220,7 +242,7 @@ def raise_x11_window(window_id: str) -> bool:
         bool: True when the raise request succeeded.
     """
 
-    if which("xdotool") is None:
+    if not has_xdotool():
         return False
     normalized = window_id.strip()
     if not normalized or normalized == "0":
@@ -249,7 +271,7 @@ def get_x11_focused_window_id() -> str:
         str: Focused window id or empty string when unavailable.
     """
 
-    if which("xdotool") is None:
+    if not has_xdotool():
         return ""
     try:
         result = subprocess.run(

@@ -7,7 +7,7 @@ from __future__ import annotations
 import copy
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSizeF, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter
+from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
@@ -31,17 +31,17 @@ from src.annotation_items import (
     StrokeLineItem,
     StyleState,
     annotation_from_item,
-    apply_stroke_width_to_pen,
     configure_graphics_item,
     create_pen,
     create_stroke_pen,
     list_to_color,
     normalize_stroke_style,
-    stroke_style_to_qt,
 )
 from src.annotation_shapes import TEXT_STYLE_BUBBLE, StepBadgeItem, StyledTextItem
+from src.annotation_style_apply import apply_style_to_annotation_item
 from src.draw_style_defaults import create_default_style_state
 from src.crop_item import CropSelectionItem
+from src.geometry_utils import union_rect
 from src.editor_canvas import (
     DRAG_LINE_TOOLS,
     DRAG_RECT_TOOLS,
@@ -58,7 +58,9 @@ from src.shape_items import (
     SpotlightItem,
     points_from_payload,
 )
+from src.resize_overlay import ResizeOverlayMixin, rect_or_line_geometry_rect
 from src.video_models import VideoAnnotationModel
+from src.zoomable_canvas import ZoomableCanvasMixin
 
 DEFAULT_ANNOTATION_DURATION_MS = 3000
 
@@ -233,19 +235,19 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
         _configure_video_annotation_item(text_item, annotation)
         return text_item
     if annotation.annotation_type == "image":
-        from src.editor_canvas import decode_base64_to_pixmap
+        from src.storage import base64_png_to_pixmap
 
         encoded = str(annotation.payload.get("image_png_base64", ""))
         if not encoded:
             return None
-        item = QGraphicsPixmapItem(decode_base64_to_pixmap(encoded))
+        item = QGraphicsPixmapItem(base64_png_to_pixmap(encoded))
         item.setPos(annotation.x, annotation.y)
         _configure_video_annotation_item(item, annotation)
         return item
     return None
 
 
-class VideoCanvas(QGraphicsView):
+class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
     """
     Interactive video playback canvas with time-ranged annotation overlays.
     """
@@ -258,10 +260,6 @@ class VideoCanvas(QGraphicsView):
     content_changed = Signal()
     selection_style_changed = Signal(object)
     zoom_changed = Signal(float)
-
-    ZOOM_MIN = 0.1
-    ZOOM_MAX = 8.0
-    ZOOM_STEP = 1.06
 
     def __init__(self) -> None:
         """
@@ -366,8 +364,8 @@ class VideoCanvas(QGraphicsView):
 
         from pathlib import Path
 
-        from src.editor_canvas import encode_pixmap_to_base64
         from src.media_import import load_image_pixmap
+        from src.storage import pixmap_to_base64_png
 
         pixmap = load_image_pixmap(Path(file_path))
         if pixmap is None:
@@ -384,7 +382,7 @@ class VideoCanvas(QGraphicsView):
             y,
             max(1.0, width),
             max(1.0, height),
-            payload={"image_png_base64": encode_pixmap_to_base64(pixmap)},
+            payload={"image_png_base64": pixmap_to_base64_png(pixmap)},
         )
         return True
 
@@ -458,26 +456,6 @@ class VideoCanvas(QGraphicsView):
             return
         super().wheelEvent(event)
 
-    def zoom_in(self) -> None:
-        """
-        Zooms into the video canvas.
-
-        Returns:
-            None
-        """
-
-        self._apply_zoom(self.ZOOM_STEP)
-
-    def zoom_out(self) -> None:
-        """
-        Zooms out of the video canvas.
-
-        Returns:
-            None
-        """
-
-        self._apply_zoom(1.0 / self.ZOOM_STEP)
-
     def reset_zoom(self) -> None:
         """
         Resets zoom to the default fit level.
@@ -489,45 +467,15 @@ class VideoCanvas(QGraphicsView):
         self._initial_view_pending = True
         self._fit_scene_in_view()
 
-    def set_zoom_factor(self, target_zoom: float) -> None:
+    def _on_zoom_applied(self) -> None:
         """
-        Sets zoom to an absolute factor value.
-
-        Args:
-            target_zoom: Target zoom factor (1.0 = 100%).
+        Clears the pending-initial-fit flag after an explicit zoom change.
 
         Returns:
             None
         """
 
-        bounded_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, target_zoom))
-        if abs(bounded_zoom - self._zoom_factor) < 0.0001:
-            return
-        scale_factor = bounded_zoom / self._zoom_factor
-        self.scale(scale_factor, scale_factor)
-        self._zoom_factor = bounded_zoom
         self._initial_view_pending = False
-        self.zoom_changed.emit(self._zoom_factor)
-
-    def _apply_zoom(self, factor: float) -> None:
-        """
-        Applies a multiplicative zoom factor.
-
-        Args:
-            factor: Scale factor.
-
-        Returns:
-            None
-        """
-
-        new_zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, self._zoom_factor * factor))
-        if abs(new_zoom - self._zoom_factor) < 0.0001:
-            return
-        scale_factor = new_zoom / self._zoom_factor
-        self.scale(scale_factor, scale_factor)
-        self._zoom_factor = new_zoom
-        self._initial_view_pending = False
-        self.zoom_changed.emit(self._zoom_factor)
 
     def set_tool(self, tool: str) -> None:
         """
@@ -703,110 +651,25 @@ class VideoCanvas(QGraphicsView):
         for item in self._scene.selectedItems():
             if item is self._resize_overlay_item or item is self._video_item:
                 continue
-            annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-            if bool(item.data(ITEM_ROLE_LOCKED) or False):
-                continue
-            if annotation_type in SHAPE_RECT_TYPES:
-                shape_item = item
-                if annotation_type in STAMP_MARK_TYPES:
-                    mark_color = stroke_color if stroke_color is not None else fill_color
-                    if mark_color is not None:
-                        shape_item.setBrush(mark_color)
-                        shape_item.setPen(create_stroke_pen(mark_color, 0.0))
-                    changed = True
-                    continue
-                if stroke_color is not None:
-                    pen = shape_item.pen()
-                    pen.setColor(stroke_color)
-                    shape_item.setPen(pen)
-                if fill_color is not None:
-                    shape_item.setBrush(fill_color)
-                if stroke_width is not None:
-                    shape_item.setPen(
-                        apply_stroke_width_to_pen(
-                            shape_item.pen(),
-                            stroke_width,
-                            stroke_style=stroke_style,
-                        )
-                    )
-                elif stroke_style is not None and shape_item.pen().style() != Qt.PenStyle.NoPen:
-                    pen = shape_item.pen()
-                    pen.setStyle(stroke_style_to_qt(stroke_style))
-                    shape_item.setPen(pen)
-                changed = True
-            elif annotation_type == "step" and isinstance(item, StepBadgeItem):
-                if stroke_color is not None:
-                    pen = item.pen()
-                    pen.setColor(stroke_color)
-                    item.setPen(pen)
-                if fill_color is not None:
-                    item.setBrush(fill_color)
-                if stroke_width is not None:
-                    item.setPen(
-                        apply_stroke_width_to_pen(
-                            item.pen(),
-                            stroke_width,
-                            stroke_style=stroke_style,
-                        )
-                    )
-                changed = True
-            elif annotation_type in SHAPE_LINE_TYPES:
-                line_item = item
-                pen = line_item.pen()
-                if stroke_color is not None:
-                    pen.setColor(stroke_color)
-                if stroke_width is not None:
-                    pen = apply_stroke_width_to_pen(
-                        pen,
-                        stroke_width,
-                        stroke_style=stroke_style,
-                    )
-                elif stroke_style is not None and pen.style() != Qt.PenStyle.NoPen:
-                    pen.setStyle(stroke_style_to_qt(stroke_style))
-                line_item.setPen(pen)
-                changed = True
-            elif annotation_type in (Tool.TEXT, Tool.CALLOUT) and isinstance(item, StyledTextItem):
-                if text_color is not None:
-                    item.set_colors(text_color=text_color)
-                if stroke_color is not None:
-                    item.set_colors(stroke_color=stroke_color)
-                if fill_color is not None:
-                    item.set_colors(fill_color=fill_color)
-                if stroke_width is not None:
-                    item.set_stroke_width(float(stroke_width))
-                if text_style is not None:
-                    item.set_text_style(text_style)
-                if (
-                    font_size is not None
-                    or font_family is not None
-                    or font_bold is not None
-                    or font_italic is not None
-                    or font_underline is not None
-                ):
-                    font = QFont(item.font())
-                    if font_size is not None:
-                        font.setPointSize(max(1, int(font_size)))
-                    if font_family is not None and font_family.strip():
-                        font.setFamily(font_family.strip())
-                    if font_bold is not None:
-                        font.setBold(bool(font_bold))
-                    if font_italic is not None:
-                        font.setItalic(bool(font_italic))
-                    if font_underline is not None:
-                        font.setUnderline(bool(font_underline))
-                    item.set_font(font)
-                if (
-                    letter_spacing is not None
-                    or line_spacing_factor is not None
-                    or box_padding is not None
-                    or corner_radius is not None
-                ):
-                    item.set_layout_options(
-                        letter_spacing=letter_spacing,
-                        line_spacing_factor=line_spacing_factor,
-                        box_padding=box_padding,
-                        corner_radius=corner_radius,
-                    )
+            if apply_style_to_annotation_item(
+                item,
+                stroke_color=stroke_color,
+                fill_color=fill_color,
+                text_color=text_color,
+                stroke_width=stroke_width,
+                font_size=font_size,
+                font_family=font_family,
+                font_bold=font_bold,
+                font_italic=font_italic,
+                font_underline=font_underline,
+                letter_spacing=letter_spacing,
+                line_spacing_factor=line_spacing_factor,
+                box_padding=box_padding,
+                corner_radius=corner_radius,
+                stroke_style=stroke_style,
+                text_style=text_style,
+                styled_text_types=frozenset({Tool.TEXT, Tool.CALLOUT}),
+            ):
                 changed = True
 
         if changed and self._sync_visible_items_to_models():
@@ -944,44 +807,6 @@ class VideoCanvas(QGraphicsView):
         muted = not self.is_audio_muted()
         self.set_audio_muted(muted)
         return muted
-
-    def set_resize_handle_style(self, *, size: float, position: str) -> None:
-        """
-        Configures resize-overlay handle size and placement.
-
-        Args:
-            size: Handle edge length in pixels.
-            position: One of ``center``, ``inside``, or ``outside``.
-
-        Returns:
-            None
-        """
-
-        from src.config import normalize_resize_handle_position, normalize_resize_handle_size
-
-        self._resize_handle_size = float(normalize_resize_handle_size(size))
-        self._resize_handle_position = normalize_resize_handle_position(position)
-        if self._resize_overlay_item is not None:
-            self._resize_overlay_item.set_handle_style(
-                size=self._resize_handle_size,
-                position=self._resize_handle_position,
-            )
-
-    def _apply_resize_handle_style(self, overlay) -> None:
-        """
-        Applies the current resize-handle settings to one overlay item.
-
-        Args:
-            overlay: Selection overlay item.
-
-        Returns:
-            None
-        """
-
-        overlay.set_handle_style(
-            size=self._resize_handle_size,
-            position=self._resize_handle_position,
-        )
 
     def play(self) -> None:
         """
@@ -1747,97 +1572,36 @@ class VideoCanvas(QGraphicsView):
             QRectF: Geometry rectangle in scene coordinates.
         """
 
-        annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
-        if annotation_type in SHAPE_RECT_TYPES:
-            return item.mapRectToScene(item.rect()).normalized()
-        if annotation_type in SHAPE_LINE_TYPES:
-            line = item.line()
-            p1 = item.mapToScene(line.p1())
-            p2 = item.mapToScene(line.p2())
-            return QRectF(p1, p2).normalized()
+        shared_rect = rect_or_line_geometry_rect(item)
+        if shared_rect is not None:
+            return shared_rect
         return item.sceneBoundingRect().normalized()
 
-    def _item_scene_rect(self, item: QGraphicsItem) -> QRectF:
+    def _resize_overlay_is_movable(self, target: QGraphicsItem) -> bool:
         """
-        Returns a normalized scene-space geometry rectangle for one item.
+        Keeps the resize-overlay box itself non-movable in the video editor.
 
         Args:
-            item: Scene item.
+            target: Annotation the overlay is attached to.
 
         Returns:
-            QRectF: Normalized scene rectangle.
+            bool: Always False for the video editor.
         """
 
-        rect = self._target_geometry_rect(item).normalized()
-        if rect.width() < 2:
-            rect.setWidth(2)
-        if rect.height() < 2:
-            rect.setHeight(2)
-        return rect
+        return False
 
-    def _sync_resize_overlay_with_target(self, target: QGraphicsItem | None = None) -> None:
+    def _resize_overlay_interior_interactive(self, target: QGraphicsItem) -> bool:
         """
-        Aligns interactive resize handles to the current selected target item.
+        Keeps the overlay interior passive so drags always resize, never move.
 
         Args:
-            target: Optional explicit selected item.
+            target: Annotation the overlay is attached to.
 
         Returns:
-            None
+            bool: Always False for the video editor.
         """
 
-        if self._updating_resize_overlay:
-            return
-        if target is None:
-            selected = [
-                item
-                for item in self._scene.selectedItems()
-                if item is not self._resize_overlay_item
-            ]
-            if len(selected) != 1:
-                self._clear_resize_overlay()
-                return
-            target = selected[0]
-        if not self._can_resize_item(target):
-            self._clear_resize_overlay()
-            return
-
-        target_rect = self._item_scene_rect(target)
-        if self._resize_overlay_item is None:
-            overlay = CropSelectionItem(target_rect)
-            overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
-            overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
-            overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
-            overlay.set_always_show_handles(True)
-            overlay.set_aspect_ratio_lock_enabled(True)
-            overlay.set_interior_interactive(False)
-            overlay.on_geometry_changed = self._apply_resize_overlay_to_target
-            overlay.setZValue(1400)
-            self._scene.addItem(overlay)
-            self._resize_overlay_item = overlay
-        else:
-            self._updating_resize_overlay = True
-            self._resize_overlay_item.set_interior_interactive(False)
-            self._resize_overlay_item.setPos(target_rect.topLeft())
-            self._resize_overlay_item.setRect(
-                QRectF(0.0, 0.0, target_rect.width(), target_rect.height())
-            )
-            self._updating_resize_overlay = False
-        self._apply_resize_handle_style(self._resize_overlay_item)
-        self._resize_overlay_target = target
-
-    def _clear_resize_overlay(self) -> None:
-        """
-        Removes interactive resize handles from the scene.
-
-        Returns:
-            None
-        """
-
-        if self._resize_overlay_item is not None and self._resize_overlay_item.scene() is self._scene:
-            self._scene.removeItem(self._resize_overlay_item)
-        self._resize_overlay_item = None
-        self._resize_overlay_target = None
+        return False
 
     def _apply_resize_overlay_to_target(self) -> None:
         """
@@ -1999,15 +1763,15 @@ class VideoCanvas(QGraphicsView):
         if not source_annotations:
             return False
 
-        source_bounds = QRectF()
-        for annotation in source_annotations:
-            item_rect = QRectF(
+        source_bounds = union_rect(
+            QRectF(
                 float(annotation.x),
                 float(annotation.y),
                 max(1.0, float(annotation.width)),
                 max(1.0, float(annotation.height)),
             )
-            source_bounds = item_rect if source_bounds.isNull() else source_bounds.united(item_rect)
+            for annotation in source_annotations
+        )
 
         center_scene = self.mapToScene(self.viewport().rect().center())
         desired_top_left = QPointF(

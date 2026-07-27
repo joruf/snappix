@@ -4,13 +4,12 @@ Video editor window/tab chrome for Snappix.
 
 from __future__ import annotations
 
-import json
 import shutil
 from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QEvent, QMimeData, Qt, QSize, Signal
-from PySide6.QtGui import QAction, QColor, QGuiApplication, QKeySequence
+from PySide6.QtGui import QAction, QColor, QGuiApplication
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,7 +30,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from src.clipboard_json import get_json_clipboard_data, set_json_clipboard_data
 from src.draw_style_defaults import create_default_style_state
+from src.history_mixin import EditorHistoryMixin
+from src.shortcut_registry_mixin import ShortcutRegistryMixin
 from src.constants import APP_NAME
 from src.flow_layout import FlowLayoutWidget
 from src.timeline_widget import TimelineWidget
@@ -49,7 +51,7 @@ from src.video_vector_toolbar import VideoVectorToolbar
 _VIDEO_ANNOTATIONS_CLIPBOARD_MIME = "application/x-snappix-video-annotations"
 
 
-class VideoEditorWindow(QMainWindow):
+class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
     """
     Hosts the Snappix video editor UI: playback canvas, drawing tools, and timeline.
     """
@@ -91,6 +93,8 @@ class VideoEditorWindow(QMainWindow):
         self._history_index = -1
         self._pending_history_label: str | None = None
         self._syncing_history_list = False
+        self._shortcut_actions: dict[str, QAction] = {}
+        self._editor_shortcut_overrides: dict[str, str] = {}
 
         self.canvas = VideoCanvas()
         self.canvas.set_video_size(video_width, video_height)
@@ -209,34 +213,56 @@ class VideoEditorWindow(QMainWindow):
         edit_menu.addSeparator()
 
         copy_action = QAction("Copy", self)
-        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
         copy_action.setToolTip(
             "Copies the selected drawn objects for pasting into this or another tab."
         )
         copy_action.triggered.connect(self.copy_selected_annotations_to_clipboard)
         edit_menu.addAction(copy_action)
+        self._register_shortcut_action("copy", copy_action)
 
         paste_action = QAction("Paste", self)
-        paste_action.setShortcut(QKeySequence.StandardKey.Paste)
         paste_action.setToolTip(
             "Pastes drawn objects copied from this or another tab at the current playhead."
         )
         paste_action.triggered.connect(self.paste_annotations_from_clipboard)
         edit_menu.addAction(paste_action)
+        self._register_shortcut_action("paste", paste_action)
 
         edit_menu.addSeparator()
 
         self.undo_action = QAction("Undo", self)
-        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.setToolTip("Undo the last change.")
         self.undo_action.triggered.connect(self.undo)
         edit_menu.addAction(self.undo_action)
+        self._register_shortcut_action("undo", self.undo_action)
 
         self.redo_action = QAction("Redo", self)
-        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self.redo_action.setToolTip("Redo the last undone change.")
         self.redo_action.triggered.connect(self.redo)
         edit_menu.addAction(self.redo_action)
+        self._register_shortcut_action("redo", self.redo_action)
+
+        view_menu = self.menuBar().addMenu("View")
+
+        zoom_in_action = QAction("Zoom In", self)
+        zoom_in_action.setToolTip("Zooms into the video canvas.")
+        zoom_in_action.triggered.connect(self.canvas.zoom_in)
+        view_menu.addAction(zoom_in_action)
+        self._register_shortcut_action("zoom_in", zoom_in_action)
+
+        zoom_out_action = QAction("Zoom Out", self)
+        zoom_out_action.setToolTip("Zooms out of the video canvas.")
+        zoom_out_action.triggered.connect(self.canvas.zoom_out)
+        view_menu.addAction(zoom_out_action)
+        self._register_shortcut_action("zoom_out", zoom_out_action)
+
+        zoom_reset_action = QAction("Reset Zoom", self)
+        zoom_reset_action.setToolTip("Resets zoom to the default fit level.")
+        zoom_reset_action.triggered.connect(self.canvas.reset_zoom)
+        view_menu.addAction(zoom_reset_action)
+        self._register_shortcut_action("zoom_reset", zoom_reset_action)
+
+        self.apply_editor_shortcuts({})
 
     def import_image(self) -> None:
         """
@@ -283,9 +309,8 @@ class VideoEditorWindow(QMainWindow):
             "kind": "video_annotations",
             "annotations": [annotation.to_dict() for annotation in annotations],
         }
-        encoded = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         mime_data = QMimeData()
-        mime_data.setData(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME, encoded)
+        set_json_clipboard_data(mime_data, _VIDEO_ANNOTATIONS_CLIPBOARD_MIME, payload)
         QGuiApplication.clipboard().setMimeData(mime_data)
 
         count = len(annotations)
@@ -302,12 +327,8 @@ class VideoEditorWindow(QMainWindow):
 
         clipboard = QGuiApplication.clipboard()
         mime_data = clipboard.mimeData()
-        if mime_data is None or not mime_data.hasFormat(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME):
-            return
-        raw_data = bytes(mime_data.data(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME))
-        try:
-            payload = json.loads(raw_data.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = get_json_clipboard_data(mime_data, _VIDEO_ANNOTATIONS_CLIPBOARD_MIME)
+        if payload is None:
             return
         candidate = payload.get("annotations")
         if not isinstance(candidate, list):
@@ -920,71 +941,15 @@ class VideoEditorWindow(QMainWindow):
         self.timeline.refresh()
         self._record_history = True
 
-    def _reset_history(self) -> None:
+    def _on_history_navigated(self) -> None:
         """
-        Clears undo history and stores the current state as the initial entry.
+        Marks the project dirty after undo/redo/history-list navigation.
 
         Returns:
             None
         """
 
-        self._history.clear()
-        self._history_labels.clear()
-        self._history_index = -1
-        self._pending_history_label = None
-        self._push_history_state()
-
-    def _set_next_history_label(self, label: str) -> None:
-        """
-        Sets a pending label for the next history snapshot.
-
-        Args:
-            label: Action label shown in the history list.
-
-        Returns:
-            None
-        """
-
-        self._pending_history_label = label.strip() or "Edit"
-
-    def _consume_history_label(self) -> str:
-        """
-        Resolves the next history label from pending state or a fallback.
-
-        Returns:
-            str: Chosen history label.
-        """
-
-        if self._pending_history_label:
-            label = self._pending_history_label
-            self._pending_history_label = None
-            return label
-        return "Edit"
-
-    def _push_history_state(self) -> None:
-        """
-        Adds the current state to the undo history.
-
-        Returns:
-            None
-        """
-
-        if not self._record_history:
-            return
-        snapshot = self._serialize_state()
-        if self._history and snapshot == self._history[self._history_index]:
-            self._pending_history_label = None
-            return
-        label = self._consume_history_label()
-        self._history = self._history[: self._history_index + 1]
-        self._history_labels = self._history_labels[: self._history_index + 1]
-        self._history.append(snapshot)
-        if not self._history_labels:
-            self._history_labels.append("Initial state")
-        else:
-            self._history_labels.append(label)
-        self._history_index += 1
-        self._update_undo_redo_actions()
+        self._mark_dirty()
 
     def _update_undo_redo_actions(self) -> None:
         """
@@ -1026,58 +991,6 @@ class VideoEditorWindow(QMainWindow):
         if self._history_index >= 0:
             self.history_list_combo.setCurrentIndex(self._history_index)
         self._syncing_history_list = False
-
-    def _on_history_entry_selected(self, index: int) -> None:
-        """
-        Restores a specific history entry selected in the history list.
-
-        Args:
-            index: Selected history index.
-
-        Returns:
-            None
-        """
-
-        if self._syncing_history_list:
-            return
-        if index < 0 or index >= len(self._history):
-            return
-        if index == self._history_index:
-            return
-        self._history_index = index
-        self._restore_state(self._history[self._history_index])
-        self._update_undo_redo_actions()
-        self._mark_dirty()
-
-    def undo(self) -> None:
-        """
-        Restores the previous history snapshot.
-
-        Returns:
-            None
-        """
-
-        if self._history_index <= 0:
-            return
-        self._history_index -= 1
-        self._restore_state(self._history[self._history_index])
-        self._update_undo_redo_actions()
-        self._mark_dirty()
-
-    def redo(self) -> None:
-        """
-        Restores the next history snapshot.
-
-        Returns:
-            None
-        """
-
-        if self._history_index >= len(self._history) - 1:
-            return
-        self._history_index += 1
-        self._restore_state(self._history[self._history_index])
-        self._update_undo_redo_actions()
-        self._mark_dirty()
 
     def set_recovery_path(self, path: str) -> None:
         """

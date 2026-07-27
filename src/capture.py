@@ -8,7 +8,6 @@ import re
 import subprocess
 import time
 from src.py_compat import dataclass
-from shutil import which
 from typing import Callable
 
 from PySide6.QtCore import QPoint, QRect, QRectF, Qt, QElapsedTimer, QTimer, Signal
@@ -52,6 +51,7 @@ from src.platform import (
     get_x11_focused_window_id,
     has_grim,
     has_grim_and_slurp,
+    has_xdotool_and_xwininfo,
     is_wayland_session,
     raise_x11_window,
 )
@@ -1259,7 +1259,7 @@ def execute_scroll_capture(
         on_cancel()
         return
 
-    if not is_windows() and (which("xdotool") is None or which("xwininfo") is None):
+    if not is_windows() and not has_xdotool_and_xwininfo():
         QMessageBox.warning(
             None,
             "Scroll Capture Unavailable",
@@ -1960,7 +1960,7 @@ def detect_window_at_point(
             return "", QRect()
         return str(hwnd), geometry
 
-    if which("xdotool") is None or which("xwininfo") is None:
+    if not has_xdotool_and_xwininfo():
         return "", QRect()
     try:
         mouse_data = subprocess.run(
@@ -2012,7 +2012,7 @@ def select_window_geometry() -> QRect:
         QRect: Selected window geometry in global coordinates or empty rect.
     """
 
-    if which("xdotool") is None or which("xwininfo") is None:
+    if not has_xdotool_and_xwininfo():
         return QRect()
     try:
         result = subprocess.run(
@@ -2546,7 +2546,7 @@ def execute_capture_request(
             overlay.repaint()
             return
 
-        if which("xdotool") is None or which("xwininfo") is None:
+        if not has_xdotool_and_xwininfo():
             QMessageBox.warning(
                 None,
                 "Window Capture Unavailable",

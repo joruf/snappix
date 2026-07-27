@@ -4,7 +4,6 @@ Main screenshot editing window for Snappix.
 
 from __future__ import annotations
 
-import json
 import tempfile
 import os
 from pathlib import Path
@@ -103,6 +102,9 @@ from src.annotation_items import (
     STROKE_STYLE_SOLID,
 )
 from src.annotation_shapes import TEXT_STYLE_BOX, TEXT_STYLE_BUBBLE, TEXT_STYLE_PLAIN
+from src.clipboard_json import get_json_clipboard_data, set_json_clipboard_data
+from src.history_mixin import EditorHistoryMixin
+from src.shortcut_registry_mixin import ShortcutRegistryMixin
 from src.editor_canvas import (
     ERASE_MODE_FILL,
     ERASE_MODE_TRANSPARENT,
@@ -117,6 +119,7 @@ from src.storage import (
     pixmap_to_base64_png,
     save_project,
 )
+from src.tool_categories import SHARED_SHAPE_TOOL_CATEGORIES, build_tool_category_strip
 from src.tool_icons import build_tool_icon
 from src.theme import (
     THEME_DARK,
@@ -130,14 +133,7 @@ from src.theme import (
     palette_button_stylesheet,
 )
 from src.ocr import format_ocr_copied_status
-from src.shortcuts import (
-    HOST_OWNED_SHORTCUT_IDS,
-    build_shortcuts_reference_text,
-    format_shortcut_for_display,
-    normalize_editor_shortcuts,
-    resolved_shortcut_text,
-    sequences_for_action,
-)
+from src.shortcuts import build_shortcuts_reference_text
 from src.tool_reference import format_tool_tooltip
 from src.tool_reference_dialog import ToolReferenceDialog
 
@@ -425,7 +421,7 @@ def _format_document_info(payload: dict[str, Any]) -> str:
     return "  ·  ".join(parts)
 
 
-class EditorWindow(QMainWindow):
+class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
     """
     Hosts the Snappix screenshot editor UI.
     """
@@ -626,42 +622,7 @@ class EditorWindow(QMainWindow):
                     (Tool.EYEDROPPER, "Color Picker"),
                 ],
             ),
-            (
-                "Shapes",
-                [
-                    (Tool.RECT, "Rectangle"),
-                    (Tool.ELLIPSE, "Circle"),
-                    (Tool.TRIANGLE, "Triangle"),
-                    (Tool.STAR, "Star"),
-                    (Tool.POLYGON, "Polygon"),
-                ],
-            ),
-            (
-                "Lines",
-                [
-                    (Tool.LINE, "Line"),
-                    (Tool.POLYLINE, "Polyline"),
-                    (Tool.ARROW, "Arrow"),
-                    (Tool.DOUBLE_ARROW, "Double Arrow"),
-                    (Tool.BENT_ARROW, "Bent Arrow"),
-                ],
-            ),
-            (
-                "Marks",
-                [
-                    (Tool.CROSS, "Cross"),
-                    (Tool.CHECKMARK, "Checkmark"),
-                    (Tool.SPOTLIGHT, "Spotlight"),
-                    (Tool.STEP, "Step"),
-                ],
-            ),
-            (
-                "Text",
-                [
-                    (Tool.TEXT, "Text"),
-                    (Tool.CALLOUT, "Callout"),
-                ],
-            ),
+            *SHARED_SHAPE_TOOL_CATEGORIES,
             (
                 "Image",
                 [
@@ -672,37 +633,25 @@ class EditorWindow(QMainWindow):
                 ],
             ),
         ]
-        for category_title, tools in tool_categories:
-            category_box = QGroupBox(category_title, strip)
-            category_box.setObjectName("toolCategoryBox")
-            category_box.setToolTip(_TOOL_CATEGORY_TOOLTIPS.get(category_title, category_title))
-            category_box.setSizePolicy(
-                QSizePolicy.Policy.Maximum,
-                QSizePolicy.Policy.Maximum,
+
+        def _record_tool_button_label(tool_key: str, label: str) -> None:
+            """Tracks one tool button's display label for later tooltip lookups."""
+            self._tool_button_labels[tool_key] = label
+
+        strip_widgets.extend(
+            build_tool_category_strip(
+                strip,
+                tool_categories,
+                on_tool_clicked=self._on_tool_button_clicked,
+                tool_buttons=self._tool_buttons,
+                tool_button_order=self._tool_button_order,
+                tool_button_to_key=self._tool_button_to_key,
+                category_tooltip_for=lambda title: _TOOL_CATEGORY_TOOLTIPS.get(title, title),
+                event_filter_target=self,
+                configure_button=lambda button: self._configure_compact_toolbar_height(button, 34),
+                on_button_created=_record_tool_button_label,
             )
-            category_layout = QHBoxLayout(category_box)
-            category_layout.setContentsMargins(4, 10, 4, 4)
-            category_layout.setSpacing(4)
-            for tool_key, label in tools:
-                button = QToolButton()
-                button.setText(label)
-                button.setCheckable(True)
-                button.setIcon(build_tool_icon(tool_key))
-                button.setIconSize(QSize(28, 28))
-                button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-                button.setFixedSize(38, 34)
-                button.setToolTip(label)
-                self._configure_compact_toolbar_height(button, 34)
-                button.clicked.connect(
-                    lambda _checked=False, t=tool_key: self._on_tool_button_clicked(t)
-                )
-                button.installEventFilter(self)
-                self._tool_buttons[tool_key] = button
-                self._tool_button_order.append(tool_key)
-                self._tool_button_labels[tool_key] = label
-                self._tool_button_to_key[button] = tool_key
-                category_layout.addWidget(button)
-            strip_widgets.append(category_box)
+        )
 
         self._tool_buttons[Tool.SELECT].setChecked(True)
         self._setup_pixel_tool_option_menus()
@@ -1853,48 +1802,6 @@ class EditorWindow(QMainWindow):
         self.apply_editor_shortcuts({})
         self._update_undo_redo_actions()
 
-    def _register_shortcut_action(self, action_id: str, action: QAction) -> None:
-        """
-        Registers one menu action for configurable keyboard shortcuts.
-
-        Args:
-            action_id: Stable shortcut identifier.
-            action: Qt action that receives the binding.
-
-        Returns:
-            None
-        """
-
-        self._shortcut_actions[action_id] = action
-
-    def apply_editor_shortcuts(self, overrides: dict[str, str] | None) -> None:
-        """
-        Applies configured editor shortcuts to registered actions.
-
-        Args:
-            overrides: Shortcut overrides from application settings.
-
-        Returns:
-            None
-        """
-
-        self._editor_shortcut_overrides = normalize_editor_shortcuts(overrides)
-        for action_id, action in self._shortcut_actions.items():
-            binding = format_shortcut_for_display(
-                resolved_shortcut_text(action_id, self._editor_shortcut_overrides)
-            )
-            tip = action.toolTip().split(" Shortcut:")[0].rstrip()
-            if binding != "(none)":
-                action.setToolTip(f"{tip} Shortcut: {binding}.")
-            else:
-                action.setToolTip(tip)
-            if action_id in HOST_OWNED_SHORTCUT_IDS:
-                # Host QShortcuts own these keys; keep menu actions clickable only.
-                action.setShortcuts([])
-                continue
-            sequences = sequences_for_action(action_id, self._editor_shortcut_overrides)
-            action.setShortcuts(sequences)
-
     def _setup_pixel_tool_option_menus(self) -> None:
         """
         Attaches popup menus for Contiguous and Delete erase mode to pixel tools.
@@ -2666,6 +2573,7 @@ class EditorWindow(QMainWindow):
         root.setSpacing(6)
 
         def add_row(label_text: str, widget: QWidget) -> None:
+            """Appends one labeled form row to the panel."""
             row = QHBoxLayout()
             row.setSpacing(8)
             label = QLabel(label_text, panel)
@@ -3350,31 +3258,14 @@ class EditorWindow(QMainWindow):
             else:
                 button.setToolTip(base_tip)
 
-    def _set_next_history_label(self, label: str) -> None:
+    def _default_history_label(self) -> str:
         """
-        Sets a pending label for the next history snapshot.
-
-        Args:
-            label: Action label shown in history list.
-
-        Returns:
-            None
-        """
-
-        self._pending_history_label = label.strip() or "Edit"
-
-    def _consume_history_label(self) -> str:
-        """
-        Resolves the next history label from pending or canvas action.
+        Falls back to the canvas's own last-action label when nothing is pending.
 
         Returns:
             str: Chosen history label.
         """
 
-        if self._pending_history_label:
-            label = self._pending_history_label
-            self._pending_history_label = None
-            return label
         return self.canvas.consume_last_action_label()
 
     def _choose_stroke_color(self) -> None:
@@ -4870,31 +4761,6 @@ class EditorWindow(QMainWindow):
         self._record_history = True
         self._refresh_layer_panel()
 
-    def _push_history_state(self) -> None:
-        """
-        Adds the current state to the undo history.
-
-        Returns:
-            None
-        """
-
-        if not self._record_history:
-            return
-        snapshot = self._serialize_state()
-        if self._history and snapshot == self._history[self._history_index]:
-            self._pending_history_label = None
-            return
-        label = self._consume_history_label()
-        self._history = self._history[: self._history_index + 1]
-        self._history_labels = self._history_labels[: self._history_index + 1]
-        self._history.append(snapshot)
-        if not self._history_labels:
-            self._history_labels.append("Initial state")
-        else:
-            self._history_labels.append(label)
-        self._history_index += 1
-        self._update_undo_redo_actions()
-
     def _update_undo_redo_actions(self) -> None:
         """
         Enables or disables undo and redo actions.
@@ -4930,55 +4796,6 @@ class EditorWindow(QMainWindow):
         if self._history_index >= 0:
             self.history_list_combo.setCurrentIndex(self._history_index)
         self._syncing_history_list = False
-
-    def _on_history_entry_selected(self, index: int) -> None:
-        """
-        Restores a specific history entry selected in the history list.
-
-        Args:
-            index: Selected history index.
-
-        Returns:
-            None
-        """
-
-        if self._syncing_history_list:
-            return
-        if index < 0 or index >= len(self._history):
-            return
-        if index == self._history_index:
-            return
-        self._history_index = index
-        self._restore_state(self._history[self._history_index])
-        self._update_undo_redo_actions()
-
-    def undo(self) -> None:
-        """
-        Restores the previous history snapshot.
-
-        Returns:
-            None
-        """
-
-        if self._history_index <= 0:
-            return
-        self._history_index -= 1
-        self._restore_state(self._history[self._history_index])
-        self._update_undo_redo_actions()
-
-    def redo(self) -> None:
-        """
-        Restores the next history snapshot.
-
-        Returns:
-            None
-        """
-
-        if self._history_index >= len(self._history) - 1:
-            return
-        self._history_index += 1
-        self._restore_state(self._history[self._history_index])
-        self._update_undo_redo_actions()
 
     def import_image(self) -> None:
         """
@@ -5762,6 +5579,7 @@ class EditorWindow(QMainWindow):
         root_layout.addLayout(actions_row)
 
         def profile_order_from_list() -> list[str]:
+            """Reads the current profile key order from the list widget."""
             order: list[str] = []
             for row in range(list_widget.count()):
                 item = list_widget.item(row)
@@ -5773,6 +5591,7 @@ class EditorWindow(QMainWindow):
             return order
 
         def sync_profiles_from_list() -> None:
+            """Reorders working profiles to match the list widget, keeping any not shown."""
             nonlocal profiles_working
             key_order = profile_order_from_list()
             by_key = {
@@ -5794,12 +5613,14 @@ class EditorWindow(QMainWindow):
             profiles_working = reordered
 
         def index_for_key(profile_key: str) -> int:
+            """Finds the working-profile list index for one profile key."""
             for idx, profile in enumerate(profiles_working):
                 if str(profile["key"]) == profile_key:
                     return idx
             return -1
 
         def selected_profile_key() -> str:
+            """Returns the profile key of the currently selected list row, if any."""
             item = list_widget.currentItem()
             if item is None:
                 return ""
@@ -5809,6 +5630,7 @@ class EditorWindow(QMainWindow):
             return key.strip()
 
         def selected_profile_index() -> int:
+            """Resolves the selected profile's working-list index, syncing order first."""
             key = selected_profile_key()
             if not key:
                 return -1
@@ -5816,6 +5638,7 @@ class EditorWindow(QMainWindow):
             return index_for_key(key)
 
         def refresh_list_labels() -> None:
+            """Rewrites each list row's display text from the working profile labels."""
             label_by_key = {
                 str(profile["key"]): str(profile["label"])
                 for profile in profiles_working
@@ -5831,6 +5654,7 @@ class EditorWindow(QMainWindow):
                 item.setText(f"{label} ({key.strip()})")
 
         def unique_profile_key(base_value: str) -> str:
+            """Generates a profile key from base_value, appending a suffix on collision."""
             seed = self._normalize_batch_profile_key(base_value)
             existing = {
                 str(profile["key"])
@@ -5844,6 +5668,7 @@ class EditorWindow(QMainWindow):
             return f"{seed}_{counter}"
 
         def rename_selected_profile() -> None:
+            """Prompts for and applies a new label for the selected profile."""
             index = selected_profile_index()
             if index < 0:
                 return
@@ -5864,6 +5689,7 @@ class EditorWindow(QMainWindow):
             refresh_list_labels()
 
         def duplicate_selected_profile() -> None:
+            """Prompts for a name and appends a copy of the selected profile."""
             index = selected_profile_index()
             if index < 0:
                 return
@@ -5894,6 +5720,7 @@ class EditorWindow(QMainWindow):
             list_widget.setCurrentRow(list_widget.count() - 1)
 
         def delete_selected_profile() -> None:
+            """Confirms and removes the selected profile, unless it is the last one."""
             index = selected_profile_index()
             if index < 0:
                 return
@@ -6165,6 +5992,7 @@ class EditorWindow(QMainWindow):
         }
 
         def on_profile_changed() -> None:
+            """Syncs the format checkboxes to the newly selected profile."""
             selected_key = str(profile_combo.currentData() or "")
             selected_profile = profile_map.get(selected_key)
             if selected_profile is None:
@@ -6259,20 +6087,17 @@ class EditorWindow(QMainWindow):
             "kind": "annotations",
             "annotations": [annotation.to_dict() for annotation in annotations],
         }
-        encoded = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         mime_data = QMimeData()
-        mime_data.setData(_ANNOTATIONS_CLIPBOARD_MIME, encoded)
+        set_json_clipboard_data(mime_data, _ANNOTATIONS_CLIPBOARD_MIME, payload)
         # Keep canvas MIME compatibility for older paste paths when useful.
-        mime_data.setData(
+        set_json_clipboard_data(
+            mime_data,
             _CANVAS_CLIPBOARD_MIME,
-            json.dumps(
-                {
-                    "kind": "annotations",
-                    "screenshot_png_base64": "",
-                    "annotations": payload["annotations"],
-                },
-                ensure_ascii=True,
-            ).encode("utf-8"),
+            {
+                "kind": "annotations",
+                "screenshot_png_base64": "",
+                "annotations": payload["annotations"],
+            },
         )
         QGuiApplication.clipboard().setMimeData(mime_data)
 
@@ -6330,7 +6155,6 @@ class EditorWindow(QMainWindow):
                 for annotation in self.canvas.collect_annotations()
             ],
         }
-        encoded = json.dumps(payload, ensure_ascii=True).encode("utf-8")
         composited = self.canvas.export_composited_pixmap()
         image_bytes = QByteArray()
         buffer = QBuffer(image_bytes)
@@ -6339,7 +6163,7 @@ class EditorWindow(QMainWindow):
         buffer.close()
 
         mime_data = QMimeData()
-        mime_data.setData(_CANVAS_CLIPBOARD_MIME, encoded)
+        set_json_clipboard_data(mime_data, _CANVAS_CLIPBOARD_MIME, payload)
         mime_data.setData("image/png", bytes(image_bytes))
         mime_data.setImageData(composited.toImage())
         return mime_data
@@ -6359,19 +6183,15 @@ class EditorWindow(QMainWindow):
 
         annotations_data: list[Any] | None = None
         if mime_data.hasFormat(_ANNOTATIONS_CLIPBOARD_MIME):
-            raw_data = bytes(mime_data.data(_ANNOTATIONS_CLIPBOARD_MIME))
-            try:
-                payload = json.loads(raw_data.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = get_json_clipboard_data(mime_data, _ANNOTATIONS_CLIPBOARD_MIME)
+            if payload is None:
                 return False
             candidate = payload.get("annotations")
             if isinstance(candidate, list):
                 annotations_data = candidate
         elif mime_data.hasFormat(_CANVAS_CLIPBOARD_MIME):
-            raw_data = bytes(mime_data.data(_CANVAS_CLIPBOARD_MIME))
-            try:
-                payload = json.loads(raw_data.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError):
+            payload = get_json_clipboard_data(mime_data, _CANVAS_CLIPBOARD_MIME)
+            if payload is None:
                 return False
             if str(payload.get("kind") or "") != "annotations":
                 return False
@@ -6407,12 +6227,8 @@ class EditorWindow(QMainWindow):
 
         clipboard = QGuiApplication.clipboard()
         mime_data = clipboard.mimeData()
-        if mime_data is None or not mime_data.hasFormat(_CANVAS_CLIPBOARD_MIME):
-            return False
-        raw_data = bytes(mime_data.data(_CANVAS_CLIPBOARD_MIME))
-        try:
-            payload = json.loads(raw_data.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+        payload = get_json_clipboard_data(mime_data, _CANVAS_CLIPBOARD_MIME)
+        if payload is None:
             return False
         if str(payload.get("kind") or "canvas") == "annotations":
             return False
