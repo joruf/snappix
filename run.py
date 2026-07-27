@@ -1411,11 +1411,9 @@ class AppController:
             Path | None: Saved file path or None on failure.
         """
 
-        filename = datetime.now().strftime("snappix_%Y-%m-%d_%H-%M-%S.png")
-        target_path = self._capture_save_directory() / filename
-        if not pixmap.save(str(target_path), "PNG"):
-            return None
-        return target_path
+        from src.post_capture_service import save_capture_pixmap_to_directory
+
+        return save_capture_pixmap_to_directory(pixmap, self._capture_save_directory())
 
     def _handle_capture_result(self, pixmap) -> None:
         """

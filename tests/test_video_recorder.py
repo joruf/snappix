@@ -19,6 +19,7 @@ try:
         build_export_command,
         build_record_command,
         clamp_region_to_even_dimensions,
+        scale_rect_to_physical_pixels,
     )
     from tests.qt_test_utils import ensure_qapp
 
@@ -60,6 +61,47 @@ class TestClampRegion(unittest.TestCase):
         rect = QRect(0, 0, 1, 1)
         clamped = clamp_region_to_even_dimensions(rect)
         self.assertEqual((clamped.width(), clamped.height()), (2, 2))
+
+
+class TestScaleRectToPhysicalPixels(unittest.TestCase):
+    """
+    Verifies logical-to-physical pixel conversion for scaled displays.
+
+    Regression coverage: recording previously used Qt's logical (scaled)
+    rect directly as ffmpeg's x11grab/gdigrab region, which grabs the wrong
+    physical-pixel area on any display with scaling above 100%, producing a
+    black or garbled recording while screenshots (which go through Qt's own
+    DPI-aware grabWindow) stayed unaffected.
+    """
+
+    def test_unscaled_display_is_unchanged(self) -> None:
+        """
+        Ensures a 100% scale factor leaves the rect untouched.
+        """
+
+        rect = QRect(10, 20, 640, 480)
+        scaled = scale_rect_to_physical_pixels(rect, 1.0)
+        self.assertEqual(scaled, rect)
+
+    def test_scaled_display_multiplies_all_fields(self) -> None:
+        """
+        Ensures a 150% scale factor converts logical to physical pixels.
+        """
+
+        rect = QRect(10, 20, 640, 480)
+        scaled = scale_rect_to_physical_pixels(rect, 1.5)
+        self.assertEqual((scaled.x(), scaled.y()), (15, 30))
+        self.assertEqual((scaled.width(), scaled.height()), (960, 720))
+
+    def test_double_scale_factor(self) -> None:
+        """
+        Ensures a 200% scale factor doubles every field.
+        """
+
+        rect = QRect(100, 50, 320, 240)
+        scaled = scale_rect_to_physical_pixels(rect, 2.0)
+        self.assertEqual((scaled.x(), scaled.y()), (200, 100))
+        self.assertEqual((scaled.width(), scaled.height()), (640, 480))
 
 
 class TestBuildRecordCommand(unittest.TestCase):
@@ -342,6 +384,65 @@ class TestVideoRecorderLifecycle(unittest.TestCase):
         self.assertEqual(len(recorder._segment_paths), 2)  # pylint: disable=protected-access
         self.assertEqual(popen_mock.call_count, 1)
         mock_process.wait.assert_called()
+
+    def test_start_uses_current_display_environment_variable(self) -> None:
+        """
+        Ensures x11grab targets the actual $DISPLAY instead of a hardcoded :0.0.
+
+        Regression test: recording previously always grabbed display :0.0
+        regardless of the real session display, producing a black/garbage
+        video whenever the X11 session ran on any other display number.
+        """
+
+        recorder = VideoRecorder()
+        mock_process = MagicMock()
+        mock_process.pid = 4242
+        mock_process.poll.return_value = None
+        with patch("src.video_recorder.has_ffmpeg", return_value=True), patch(
+            "src.video_recorder.resolve_ffmpeg_path", return_value="ffmpeg"
+        ), patch("src.paths.is_windows", return_value=False), patch(
+            "src.video_recorder.time.sleep"
+        ), patch.dict("os.environ", {"DISPLAY": ":7"}), patch(
+            "subprocess.Popen", return_value=mock_process
+        ) as popen_mock:
+            started = recorder.start(
+                QRect(0, 0, 640, 480), Path("/tmp/rec.mp4"), record_microphone=False
+            )
+        self.assertTrue(started)
+        command = popen_mock.call_args[0][0]
+        self.assertIn("-i", command)
+        input_arg = command[command.index("-i") + 1]
+        self.assertTrue(input_arg.startswith(":7+"), input_arg)
+
+    def test_start_converts_logical_rect_to_physical_pixels(self) -> None:
+        """
+        Ensures a scaled display's logical region is converted before recording.
+
+        Regression test: a logical (Qt) selection rect was passed straight to
+        x11grab, which expects physical pixels, so any display scaling above
+        100% made the recording grab the wrong region.
+        """
+
+        recorder = VideoRecorder()
+        mock_process = MagicMock()
+        mock_process.pid = 4242
+        mock_process.poll.return_value = None
+        with patch("src.video_recorder.has_ffmpeg", return_value=True), patch(
+            "src.video_recorder.resolve_ffmpeg_path", return_value="ffmpeg"
+        ), patch("src.paths.is_windows", return_value=False), patch(
+            "src.video_recorder.time.sleep"
+        ), patch(
+            "src.video_recorder.resolve_device_pixel_ratio_for_rect", return_value=2.0
+        ), patch("subprocess.Popen", return_value=mock_process) as popen_mock:
+            started = recorder.start(
+                QRect(10, 20, 640, 480), Path("/tmp/rec.mp4"), record_microphone=False
+            )
+        self.assertTrue(started)
+        command = popen_mock.call_args[0][0]
+        input_arg = command[command.index("-i") + 1]
+        self.assertIn("+20,40", input_arg)
+        size_arg = command[command.index("-video_size") + 1]
+        self.assertEqual(size_arg, "1280x960")
 
     def test_start_without_ffmpeg_emits_failed(self) -> None:
         """

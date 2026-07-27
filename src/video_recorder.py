@@ -7,6 +7,7 @@ from __future__ import annotations
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -219,6 +220,77 @@ def clamp_rect_to_virtual_desktop(rect: QRect) -> QRect:
         rect.width(),
         rect.height(),
     )
+
+
+def scale_rect_to_physical_pixels(rect: QRect, device_pixel_ratio: float) -> QRect:
+    """
+    Converts a logical (Qt device-independent) rect to physical pixel coordinates.
+
+    ffmpeg's x11grab/gdigrab operate on the raw framebuffer regardless of any
+    OS/desktop display scaling, while Qt reports screen and mouse geometry in
+    scaled logical pixels whenever a display scale factor is active. Without
+    this conversion, a scaled display makes the recording grab the wrong
+    (often out-of-bounds) region, which shows up as a black or garbled video.
+
+    Args:
+        rect: Region in logical (Qt) coordinates.
+        device_pixel_ratio: Scale factor of the screen the region is on.
+
+    Returns:
+        QRect: Equivalent region in physical pixel coordinates.
+    """
+
+    if abs(device_pixel_ratio - 1.0) < 0.001:
+        return QRect(rect)
+    return QRect(
+        round(rect.x() * device_pixel_ratio),
+        round(rect.y() * device_pixel_ratio),
+        round(rect.width() * device_pixel_ratio),
+        round(rect.height() * device_pixel_ratio),
+    )
+
+
+def _drain_and_print_stderr(stream) -> None:
+    """
+    Reads one process's stderr to completion and prints any output.
+
+    Args:
+        stream: Open stderr pipe of the ffmpeg subprocess.
+
+    Returns:
+        None
+    """
+
+    try:
+        output = stream.read()
+    except (OSError, ValueError):
+        return
+    text = output.decode("utf-8", errors="replace").strip() if output else ""
+    if text:
+        print(f"[snappix ffmpeg]\n{text}", file=sys.stderr)
+
+
+def resolve_device_pixel_ratio_for_rect(rect: QRect) -> float:
+    """
+    Resolves the display scale factor for the screen a region is on.
+
+    Args:
+        rect: Region in logical (Qt) coordinates.
+
+    Returns:
+        float: Device pixel ratio of the containing screen, or 1.0 when
+        no screen information is available.
+    """
+
+    try:
+        from PySide6.QtGui import QGuiApplication
+    except ModuleNotFoundError:
+        return 1.0
+
+    screen = QGuiApplication.screenAt(rect.center()) or QGuiApplication.primaryScreen()
+    if screen is None:
+        return 1.0
+    return float(screen.devicePixelRatio())
 
 
 def build_concat_command(list_path: Path, output_path: Path) -> list[str]:
@@ -546,6 +618,10 @@ class VideoRecorder(QObject):
 
         from src.paths import is_windows
 
+        physical_rect = scale_rect_to_physical_pixels(
+            rect, resolve_device_pixel_ratio_for_rect(rect)
+        )
+
         want_mic = self._record_microphone
         windows_audio_device: str | None = None
         if is_windows() and want_mic:
@@ -566,10 +642,11 @@ class VideoRecorder(QObject):
                 except OSError:
                     pass
             command = build_record_command(
-                rect,
+                physical_rect,
                 segment_path,
                 record_microphone=use_mic,
                 framerate=self._framerate,
+                display=os.environ.get("DISPLAY") or ":0.0",
                 windows_audio_device=windows_audio_device if use_mic else None,
             )
             try:
@@ -641,9 +718,11 @@ class VideoRecorder(QObject):
                 pass
 
         # Prevent deadlock: ffmpeg logs to stderr and can block when the pipe fills.
+        # Printed (not just drained) so recording problems are visible in the
+        # terminal instead of being silently swallowed.
         if process.stderr is not None:
             threading.Thread(
-                target=lambda: process.stderr.read(),
+                target=lambda: _drain_and_print_stderr(process.stderr),
                 daemon=True,
                 name="snappix-ffmpeg-stderr-drain",
             ).start()
