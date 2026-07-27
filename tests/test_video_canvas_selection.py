@@ -395,3 +395,50 @@ class TestVideoCanvasSelection(unittest.TestCase):
         remaining_ids = {annotation.annotation_id for annotation in canvas.annotations()}
         self.assertIn(rect.annotation_id, remaining_ids)
         self.assertNotIn(ellipse.annotation_id, remaining_ids)
+
+    def test_poly_tools_enable_mouse_tracking_for_rubber_band(self) -> None:
+        """
+        Ensures bent-arrow/polyline/polygon tools track the cursor between clicks.
+        """
+
+        canvas = VideoCanvas()
+        for tool in (Tool.BENT_ARROW, Tool.POLYLINE, Tool.POLYGON):
+            with self.subTest(tool=tool):
+                canvas.set_tool(tool)
+                self.assertTrue(canvas.hasMouseTracking())
+        canvas.set_tool(Tool.SELECT)
+        self.assertFalse(canvas.hasMouseTracking())
+
+    def test_poly_preview_follows_cursor_while_drawing(self) -> None:
+        """
+        Ensures the video poly rubber-band includes the live cursor point.
+        """
+
+        from src.shape_items import PolyPathItem
+
+        canvas = VideoCanvas()
+        canvas.set_tool(Tool.BENT_ARROW)
+        canvas._append_poly_point(QPointF(20.0, 30.0))  # pylint: disable=protected-access
+        self.assertIsNotNone(canvas._poly_preview)  # pylint: disable=protected-access
+        preview = canvas._poly_preview  # pylint: disable=protected-access
+        assert isinstance(preview, PolyPathItem)
+        self.assertGreaterEqual(preview.zValue(), 50.0)
+
+        canvas._update_poly_preview(QPointF(120.0, 80.0))  # pylint: disable=protected-access
+        self.assertEqual(
+            preview.points(),
+            [QPointF(20.0, 30.0), QPointF(120.0, 80.0)],
+        )
+        # Committed vertices stay unchanged until the next click.
+        self.assertEqual(canvas._poly_points, [QPointF(20.0, 30.0)])  # pylint: disable=protected-access
+
+        move = QMouseEvent(
+            QMouseEvent.Type.MouseMove,
+            QPointF(50.0, 40.0),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        canvas.mouseMoveEvent(move)
+        self.assertEqual(len(preview.points()), 2)
+        self.assertEqual(preview.points()[0], QPointF(20.0, 30.0))

@@ -717,6 +717,8 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         else:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        # Rubber-band poly/path previews need hover moves between clicks.
+        self.setMouseTracking(tool in POLY_DRAW_TOOLS or tool == Tool.SELECT_PATH)
         if tool == Tool.CROP and not self.has_pending_crop():
             self._create_default_crop_selection()
 

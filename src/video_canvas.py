@@ -503,6 +503,9 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self.setDragMode(QGraphicsView.DragMode.RubberBandDrag)
         else:
             self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        # Poly tools need hover moves between clicks so the rubber-band can follow
+        # the cursor (same behavior as the image editor).
+        self.setMouseTracking(tool in POLY_DRAW_TOOLS)
         if previous_tool != tool:
             self.tool_changed.emit(tool)
         self._update_style_color_context()
@@ -978,6 +981,7 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self._scene.removeItem(self._poly_preview)
         self._poly_preview = None
         self._poly_points = []
+        self.setMouseTracking(self._tool in POLY_DRAW_TOOLS)
 
     def _refresh_selection_style(self) -> None:
         """
@@ -1171,12 +1175,13 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             None
         """
 
+        if self._tool in POLY_DRAW_TOOLS and self._poly_points:
+            scene_pos = self.mapToScene(event.position().toPoint())
+            self._update_poly_preview(scene_pos)
+            event.accept()
+            return
+
         if self._drag_start is None or self._preview_item is None:
-            if self._tool in POLY_DRAW_TOOLS and self._poly_points:
-                scene_pos = self.mapToScene(event.position().toPoint())
-                self._update_poly_preview(scene_pos)
-                event.accept()
-                return
             if self._tool == Tool.SELECT:
                 self._sync_resize_overlay_with_target()
             super().mouseMoveEvent(event)
@@ -1408,7 +1413,12 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self._poly_preview.setBrush(
                 self._style.fill_color if self._tool == Tool.POLYGON else QColor(0, 0, 0, 0)
             )
+            self._poly_preview.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+            self._poly_preview.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+            # Stay above the video surface and finished annotations while drawing.
+            self._poly_preview.setZValue(50.0)
             self._scene.addItem(self._poly_preview)
+            self.setMouseTracking(True)
             return
         self._poly_points.append(scene_pos)
         if self._poly_preview is not None:
@@ -1465,6 +1475,7 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self._scene.removeItem(self._poly_preview)
         self._poly_preview = None
         self._poly_points = []
+        self.setMouseTracking(kind in POLY_DRAW_TOOLS)
         min_points = 3 if kind == Tool.POLYGON else 2
         if len(points) >= 2 and (points[-1] - points[-2]).manhattanLength() < 0.5:
             points = points[:-1]
