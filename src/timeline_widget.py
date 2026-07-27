@@ -6,16 +6,17 @@ Snappix video editor.
 from __future__ import annotations
 
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QWheelEvent
-from PySide6.QtWidgets import QSizePolicy, QWidget
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QResizeEvent, QWheelEvent
+from PySide6.QtWidgets import QScrollBar, QSizePolicy, QWidget
 
 from src.annotation_items import list_to_color
 from src.video_models import VideoAnnotationModel
 
 LABEL_WIDTH = 160
 RULER_HEIGHT = 28
-ROW_HEIGHT = 30
+ROW_HEIGHT = 26
 ROW_SPACING = 4
+SCROLLBAR_WIDTH = 14
 EDGE_HIT_PX = 6
 MIN_ANNOTATION_DURATION_MS = 100
 MIN_VIEW_DURATION_MS = 500
@@ -48,7 +49,7 @@ class TimelineWidget(QWidget):
 
         super().__init__()
         self.setMinimumHeight(RULER_HEIGHT + ROW_HEIGHT + ROW_SPACING)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
         self._duration_ms = 0
         self._position_ms = 0
@@ -62,6 +63,11 @@ class TimelineWidget(QWidget):
         self._view_start_ms = 0
         self._view_duration_ms = 1
         self._ctrl_nav_anchor_x: int | None = None
+        self._scroll_y = 0
+        self._vscroll = QScrollBar(Qt.Orientation.Vertical, self)
+        self._vscroll.setVisible(False)
+        self._vscroll.valueChanged.connect(self._on_vertical_scroll)
+        self._updating_scroll = False
 
     def set_duration(self, duration_ms: int) -> None:
         """
@@ -76,7 +82,7 @@ class TimelineWidget(QWidget):
 
         self._duration_ms = max(1, duration_ms)
         self.reset_view()
-        self._resize_for_row_count()
+        self._sync_vertical_scroll()
         self.update()
 
     def duration_ms(self) -> int:
@@ -168,18 +174,18 @@ class TimelineWidget(QWidget):
         """
 
         self._annotations = annotations
-        self._resize_for_row_count()
+        self._sync_vertical_scroll()
         self.update()
 
     def refresh(self) -> None:
         """
-        Resizes rows and repaints after annotations changed in place elsewhere.
+        Syncs vertical scroll and repaints after annotations changed in place elsewhere.
 
         Returns:
             None
         """
 
-        self._resize_for_row_count()
+        self._sync_vertical_scroll()
         self.update()
 
     def selected_annotation_id(self) -> str:
@@ -207,37 +213,161 @@ class TimelineWidget(QWidget):
             return self._duration_ms
         return DEFAULT_PAGE_DURATION_MS
 
-    def _resize_for_row_count(self) -> None:
+    def _rows_content_height(self) -> int:
         """
-        Grows the widget's minimum height to fit all annotation rows.
+        Returns the pixel height needed for every annotation row.
+
+        Returns:
+            int: Content height below the ruler.
+        """
+
+        row_count = len(self._annotations)
+        if row_count <= 0:
+            return ROW_HEIGHT + ROW_SPACING
+        return row_count * (ROW_HEIGHT + ROW_SPACING) + ROW_SPACING
+
+    def _rows_viewport_height(self) -> int:
+        """
+        Returns the visible height available for annotation rows.
+
+        Returns:
+            int: Viewport height below the sticky ruler.
+        """
+
+        return max(0, self.height() - RULER_HEIGHT)
+
+    def _max_scroll_y(self) -> int:
+        """
+        Returns the maximum vertical scroll offset in pixels.
+
+        Returns:
+            int: Max scroll value (0 when all rows fit).
+        """
+
+        return max(0, self._rows_content_height() - self._rows_viewport_height())
+
+    def _scrollbar_width(self) -> int:
+        """
+        Returns the reserved width for the vertical scrollbar when needed.
+
+        Returns:
+            int: Scrollbar width in pixels, or 0 when hidden.
+        """
+
+        return SCROLLBAR_WIDTH if self._max_scroll_y() > 0 else 0
+
+    def _sync_vertical_scroll(self) -> None:
+        """
+        Updates scrollbar range/visibility and clamps the scroll offset.
 
         Returns:
             None
         """
 
-        row_count = len(self._annotations)
-        height = RULER_HEIGHT + row_count * (ROW_HEIGHT + ROW_SPACING) + ROW_SPACING
-        self.setMinimumHeight(max(RULER_HEIGHT + ROW_HEIGHT + ROW_SPACING, height))
+        max_scroll = self._max_scroll_y()
+        self._scroll_y = max(0, min(self._scroll_y, max_scroll))
+        needs_bar = max_scroll > 0
+        self._updating_scroll = True
+        try:
+            self._vscroll.setVisible(needs_bar)
+            self._vscroll.setRange(0, max_scroll)
+            self._vscroll.setPageStep(max(1, self._rows_viewport_height()))
+            self._vscroll.setSingleStep(ROW_HEIGHT + ROW_SPACING)
+            self._vscroll.setValue(self._scroll_y)
+        finally:
+            self._updating_scroll = False
+        self._layout_scrollbar()
+
+    def _layout_scrollbar(self) -> None:
+        """
+        Positions the vertical scrollbar beside the row viewport.
+
+        Returns:
+            None
+        """
+
+        if not self._vscroll.isVisible():
+            return
+        self._vscroll.setGeometry(
+            self.width() - SCROLLBAR_WIDTH,
+            RULER_HEIGHT,
+            SCROLLBAR_WIDTH,
+            max(0, self.height() - RULER_HEIGHT),
+        )
+
+    def _on_vertical_scroll(self, value: int) -> None:
+        """
+        Applies scrollbar-driven vertical offset.
+
+        Args:
+            value: New scroll offset in pixels.
+
+        Returns:
+            None
+        """
+
+        if self._updating_scroll:
+            return
+        self._scroll_y = max(0, min(int(value), self._max_scroll_y()))
+        self.update()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:
+        """
+        Keeps vertical scroll bounds and scrollbar layout in sync.
+
+        Args:
+            event: Resize event.
+
+        Returns:
+            None
+        """
+
+        super().resizeEvent(event)
+        self._sync_vertical_scroll()
 
     def _content_width(self) -> int:
         """
         Returns the horizontal extent used for timeline rendering.
 
         Returns:
-            int: Total widget content width in pixels.
+            int: Total widget content width in pixels excluding the scrollbar.
         """
 
-        return max(LABEL_WIDTH + 1, self.width())
+        return max(LABEL_WIDTH + 1, self.width() - self._scrollbar_width())
 
     def _track_area_rect(self) -> QRect:
         """
         Returns the rectangle available for the ms-to-pixel track area.
 
         Returns:
-            QRect: Track area, excluding the left label column.
+            QRect: Track area, excluding the left label column and scrollbar.
         """
 
-        return QRect(LABEL_WIDTH, 0, max(1, self.width() - LABEL_WIDTH), self.height())
+        return QRect(
+            LABEL_WIDTH,
+            0,
+            max(1, self._content_width() - LABEL_WIDTH),
+            self.height(),
+        )
+
+    def _row_rect(self, index: int) -> QRect:
+        """
+        Returns the full-width rectangle for one annotation row.
+
+        Args:
+            index: Row index within the annotation list.
+
+        Returns:
+            QRect: Row rectangle including the label column.
+        """
+
+        top = (
+            RULER_HEIGHT
+            + index * (ROW_HEIGHT + ROW_SPACING)
+            + ROW_SPACING
+            - self._scroll_y
+        )
+        return QRect(0, top, self._content_width(), ROW_HEIGHT)
 
     def _clamp_view(self) -> None:
         """
@@ -275,6 +405,37 @@ class TimelineWidget(QWidget):
             if interval >= raw:
                 return interval
         return magnitude * 10
+
+    def _grid_interval_ms(self) -> int:
+        """
+        Returns the snap/grid interval for the current zoom level.
+
+        Returns:
+            int: Grid spacing in milliseconds.
+        """
+
+        return self._tick_interval_ms(self._view_duration_ms)
+
+    def _snap_ms(self, ms: int) -> int:
+        """
+        Snaps a timeline position onto the nearest grid line or playhead.
+
+        Args:
+            ms: Unsnapped position in milliseconds.
+
+        Returns:
+            int: Snapped position clamped to ``[0, duration]``.
+        """
+
+        interval = max(1, self._grid_interval_ms())
+        grid = int(round(float(ms) / float(interval)) * interval)
+        grid = max(0, min(self._duration_ms, grid))
+        playhead = max(0, min(self._duration_ms, int(self._position_ms)))
+        # Prefer whichever magnet is closer so bars can share a start with the
+        # red playhead even when it sits between grid lines.
+        if abs(ms - playhead) <= abs(ms - grid):
+            return playhead
+        return grid
 
     def _ms_to_x(self, ms: int) -> int:
         """
@@ -434,20 +595,6 @@ class TimelineWidget(QWidget):
             self._ctrl_nav_anchor_x -= CTRL_NAV_THRESHOLD_PX
             delta_x += CTRL_NAV_THRESHOLD_PX
 
-    def _row_rect(self, index: int) -> QRect:
-        """
-        Returns the full-width rectangle for one annotation row.
-
-        Args:
-            index: Row index within the annotation list.
-
-        Returns:
-            QRect: Row rectangle including the label column.
-        """
-
-        top = RULER_HEIGHT + index * (ROW_HEIGHT + ROW_SPACING) + ROW_SPACING
-        return QRect(0, top, self._content_width(), ROW_HEIGHT)
-
     def _bar_rect(self, index: int, annotation: VideoAnnotationModel) -> QRect:
         """
         Returns the draggable bar rectangle for one annotation row.
@@ -479,12 +626,22 @@ class TimelineWidget(QWidget):
         content_width = self._content_width()
         track = self._track_area_rect()
         painter.fillRect(0, 0, content_width, RULER_HEIGHT, QColor(40, 40, 40))
-        painter.setPen(QPen(QColor(150, 150, 150)))
         view_end_ms = self._view_start_ms + self._view_duration_ms
-        tick_interval = self._tick_interval_ms(self._view_duration_ms)
+        tick_interval = self._grid_interval_ms()
         first_tick = (
             ((self._view_start_ms + tick_interval - 1) // tick_interval) * tick_interval
         )
+
+        # Vertical snap grid across the track (ruler + rows).
+        painter.setPen(QPen(QColor(70, 70, 70)))
+        tick_ms = first_tick
+        while tick_ms <= view_end_ms:
+            x = self._ms_to_x(tick_ms)
+            if track.x() <= x <= track.x() + track.width():
+                painter.drawLine(x, 0, x, self.height())
+            tick_ms += tick_interval
+
+        painter.setPen(QPen(QColor(150, 150, 150)))
         tick_ms = first_tick
         while tick_ms <= view_end_ms:
             x = self._ms_to_x(tick_ms)
@@ -493,8 +650,17 @@ class TimelineWidget(QWidget):
                 painter.drawText(x + 2, RULER_HEIGHT - 8, f"{tick_ms / 1000:.1f}s")
             tick_ms += tick_interval
 
+        painter.save()
+        painter.setClipRect(
+            0,
+            RULER_HEIGHT,
+            content_width,
+            max(0, self.height() - RULER_HEIGHT),
+        )
         for index, annotation in enumerate(self._annotations):
             row = self._row_rect(index)
+            if row.bottom() < RULER_HEIGHT or row.top() > self.height():
+                continue
             painter.fillRect(
                 QRect(0, row.y(), LABEL_WIDTH, row.height()), QColor(45, 45, 45)
             )
@@ -516,6 +682,7 @@ class TimelineWidget(QWidget):
             border_color = QColor(255, 255, 255) if annotation.annotation_id == self._selected_id else color
             painter.setPen(QPen(border_color, 2))
             painter.drawRect(bar.adjusted(0, 0, -1, -1))
+        painter.restore()
 
         playhead_x = self._ms_to_x(self._position_ms)
         painter.setPen(QPen(QColor(231, 76, 60), 2))
@@ -535,7 +702,13 @@ class TimelineWidget(QWidget):
 
         for index, annotation in enumerate(self._annotations):
             bar = self._bar_rect(index, annotation)
-            if not bar.contains(pos):
+            if bar.bottom() < RULER_HEIGHT or bar.top() > self.height():
+                continue
+            # Ignore the portion scrolled under the sticky ruler.
+            visible = bar.intersected(
+                QRect(0, RULER_HEIGHT, self._content_width(), self._rows_viewport_height())
+            )
+            if not visible.contains(pos):
                 continue
             if pos.x() <= bar.x() + EDGE_HIT_PX:
                 return index, annotation, DRAG_MODE_START
@@ -615,13 +788,20 @@ class TimelineWidget(QWidget):
             if self._drag_mode == DRAG_MODE_MOVE:
                 delta = current_ms - self._drag_anchor_ms
                 duration = self._drag_orig_end - self._drag_orig_start
-                new_start = max(0, min(self._duration_ms - duration, self._drag_orig_start + delta))
+                raw_start = self._drag_orig_start + delta
+                new_start = self._snap_ms(raw_start)
+                new_start = max(0, min(self._duration_ms - duration, new_start))
                 new_end = new_start + duration
             elif self._drag_mode == DRAG_MODE_START:
-                new_start = max(0, min(current_ms, annotation.end_ms - MIN_ANNOTATION_DURATION_MS))
+                snapped = self._snap_ms(current_ms)
+                new_start = max(0, min(snapped, annotation.end_ms - MIN_ANNOTATION_DURATION_MS))
                 new_end = annotation.end_ms
             else:
-                new_end = min(self._duration_ms, max(current_ms, annotation.start_ms + MIN_ANNOTATION_DURATION_MS))
+                snapped = self._snap_ms(current_ms)
+                new_end = min(
+                    self._duration_ms,
+                    max(snapped, annotation.start_ms + MIN_ANNOTATION_DURATION_MS),
+                )
                 new_start = annotation.start_ms
 
             annotation.start_ms = new_start
@@ -678,7 +858,7 @@ class TimelineWidget(QWidget):
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         """
-        Zooms with Ctrl+wheel on the track area.
+        Scrolls rows vertically, or zooms with Ctrl+wheel on the track area.
 
         Args:
             event: Wheel event.
@@ -688,21 +868,39 @@ class TimelineWidget(QWidget):
         """
 
         pos = event.position().toPoint()
-        if pos.x() < LABEL_WIDTH:
-            return
-
-        track = self._track_area_rect()
-        if track.width() <= 0:
-            return
-
-        if not (event.modifiers() & Qt.KeyboardModifier.ControlModifier):
-            return
-
         delta = event.angleDelta().y()
         if delta == 0:
             delta = event.angleDelta().x()
         if delta == 0:
             return
-        factor = ZOOM_WHEEL_FACTOR if delta < 0 else 1.0 / ZOOM_WHEEL_FACTOR
-        self._zoom_at_x(pos.x(), factor)
+
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if pos.x() < LABEL_WIDTH:
+                return
+            track = self._track_area_rect()
+            if track.width() <= 0:
+                return
+            factor = ZOOM_WHEEL_FACTOR if delta < 0 else 1.0 / ZOOM_WHEEL_FACTOR
+            self._zoom_at_x(pos.x(), factor)
+            event.accept()
+            return
+
+        if self._max_scroll_y() <= 0:
+            return
+        # Positive wheel delta scrolls up (toward earlier rows).
+        step = ROW_HEIGHT + ROW_SPACING
+        steps = max(1, abs(delta) // 120)
+        self._scroll_y = max(
+            0,
+            min(
+                self._max_scroll_y(),
+                self._scroll_y + (-steps * step if delta > 0 else steps * step),
+            ),
+        )
+        self._updating_scroll = True
+        try:
+            self._vscroll.setValue(self._scroll_y)
+        finally:
+            self._updating_scroll = False
+        self.update()
         event.accept()
