@@ -4525,6 +4525,22 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self._sync_resize_overlay_with_target(target)
             return
 
+        from src.crop_item import FRAME_MODE_LINE
+
+        if self._resize_overlay_item.frame_mode() == FRAME_MODE_LINE:
+            line = self._resize_overlay_item.scene_line()
+            if line.length() < 2.0:
+                return
+            target.setPos(0.0, 0.0)
+            target.setLine(line.x1(), line.y1(), line.x2(), line.y2())
+            new_rect = QRectF(line.p1(), line.p2()).normalized()
+            _, _, guides, labels = self._compute_alignment_shift(target, new_rect)
+            self._alignment_guides = guides
+            self._alignment_labels = labels
+            self.viewport().update()
+            self._emit_content_changed("Resize selection")
+            return
+
         old_rect = self._target_geometry_rect(target)
         new_rect = self._resize_overlay_item.scene_rect().normalized()
         if new_rect.width() < 2 or new_rect.height() < 2:

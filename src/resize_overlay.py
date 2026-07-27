@@ -4,11 +4,16 @@ Shared interactive resize-handle overlay management for the image and video canv
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF
-from PySide6.QtWidgets import QGraphicsItem
+from PySide6.QtCore import QPointF, QRectF
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsLineItem
 
 from src.annotation_items import ITEM_ROLE_TYPE
-from src.crop_item import CropSelectionItem
+from src.crop_item import (
+    FRAME_MODE_ELLIPSE,
+    FRAME_MODE_LINE,
+    FRAME_MODE_RECT,
+    CropSelectionItem,
+)
 from src.shape_items import SHAPE_LINE_TYPES, SHAPE_RECT_TYPES
 
 
@@ -33,6 +38,45 @@ def rect_or_line_geometry_rect(item: QGraphicsItem) -> QRectF | None:
         p2 = item.mapToScene(line.p2())
         return QRectF(p1, p2).normalized()
     return None
+
+
+def overlay_frame_mode_for_item(item: QGraphicsItem) -> str:
+    """
+    Resolves the selection-overlay frame mode for one annotation.
+
+    Args:
+        item: Selected annotation item.
+
+    Returns:
+        str: ``ellipse``, ``line``, or ``rect``.
+    """
+
+    annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
+    if annotation_type == "ellipse":
+        return FRAME_MODE_ELLIPSE
+    if annotation_type in SHAPE_LINE_TYPES:
+        return FRAME_MODE_LINE
+    return FRAME_MODE_RECT
+
+
+def line_scene_endpoints(item: QGraphicsItem) -> tuple[QPointF, QPointF] | None:
+    """
+    Returns scene-space endpoints for a line-family annotation.
+
+    Args:
+        item: Annotation item.
+
+    Returns:
+        tuple[QPointF, QPointF] | None: Endpoints, or None when not a line item.
+    """
+
+    annotation_type = str(item.data(ITEM_ROLE_TYPE) or "")
+    if annotation_type not in SHAPE_LINE_TYPES:
+        return None
+    if not isinstance(item, QGraphicsLineItem):
+        return None
+    line = item.line()
+    return item.mapToScene(line.p1()), item.mapToScene(line.p2())
 
 
 class ResizeOverlayMixin:
@@ -192,29 +236,47 @@ class ResizeOverlayMixin:
             return
 
         target_rect = self._item_scene_rect(target)
+        frame_mode = overlay_frame_mode_for_item(target)
         interior_interactive = self._resize_overlay_interior_interactive(target)
+        if frame_mode == FRAME_MODE_LINE:
+            interior_interactive = False
         if self._resize_overlay_item is None:
             overlay = CropSelectionItem(target_rect)
             overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
             overlay.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsFocusable, False)
             overlay.setFlag(
                 QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
-                self._resize_overlay_is_movable(target),
+                self._resize_overlay_is_movable(target) and frame_mode != FRAME_MODE_LINE,
             )
             overlay.set_always_show_handles(True)
             overlay.set_aspect_ratio_lock_enabled(True)
+            overlay.set_frame_mode(frame_mode)
             overlay.set_interior_interactive(interior_interactive)
+            if frame_mode == FRAME_MODE_LINE:
+                endpoints = line_scene_endpoints(target)
+                if endpoints is not None:
+                    overlay.set_line_endpoints(endpoints[0], endpoints[1])
             overlay.on_geometry_changed = self._apply_resize_overlay_to_target
             overlay.setZValue(1400)
             self._scene.addItem(overlay)
             self._resize_overlay_item = overlay
         else:
             self._updating_resize_overlay = True
+            self._resize_overlay_item.set_frame_mode(frame_mode)
             self._resize_overlay_item.set_interior_interactive(interior_interactive)
-            self._resize_overlay_item.setPos(target_rect.topLeft())
-            self._resize_overlay_item.setRect(
-                QRectF(0.0, 0.0, target_rect.width(), target_rect.height())
+            self._resize_overlay_item.setFlag(
+                QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                self._resize_overlay_is_movable(target) and frame_mode != FRAME_MODE_LINE,
             )
+            if frame_mode == FRAME_MODE_LINE:
+                endpoints = line_scene_endpoints(target)
+                if endpoints is not None:
+                    self._resize_overlay_item.set_line_endpoints(endpoints[0], endpoints[1])
+            else:
+                self._resize_overlay_item.setPos(target_rect.topLeft())
+                self._resize_overlay_item.setRect(
+                    QRectF(0.0, 0.0, target_rect.width(), target_rect.height())
+                )
             self._updating_resize_overlay = False
         self._apply_resize_handle_style(self._resize_overlay_item)
         self._resize_overlay_target = target

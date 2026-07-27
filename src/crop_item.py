@@ -4,21 +4,33 @@ Resizable crop selection item.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QCursor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem
+
+FRAME_MODE_RECT = "rect"
+FRAME_MODE_ELLIPSE = "ellipse"
+FRAME_MODE_LINE = "line"
+FRAME_MODES = frozenset({FRAME_MODE_RECT, FRAME_MODE_ELLIPSE, FRAME_MODE_LINE})
 
 
 class CropSelectionItem(QGraphicsRectItem):
     """
-    Provides a draggable and resizable crop rectangle with handles.
+    Provides a draggable and resizable crop/selection overlay with handles.
+
+    Frame modes:
+    - ``rect``: dashed rectangle (default crop / rect annotations)
+    - ``ellipse``: dashed ellipse inscribed in the AABB
+    - ``line``: dashed line with endpoint handles
     """
 
     HANDLE_SIZE = 16.0
     MIN_SIZE = 12.0
     BORDER_HIT_TOLERANCE = 8.0
+    LINE_HIT_TOLERANCE = 10.0
     HANDLE_NAMES = (
         "top_left",
         "top",
@@ -29,6 +41,7 @@ class CropSelectionItem(QGraphicsRectItem):
         "bottom_left",
         "left",
     )
+    LINE_HANDLE_NAMES = ("p1", "p2")
 
     def __init__(self, rect: QRectF) -> None:
         """
@@ -52,11 +65,95 @@ class CropSelectionItem(QGraphicsRectItem):
         self._interior_interactive = True
         self._handle_size = self.HANDLE_SIZE
         self._handle_position = "inside"
+        self._frame_mode = FRAME_MODE_RECT
+        self._line_p1 = QPointF(0.0, 0.0)
+        self._line_p2 = QPointF(max(rect.width(), 1.0), max(rect.height(), 1.0))
         self.on_geometry_changed: Callable[[], None] | None = None
 
         border_pen = QPen(QColor(52, 152, 219, 230), 2.0, Qt.PenStyle.DashLine)
         self.setPen(border_pen)
         self.setBrush(QColor(52, 152, 219, 48))
+
+    def frame_mode(self) -> str:
+        """
+        Returns the active overlay frame mode.
+
+        Returns:
+            str: One of ``rect``, ``ellipse``, or ``line``.
+        """
+
+        return self._frame_mode
+
+    def set_frame_mode(self, mode: str) -> None:
+        """
+        Sets whether the overlay paints as a rect, ellipse, or line.
+
+        Args:
+            mode: Frame mode identifier.
+
+        Returns:
+            None
+        """
+
+        resolved = str(mode).strip().lower()
+        if resolved not in FRAME_MODES:
+            resolved = FRAME_MODE_RECT
+        if resolved == self._frame_mode:
+            return
+        self.prepareGeometryChange()
+        self._frame_mode = resolved
+        if resolved == FRAME_MODE_LINE:
+            self.setBrush(Qt.BrushStyle.NoBrush)
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        elif self._interior_interactive:
+            self.setBrush(QColor(52, 152, 219, 48))
+        else:
+            self.setBrush(QColor(52, 152, 219, 24))
+        self.update()
+
+    def set_line_endpoints(self, p1: QPointF, p2: QPointF) -> None:
+        """
+        Sets line-mode endpoints in scene coordinates and syncs the AABB.
+
+        Args:
+            p1: First endpoint in scene coordinates.
+            p2: Second endpoint in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        self.prepareGeometryChange()
+        self.setPos(0.0, 0.0)
+        self._line_p1 = QPointF(p1)
+        self._line_p2 = QPointF(p2)
+        self._sync_rect_from_line_endpoints()
+        self.update()
+
+    def scene_line(self) -> QLineF:
+        """
+        Returns the current line-mode geometry in scene coordinates.
+
+        Returns:
+            QLineF: Scene-space line (meaningful in line mode).
+        """
+
+        return QLineF(self.mapToScene(self._line_p1), self.mapToScene(self._line_p2))
+
+    def _sync_rect_from_line_endpoints(self) -> None:
+        """
+        Updates the local AABB so Qt bounds cover the line and handles.
+
+        Returns:
+            None
+        """
+
+        pad = max(self._handle_size, self.LINE_HIT_TOLERANCE)
+        left = min(self._line_p1.x(), self._line_p2.x()) - pad
+        top = min(self._line_p1.y(), self._line_p2.y()) - pad
+        right = max(self._line_p1.x(), self._line_p2.x()) + pad
+        bottom = max(self._line_p1.y(), self._line_p2.y()) + pad
+        self.setRect(QRectF(left, top, max(2.0, right - left), max(2.0, bottom - top)))
 
     def boundingRect(self) -> QRectF:
         """
@@ -86,6 +183,8 @@ class CropSelectionItem(QGraphicsRectItem):
         self._handle_size = float(normalize_resize_handle_size(size))
         self._handle_position = normalize_resize_handle_position(position)
         self.prepareGeometryChange()
+        if self._frame_mode == FRAME_MODE_LINE:
+            self._sync_rect_from_line_endpoints()
         self.update()
 
     def _handle_margin(self) -> float:
@@ -102,6 +201,18 @@ class CropSelectionItem(QGraphicsRectItem):
             return self._handle_size / 2.0
         return 0.0
 
+    def _active_handle_names(self) -> tuple[str, ...]:
+        """
+        Returns handle identifiers for the current frame mode.
+
+        Returns:
+            tuple[str, ...]: Handle names.
+        """
+
+        if self._frame_mode == FRAME_MODE_LINE:
+            return self.LINE_HANDLE_NAMES
+        return self.HANDLE_NAMES
+
     def _handle_anchor(self, handle_name: str) -> tuple[float, float]:
         """
         Returns the border anchor point for one handle in local coordinates.
@@ -113,9 +224,14 @@ class CropSelectionItem(QGraphicsRectItem):
             tuple[float, float]: Anchor x/y on the selection border.
         """
 
+        if handle_name == "p1":
+            return self._line_p1.x(), self._line_p1.y()
+        if handle_name == "p2":
+            return self._line_p2.x(), self._line_p2.y()
+
         rect = self.rect()
-        x_mid = rect.width() / 2.0
-        y_mid = rect.height() / 2.0
+        x_mid = rect.left() + rect.width() / 2.0
+        y_mid = rect.top() + rect.height() / 2.0
         anchors = {
             "top_left": (rect.left(), rect.top()),
             "top": (x_mid, rect.top()),
@@ -138,6 +254,11 @@ class CropSelectionItem(QGraphicsRectItem):
         Returns:
             tuple[float, float]: Handle rectangle origin in local coordinates.
         """
+
+        if handle_name in self.LINE_HANDLE_NAMES:
+            anchor_x, anchor_y = self._handle_anchor(handle_name)
+            size = self._handle_size
+            return anchor_x - size / 2.0, anchor_y - size / 2.0
 
         anchor_x, anchor_y = self._handle_anchor(handle_name)
         size = self._handle_size
@@ -214,7 +335,19 @@ class CropSelectionItem(QGraphicsRectItem):
             None
         """
 
-        super().paint(painter, option, widget)
+        painter.save()
+        painter.setPen(self.pen())
+        if self._frame_mode == FRAME_MODE_LINE:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawLine(self._line_p1, self._line_p2)
+        elif self._frame_mode == FRAME_MODE_ELLIPSE:
+            painter.setBrush(self.brush())
+            painter.drawEllipse(self.rect())
+        else:
+            painter.setBrush(self.brush())
+            painter.drawRect(self.rect())
+        painter.restore()
+
         if not self.isSelected() and not self._always_show_handles:
             return
         painter.save()
@@ -253,8 +386,10 @@ class CropSelectionItem(QGraphicsRectItem):
         """
 
         self._interior_interactive = bool(enabled)
-        # Keep a light visual fill, but allow clicks to pass through when needed.
-        if self._interior_interactive:
+        if self._frame_mode == FRAME_MODE_LINE:
+            self.setBrush(Qt.BrushStyle.NoBrush)
+            self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        elif self._interior_interactive:
             self.setBrush(QColor(52, 152, 219, 48))
             self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
         else:
@@ -272,20 +407,48 @@ class CropSelectionItem(QGraphicsRectItem):
             clicks should pass through to annotations below.
         """
 
-        if self._interior_interactive:
-            return super().shape()
-
         path = QPainterPath()
         for handle in self._handle_rects().values():
             path.addRect(handle)
+
+        if self._frame_mode == FRAME_MODE_LINE:
+            # Endpoints only: keep the painted shaft non-interactive so the
+            # underlying line/arrow remains selectable underneath the overlay.
+            return path
+
         rect = self.rect()
+        if self._frame_mode == FRAME_MODE_ELLIPSE:
+            if self._interior_interactive:
+                path.addEllipse(rect)
+                return path
+            outer = QPainterPath()
+            outer.addEllipse(
+                rect.adjusted(
+                    -self.BORDER_HIT_TOLERANCE,
+                    -self.BORDER_HIT_TOLERANCE,
+                    self.BORDER_HIT_TOLERANCE,
+                    self.BORDER_HIT_TOLERANCE,
+                )
+            )
+            shrink = self.BORDER_HIT_TOLERANCE
+            inner_rect = rect.adjusted(shrink, shrink, -shrink, -shrink)
+            if inner_rect.width() > 2.0 and inner_rect.height() > 2.0:
+                inner = QPainterPath()
+                inner.addEllipse(inner_rect)
+                # united() avoids OddEvenFill cancellation with handle rects.
+                return path.united(outer.subtracted(inner))
+            return path.united(outer)
+
+        if self._interior_interactive:
+            path.addRect(rect)
+            return path
+
         tolerance = self.BORDER_HIT_TOLERANCE
         border = QPainterPath()
         border.addRect(rect.adjusted(-tolerance, -tolerance, tolerance, tolerance))
         inner = QPainterPath()
         inner.addRect(rect.adjusted(tolerance, tolerance, -tolerance, -tolerance))
-        path.addPath(border.subtracted(inner))
-        return path
+        return path.united(border.subtracted(inner))
 
     def set_aspect_ratio_lock_enabled(self, enabled: bool) -> None:
         """
@@ -342,7 +505,7 @@ class CropSelectionItem(QGraphicsRectItem):
 
         if event.button() == Qt.MouseButton.LeftButton:
             handle_name = self._handle_at(event.pos())
-            if handle_name is None:
+            if handle_name is None and self._frame_mode != FRAME_MODE_LINE:
                 handle_name = self._border_handle_at(event.pos())
             if handle_name is not None:
                 self._active_handle = handle_name
@@ -369,6 +532,10 @@ class CropSelectionItem(QGraphicsRectItem):
         """
 
         if self._resizing and self._active_handle is not None:
+            if self._frame_mode == FRAME_MODE_LINE:
+                self._resize_line_endpoint(self._active_handle, event.scenePos())
+                event.accept()
+                return
             lock_aspect_ratio = (
                 self._aspect_ratio_lock_enabled
                 and bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
@@ -412,6 +579,10 @@ class CropSelectionItem(QGraphicsRectItem):
             QRectF: Item scene rectangle.
         """
 
+        if self._frame_mode == FRAME_MODE_LINE:
+            line = self.scene_line()
+            return QRectF(line.p1(), line.p2()).normalized()
+
         local = self.rect()
         return QRectF(
             self.pos().x() + local.x(),
@@ -431,6 +602,9 @@ class CropSelectionItem(QGraphicsRectItem):
             None
         """
 
+        if handle_name in self.LINE_HANDLE_NAMES:
+            self.setCursor(QCursor(Qt.CursorShape.CrossCursor))
+            return
         cursor_map = {
             "top_left": Qt.CursorShape.SizeFDiagCursor,
             "bottom_right": Qt.CursorShape.SizeFDiagCursor,
@@ -451,10 +625,9 @@ class CropSelectionItem(QGraphicsRectItem):
             dict[str, QRectF]: Mapping of handle id to rect.
         """
 
-        rect = self.rect()
         handle_size = self._handle_size
         handle_rects: dict[str, QRectF] = {}
-        for handle_name in self.HANDLE_NAMES:
+        for handle_name in self._active_handle_names():
             origin_x, origin_y = self._handle_origin(handle_name)
             handle_rects[handle_name] = QRectF(
                 origin_x,
@@ -475,7 +648,7 @@ class CropSelectionItem(QGraphicsRectItem):
             str | None: Handle key or None.
         """
 
-        for handle_name in self.HANDLE_NAMES:
+        for handle_name in self._active_handle_names():
             rect = self._handle_rects()[handle_name]
             if rect.contains(local_pos):
                 return handle_name
@@ -492,10 +665,24 @@ class CropSelectionItem(QGraphicsRectItem):
             str | None: Inferred handle key or None.
         """
 
+        if self._frame_mode == FRAME_MODE_LINE:
+            return None
+
         rect = self.rect()
         tolerance = self.BORDER_HIT_TOLERANCE
         if rect.width() <= 0 or rect.height() <= 0:
             return None
+
+        if self._frame_mode == FRAME_MODE_ELLIPSE:
+            cx = rect.center().x()
+            cy = rect.center().y()
+            rx = max(rect.width() / 2.0, 0.001)
+            ry = max(rect.height() / 2.0, 0.001)
+            dx = (local_pos.x() - cx) / rx
+            dy = (local_pos.y() - cy) / ry
+            radius = math.hypot(dx, dy)
+            if abs(radius - 1.0) > (tolerance / min(rx, ry)):
+                return None
 
         near_left = abs(local_pos.x() - rect.left()) <= tolerance
         near_right = abs(local_pos.x() - rect.right()) <= tolerance
@@ -519,6 +706,34 @@ class CropSelectionItem(QGraphicsRectItem):
         if near_right:
             return "right"
         return None
+
+    def _resize_line_endpoint(self, handle_name: str, scene_pos: QPointF) -> None:
+        """
+        Moves one line endpoint while keeping the other fixed.
+
+        Args:
+            handle_name: ``p1`` or ``p2``.
+            scene_pos: Cursor position in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        local = self.mapFromScene(scene_pos)
+        self.prepareGeometryChange()
+        if handle_name == "p1":
+            if (local - self._line_p2).manhattanLength() < self.MIN_SIZE:
+                return
+            self._line_p1 = QPointF(local)
+        elif handle_name == "p2":
+            if (local - self._line_p1).manhattanLength() < self.MIN_SIZE:
+                return
+            self._line_p2 = QPointF(local)
+        else:
+            return
+        self._sync_rect_from_line_endpoints()
+        self.update()
+        self._notify_geometry_changed()
 
     def _resize_from_handle(
         self,

@@ -126,9 +126,12 @@ class TestArrowSelection(unittest.TestCase):
 
         arrow.setSelected(True)
         canvas._on_selection_changed()  # pylint: disable=protected-access
+        from src.crop_item import FRAME_MODE_LINE
+
         overlay = canvas._resize_overlay_item  # pylint: disable=protected-access
         self.assertIsNotNone(overlay)
         assert overlay is not None
+        self.assertEqual(overlay.frame_mode(), FRAME_MODE_LINE)
         self.assertFalse(overlay._interior_interactive)  # pylint: disable=protected-access
 
         mid = QPointF(

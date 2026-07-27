@@ -120,3 +120,45 @@ class TestCropSelectionItem(unittest.TestCase):
         self.assertAlmostEqual(inside_top.y(), 0.0)
         self.assertAlmostEqual(inside_top.width(), 12.0)
 
+    def test_ellipse_frame_mode_shape_has_open_center(self) -> None:
+        """
+        Ensures ellipse overlay with non-interactive interior passes center hits.
+        """
+
+        from src.crop_item import FRAME_MODE_ELLIPSE
+
+        item = CropSelectionItem(QRectF(0.0, 0.0, 100.0, 80.0))
+        item.set_frame_mode(FRAME_MODE_ELLIPSE)
+        item.set_interior_interactive(False)
+        shape = item.shape()
+        self.assertFalse(shape.contains(QPointF(50.0, 40.0)))
+        # Top rim / top handle area remains interactive.
+        self.assertTrue(shape.contains(QPointF(50.0, 4.0)))
+
+    def test_line_frame_mode_endpoint_resize(self) -> None:
+        """
+        Ensures line overlay exposes endpoint handles and updates scene_line.
+        """
+
+        from src.crop_item import FRAME_MODE_LINE
+
+        item = CropSelectionItem(QRectF(0.0, 0.0, 100.0, 20.0))
+        item.set_frame_mode(FRAME_MODE_LINE)
+        item.set_line_endpoints(QPointF(10.0, 10.0), QPointF(110.0, 10.0))
+        handles = item._handle_rects()  # pylint: disable=protected-access
+        self.assertIn("p1", handles)
+        self.assertIn("p2", handles)
+        self.assertNotIn("top_left", handles)
+
+        item._resize_line_endpoint("p2", QPointF(150.0, 40.0))  # pylint: disable=protected-access
+        line = item.scene_line()
+        self.assertAlmostEqual(line.x1(), 10.0, places=3)
+        self.assertAlmostEqual(line.y1(), 10.0, places=3)
+        self.assertAlmostEqual(line.x2(), 150.0, places=3)
+        self.assertAlmostEqual(line.y2(), 40.0, places=3)
+
+        shape = item.shape()
+        self.assertFalse(shape.contains(QPointF(80.0, 10.0)))
+        self.assertTrue(shape.contains(QPointF(10.0, 10.0)))
+
+

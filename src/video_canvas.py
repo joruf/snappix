@@ -1620,6 +1620,18 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self._clear_resize_overlay()
             return
 
+        from src.crop_item import FRAME_MODE_LINE
+
+        if self._resize_overlay_item.frame_mode() == FRAME_MODE_LINE:
+            line = self._resize_overlay_item.scene_line()
+            if line.length() < 2.0:
+                return
+            target.setPos(0.0, 0.0)
+            target.setLine(line.x1(), line.y1(), line.x2(), line.y2())
+            if self._sync_visible_items_to_models():
+                self.content_changed.emit()
+            return
+
         old_rect = self._target_geometry_rect(target)
         new_rect = self._resize_overlay_item.scene_rect().normalized()
         if new_rect.width() < 2 or new_rect.height() < 2:

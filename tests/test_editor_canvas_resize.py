@@ -251,10 +251,12 @@ class TestEditorCanvasResize(unittest.TestCase):
         resized = canvas._item_scene_rect(item)  # pylint: disable=protected-access
         self.assertAlmostEqual(resized.width() / resized.height(), 2.0, places=4)
 
-    def test_line_overlay_resize_updates_line_extent(self) -> None:
+    def test_line_overlay_uses_line_frame_mode(self) -> None:
         """
-        Ensures line resize follows overlay extent changes.
+        Ensures selecting a line uses the line overlay with matching endpoints.
         """
+
+        from src.crop_item import FRAME_MODE_LINE
 
         annotation = AnnotationModel(
             annotation_type="line",
@@ -273,12 +275,104 @@ class TestEditorCanvasResize(unittest.TestCase):
         self.assertIsNotNone(overlay)
         assert overlay is not None
 
-        before_rect = item.sceneBoundingRect()
-        overlay.setRect(0.0, 0.0, 160.0, 40.0)
-        canvas._apply_resize_overlay_to_target()  # pylint: disable=protected-access
-        after_rect = item.sceneBoundingRect()
+        self.assertEqual(overlay.frame_mode(), FRAME_MODE_LINE)
+        scene_line = overlay.scene_line()
+        item_line = item.line()
+        self.assertAlmostEqual(scene_line.x1(), item.mapToScene(item_line.p1()).x(), places=4)
+        self.assertAlmostEqual(scene_line.y1(), item.mapToScene(item_line.p1()).y(), places=4)
+        self.assertAlmostEqual(scene_line.x2(), item.mapToScene(item_line.p2()).x(), places=4)
+        self.assertAlmostEqual(scene_line.y2(), item.mapToScene(item_line.p2()).y(), places=4)
 
-        self.assertGreater(after_rect.width(), before_rect.width())
+    def test_line_endpoint_overlay_drag_updates_annotation(self) -> None:
+        """
+        Ensures dragging a line overlay endpoint updates the annotation line.
+        """
+
+        from src.crop_item import FRAME_MODE_LINE
+
+        annotation = AnnotationModel(
+            annotation_type="line",
+            x=20.0,
+            y=40.0,
+            width=100.0,
+            height=0.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[0, 0, 0, 0],
+            stroke_width=2.0,
+        )
+        canvas, item = self._canvas_with_item(annotation)
+        item.setSelected(True)
+        canvas._on_selection_changed()  # pylint: disable=protected-access
+        overlay = canvas._resize_overlay_item  # pylint: disable=protected-access
+        self.assertIsNotNone(overlay)
+        assert overlay is not None
+        self.assertEqual(overlay.frame_mode(), FRAME_MODE_LINE)
+
+        overlay._resize_line_endpoint("p2", QPointF(200.0, 60.0))  # pylint: disable=protected-access
+        canvas._apply_resize_overlay_to_target()  # pylint: disable=protected-access
+
+        after = item.line()
+        self.assertAlmostEqual(after.x2(), 200.0, places=3)
+        self.assertAlmostEqual(after.y2(), 60.0, places=3)
+        self.assertAlmostEqual(after.x1(), 20.0, places=3)
+        self.assertAlmostEqual(after.y1(), 40.0, places=3)
+
+    def test_ellipse_overlay_uses_ellipse_frame_mode(self) -> None:
+        """
+        Ensures selecting an ellipse uses the elliptical overlay frame.
+        """
+
+        from src.crop_item import FRAME_MODE_ELLIPSE
+
+        annotation = AnnotationModel(
+            annotation_type="ellipse",
+            x=40.0,
+            y=30.0,
+            width=80.0,
+            height=50.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[255, 0, 0, 80],
+            stroke_width=2.0,
+        )
+        canvas, item = self._canvas_with_item(annotation)
+        item.setSelected(True)
+        canvas._on_selection_changed()  # pylint: disable=protected-access
+        overlay = canvas._resize_overlay_item  # pylint: disable=protected-access
+        self.assertIsNotNone(overlay)
+        assert overlay is not None
+
+        self.assertEqual(overlay.frame_mode(), FRAME_MODE_ELLIPSE)
+        overlay_rect = overlay.scene_rect()
+        item_rect = item.mapRectToScene(item.rect()).normalized()
+        self.assertAlmostEqual(overlay_rect.x(), item_rect.x(), places=3)
+        self.assertAlmostEqual(overlay_rect.y(), item_rect.y(), places=3)
+        self.assertAlmostEqual(overlay_rect.width(), item_rect.width(), places=3)
+        self.assertAlmostEqual(overlay_rect.height(), item_rect.height(), places=3)
+
+    def test_rect_overlay_keeps_rect_frame_mode(self) -> None:
+        """
+        Ensures selecting a rectangle still uses the rectangular overlay.
+        """
+
+        from src.crop_item import FRAME_MODE_RECT
+
+        annotation = AnnotationModel(
+            annotation_type="rect",
+            x=20.0,
+            y=20.0,
+            width=40.0,
+            height=30.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[255, 0, 0, 80],
+            stroke_width=2.0,
+        )
+        canvas, item = self._canvas_with_item(annotation)
+        item.setSelected(True)
+        canvas._on_selection_changed()  # pylint: disable=protected-access
+        overlay = canvas._resize_overlay_item  # pylint: disable=protected-access
+        self.assertIsNotNone(overlay)
+        assert overlay is not None
+        self.assertEqual(overlay.frame_mode(), FRAME_MODE_RECT)
 
     def test_selection_clear_removes_resize_overlay(self) -> None:
         """
