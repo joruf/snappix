@@ -321,6 +321,12 @@ def build_editor_accent_stylesheet(theme_name: str | None = None) -> str:
         f"#editorHost QToolButton:checked {{"
         f" background: {accent}; border: 1px solid {accent}; color: {checked_text};"
         f" }}"
+        # Locked tools keep the lock badge; skip the solid accent fill so the
+        # tool glyph stays readable.
+        f'#editorHost QToolButton[toolLocked="true"]:checked {{'
+        f" background: {colors.button_bg}; border: 1px solid {accent};"
+        f" color: {colors.text};"
+        f" }}"
         f"#editorHost QPushButton#primaryButton {{"
         f" background: {accent}; color: {checked_text}; border: none;"
         f" }}"
@@ -404,6 +410,10 @@ def build_application_stylesheet(theme_name: str | None = None) -> str:
         f"QToolButton:checked {{"
         f" background: {colors.accent}; border: 1px solid {colors.accent};"
         f" color: {colors.button_checked_text};"
+        f" }}"
+        f'QToolButton[toolLocked="true"]:checked {{'
+        f" background: {colors.button_bg}; border: 1px solid {colors.accent};"
+        f" color: {colors.text};"
         f" }}"
         f"QPushButton:hover, QToolButton:hover {{ background: {colors.button_hover}; }}"
         f"QPushButton#primaryButton {{"

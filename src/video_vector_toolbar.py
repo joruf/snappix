@@ -893,6 +893,9 @@ class VideoVectorToolbar:
         """
         Refreshes tool button icons/tooltips to reflect the current lock state.
 
+        Locked tools skip the solid checked accent fill so the tool glyph stays
+        readable; the lock badge on the icon indicates persistence.
+
         Returns:
             None
         """
@@ -901,6 +904,12 @@ class VideoVectorToolbar:
             button = self._tool_buttons[tool_key]
             locked = tool_key == self._locked_tool
             button.setIcon(build_tool_icon(tool_key, locked=locked))
+            button.setProperty("toolLocked", locked)
+            style = button.style()
+            if style is not None:
+                style.unpolish(button)
+                style.polish(button)
+            button.update()
             base_tip = format_tool_tooltip(tool_key)
             if locked:
                 button.setToolTip(f"{base_tip} Currently locked – double-click to unlock.")

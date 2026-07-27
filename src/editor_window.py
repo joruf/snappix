@@ -3244,6 +3244,9 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         """
         Updates tool button icons to show a lock badge when locked.
 
+        Locked tools keep a normal button background (no solid accent fill) so
+        the tool glyph stays recognizable; the lock badge is the lock cue.
+
         Returns:
             None
         """
@@ -3252,6 +3255,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             button = self._tool_buttons[tool_key]
             locked = tool_key == self._locked_tool
             button.setIcon(self._build_tool_icon(tool_key, locked=locked))
+            button.setProperty("toolLocked", locked)
+            style = button.style()
+            if style is not None:
+                style.unpolish(button)
+                style.polish(button)
+            button.update()
             base_tip = self._tool_tooltip_text(tool_key)
             if locked:
                 button.setToolTip(f"{base_tip} Currently locked – double-click to unlock.")

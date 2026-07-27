@@ -62,6 +62,7 @@ class TestThemeHelpers(unittest.TestCase):
         self.assertIn(get_theme_colors(THEME_LIGHT).accent, light_stylesheet)
         self.assertIn("QComboBox", dark_stylesheet)
         self.assertIn("QTextEdit", light_stylesheet)
+        self.assertIn('QToolButton[toolLocked="true"]:checked', dark_stylesheet)
 
     def test_build_editor_accent_stylesheet_uses_blue_editor_colors(self) -> None:
         """
@@ -73,6 +74,7 @@ class TestThemeHelpers(unittest.TestCase):
         self.assertEqual(accent, "#2f7dd1")
         self.assertIn("#editorHost", editor_stylesheet)
         self.assertIn(accent, editor_stylesheet)
+        self.assertIn('#editorHost QToolButton[toolLocked="true"]:checked', editor_stylesheet)
 
     def test_slate_and_sepia_themes_are_supported(self) -> None:
         """
