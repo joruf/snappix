@@ -26,9 +26,19 @@ rsync -a \
   --exclude "__pycache__" \
   "$PROJECT_ROOT/" "$STAGING_DIR/opt/$PKG_NAME/"
 
+# /opt/snappix ends up root-owned after install, so run.py's own uv/venv
+# bootstrap (which writes into the project root) would fail for a regular
+# user on first launch. Vendor the pinned requirements at package-build time
+# instead, so PySide6 et al. are already importable and that bootstrap path
+# is never hit (same fix as packaging/build_appimage.sh).
+echo "[snappix] Vendoring Python dependencies..."
+VENDOR_DIR="$STAGING_DIR/opt/$PKG_NAME/vendor"
+python3 -m pip install --no-cache-dir --target "$VENDOR_DIR" -r "$PROJECT_ROOT/requirements.txt"
+
 cat > "$STAGING_DIR/usr/bin/snappix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+export PYTHONPATH="/opt/snappix/vendor${PYTHONPATH:+:$PYTHONPATH}"
 exec python3 /opt/snappix/run.py "$@"
 EOF
 chmod 0755 "$STAGING_DIR/usr/bin/snappix"
@@ -55,7 +65,7 @@ Section: graphics
 Priority: optional
 Architecture: $ARCH
 Maintainer: Joachim Ruf <info@loresoft.de>
-Depends: python3, python3-venv, python3-pip, xdotool, x11-utils
+Depends: python3, xdotool, x11-utils
 Description: Snappix screenshot editor
  Linux screenshot and annotation tool.
 EOF

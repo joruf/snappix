@@ -4,12 +4,13 @@ Video editor window/tab chrome for Snappix.
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import QEvent, Qt, QSize, Signal
-from PySide6.QtGui import QAction, QColor, QKeySequence
+from PySide6.QtCore import QEvent, QMimeData, Qt, QSize, Signal
+from PySide6.QtGui import QAction, QColor, QGuiApplication, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -44,6 +45,8 @@ from src.video_storage import (
     save_video_project,
 )
 from src.video_vector_toolbar import VideoVectorToolbar
+
+_VIDEO_ANNOTATIONS_CLIPBOARD_MIME = "application/x-snappix-video-annotations"
 
 
 class VideoEditorWindow(QMainWindow):
@@ -205,6 +208,24 @@ class VideoEditorWindow(QMainWindow):
 
         edit_menu.addSeparator()
 
+        copy_action = QAction("Copy", self)
+        copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        copy_action.setToolTip(
+            "Copies the selected drawn objects for pasting into this or another tab."
+        )
+        copy_action.triggered.connect(self.copy_selected_annotations_to_clipboard)
+        edit_menu.addAction(copy_action)
+
+        paste_action = QAction("Paste", self)
+        paste_action.setShortcut(QKeySequence.StandardKey.Paste)
+        paste_action.setToolTip(
+            "Pastes drawn objects copied from this or another tab at the current playhead."
+        )
+        paste_action.triggered.connect(self.paste_annotations_from_clipboard)
+        edit_menu.addAction(paste_action)
+
+        edit_menu.addSeparator()
+
         self.undo_action = QAction("Undo", self)
         self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.setToolTip("Undo the last change.")
@@ -244,6 +265,64 @@ class VideoEditorWindow(QMainWindow):
             return
         self.statusBar().showMessage("Image imported")
         self._mark_dirty()
+
+    def copy_selected_annotations_to_clipboard(self) -> None:
+        """
+        Copies the selected drawn objects to the clipboard for cross-tab paste.
+
+        Returns:
+            None
+        """
+
+        annotations = self.canvas.collect_selected_annotations()
+        if not annotations:
+            self.statusBar().showMessage("Nothing selected to copy", 2500)
+            return
+
+        payload = {
+            "kind": "video_annotations",
+            "annotations": [annotation.to_dict() for annotation in annotations],
+        }
+        encoded = json.dumps(payload, ensure_ascii=True).encode("utf-8")
+        mime_data = QMimeData()
+        mime_data.setData(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME, encoded)
+        QGuiApplication.clipboard().setMimeData(mime_data)
+
+        count = len(annotations)
+        label = "object" if count == 1 else "objects"
+        self.statusBar().showMessage(f"Copied {count} {label}", 3500)
+
+    def paste_annotations_from_clipboard(self) -> None:
+        """
+        Pastes drawn objects copied from this or another video tab.
+
+        Returns:
+            None
+        """
+
+        clipboard = QGuiApplication.clipboard()
+        mime_data = clipboard.mimeData()
+        if mime_data is None or not mime_data.hasFormat(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME):
+            return
+        raw_data = bytes(mime_data.data(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME))
+        try:
+            payload = json.loads(raw_data.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            return
+        candidate = payload.get("annotations")
+        if not isinstance(candidate, list):
+            return
+        annotations = [
+            VideoAnnotationModel.from_dict(item) for item in candidate if isinstance(item, dict)
+        ]
+        if not annotations:
+            return
+        if not self.canvas.merge_annotations_payload(annotations):
+            return
+
+        count = len(annotations)
+        label = "object" if count == 1 else "objects"
+        self.statusBar().showMessage(f"Pasted {count} {label}", 2500)
 
     def style_state(self) -> StyleState:
         """

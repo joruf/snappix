@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Snappix
+Comment=Screenshot and annotation tool
+Exec=snappix
+Icon=io.github.joruf.Snappix
+Terminal=false
+Categories=Graphics;Utility;
+StartupWMClass=snappix

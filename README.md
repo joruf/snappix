@@ -124,17 +124,41 @@ Other Debian/Ubuntu-based desktops with the packages above should work similarly
 - Network access on first run (download `uv` / Python / pip packages)
 - Python packages (installed into `.venv`): PySide6 (+ Addons/Essentials), Pillow, requests, pynput
 
-### Packages / releases (Linux packaging)
+### Packages / releases
+
+Each build script needs the tool below installed on the machine you run it on (CI installs
+these automatically for tagged releases, see `.github/workflows/release.yml`):
+
+| Format | Build machine | Extra local tooling |
+|--------|--------------|----------------------|
+| `.deb` | Linux (Debian/Ubuntu-based) | none — uses `dpkg-deb`, already present |
+| AppImage | Linux | [`appimagetool`](https://github.com/AppImage/AppImageKit/releases) on `PATH` |
+| Flatpak | Linux | `flatpak-builder` (`sudo apt install flatpak-builder`); the script installs the `org.kde.Platform`/`org.kde.Sdk` 6.9 runtime itself on first run |
+| Windows `.zip` | Windows | `pip install pyinstaller` |
 
 ```bash
-# Debian package
+# Debian package (Ubuntu / Linux Mint)
 ./packaging/build_deb.sh 0.1.0
 
-# AppImage
+# AppImage (portable, any modern Linux)
 ./packaging/build_appimage.sh 0.1.0
+
+# Flatpak (Ubuntu / Linux Mint / most distros)
+./packaging/build_flatpak.sh 0.1.0
+
+# Windows executable (run on Windows)
+python packaging/build_windows.py 0.1.0
 ```
 
-Artifacts land in `dist/`. Tag `v1.2.0` (or run **Release Build** in GitHub Actions) to publish `.deb` and AppImage.
+Artifacts land in `dist/`: `.deb`, `.AppImage`, `Snappix-{version}-x86_64.flatpak`, and a
+`Snappix-{version}-windows-x64.zip` (one-folder PyInstaller build — unzip and run `Snappix.exe`,
+no Python required). Tag `v1.2.0` (or run **Release Build** in GitHub Actions) to build all four
+and publish them as GitHub Release assets.
+
+The Flatpak sandboxes the PySide6/Python runtime but, like the `.deb`, still expects `xdotool`,
+`x11-utils`, and (on Wayland) `grim`/`slurp`/`ffmpeg`/`tesseract` to be installed on the host
+(`--filesystem=host` in `packaging/flatpak/io.github.joruf.Snappix.yml`) — bundling those as
+Flatpak modules too would be a much larger, slower build.
 
 ---
 

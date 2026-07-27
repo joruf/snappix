@@ -4,6 +4,8 @@ Video playback and time-ranged annotation canvas for the Snappix video editor.
 
 from __future__ import annotations
 
+import copy
+
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSizeF, QTimer, QUrl, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
@@ -313,7 +315,7 @@ class VideoCanvas(QGraphicsView):
 
         self._resize_handle_size = float(DEFAULT_RESIZE_HANDLE_SIZE)
         self._resize_handle_position = DEFAULT_RESIZE_HANDLE_POSITION
-        self._pending_selection_id: str | None = None
+        self._pending_selection_ids: frozenset[str] | None = None
         self._rebuilding_visible_items = False
         self._show_all_annotations = False
         self._rect_corner_radius = 0.0
@@ -1081,8 +1083,8 @@ class VideoCanvas(QGraphicsView):
             None
         """
 
-        if self._pending_selection_id:
-            selected_ids = {self._pending_selection_id}
+        if self._pending_selection_ids:
+            selected_ids = set(self._pending_selection_ids)
         else:
             selected_ids = {
                 str(item.data(ITEM_ROLE_ID))
@@ -1114,8 +1116,8 @@ class VideoCanvas(QGraphicsView):
                 self._scene.addItem(item)
                 self._visible_items[annotation.annotation_id] = item
 
-            if self._pending_selection_id:
-                self._pending_selection_id = None
+            if self._pending_selection_ids:
+                self._pending_selection_ids = None
         finally:
             self._rebuilding_visible_items = False
 
@@ -1555,7 +1557,7 @@ class VideoCanvas(QGraphicsView):
             payload=dict(payload_data),
         )
         self._annotations.append(annotation)
-        self._pending_selection_id = annotation.annotation_id
+        self._pending_selection_ids = frozenset({annotation.annotation_id})
         self._rebuild_visible_items()
         self._last_action_label = _DRAW_ACTION_LABELS.get(annotation_type, "Edit")
         self.annotation_created.emit(annotation)
@@ -1937,6 +1939,121 @@ class VideoCanvas(QGraphicsView):
 
         return False
 
+    def _selected_annotation_items(self) -> list[QGraphicsItem]:
+        """
+        Returns selected scene items that represent a drawn annotation.
+
+        Returns:
+            list[QGraphicsItem]: Selected annotation items, excluding canvas chrome.
+        """
+
+        return [
+            item
+            for item in self._scene.selectedItems()
+            if item is not self._resize_overlay_item
+            and item is not self._video_item
+            and item.data(ITEM_ROLE_ID)
+        ]
+
+    def has_selected_annotations(self) -> bool:
+        """
+        Indicates whether at least one drawn object is currently selected.
+
+        Returns:
+            bool: True when a selection exists.
+        """
+
+        return bool(self._selected_annotation_items())
+
+    def collect_selected_annotations(self) -> list[VideoAnnotationModel]:
+        """
+        Serializes currently selected annotations for copy-to-clipboard.
+
+        Returns:
+            list[VideoAnnotationModel]: Copies of the selected annotation models.
+        """
+
+        self._sync_visible_items_to_models()
+        selected_ids = [
+            str(item.data(ITEM_ROLE_ID) or "") for item in self._selected_annotation_items()
+        ]
+        models_by_id = {annotation.annotation_id: annotation for annotation in self._annotations}
+        result: list[VideoAnnotationModel] = []
+        for annotation_id in selected_ids:
+            model = models_by_id.get(annotation_id)
+            if model is not None:
+                result.append(VideoAnnotationModel.from_dict(model.to_dict()))
+        return result
+
+    def merge_annotations_payload(self, source_annotations: list[VideoAnnotationModel]) -> bool:
+        """
+        Pastes copied annotations into this canvas near the playhead and viewport center.
+
+        Args:
+            source_annotations: Annotations copied from this or another video tab.
+
+        Returns:
+            bool: True when at least one annotation was pasted.
+        """
+
+        if not source_annotations:
+            return False
+
+        source_bounds = QRectF()
+        for annotation in source_annotations:
+            item_rect = QRectF(
+                float(annotation.x),
+                float(annotation.y),
+                max(1.0, float(annotation.width)),
+                max(1.0, float(annotation.height)),
+            )
+            source_bounds = item_rect if source_bounds.isNull() else source_bounds.united(item_rect)
+
+        center_scene = self.mapToScene(self.viewport().rect().center())
+        desired_top_left = QPointF(
+            center_scene.x() - (source_bounds.width() / 2.0),
+            center_scene.y() - (source_bounds.height() / 2.0),
+        )
+        spatial_offset = desired_top_left - source_bounds.topLeft()
+
+        duration = max(1, self.duration_ms())
+        earliest_start_ms = min(annotation.start_ms for annotation in source_annotations)
+        time_offset = self._position_ms - earliest_start_ms
+
+        pasted_ids: set[str] = set()
+        for annotation in source_annotations:
+            span = max(0, annotation.end_ms - annotation.start_ms)
+            start_ms = max(0, min(duration, annotation.start_ms + time_offset))
+            end_ms = max(start_ms, min(duration, start_ms + span))
+            pasted = VideoAnnotationModel(
+                annotation_type=annotation.annotation_type,
+                start_ms=start_ms,
+                end_ms=end_ms,
+                x=float(annotation.x + spatial_offset.x()),
+                y=float(annotation.y + spatial_offset.y()),
+                width=float(annotation.width),
+                height=float(annotation.height),
+                stroke_rgba=list(annotation.stroke_rgba),
+                fill_rgba=list(annotation.fill_rgba),
+                stroke_width=float(annotation.stroke_width),
+                text=str(annotation.text),
+                font_size=int(annotation.font_size),
+                font_family=str(annotation.font_family),
+                font_bold=bool(annotation.font_bold),
+                font_italic=bool(annotation.font_italic),
+                font_underline=bool(annotation.font_underline),
+                payload=copy.deepcopy(annotation.payload),
+            )
+            self._annotations.append(pasted)
+            pasted_ids.add(pasted.annotation_id)
+            self.annotation_created.emit(pasted)
+
+        self._pending_selection_ids = frozenset(pasted_ids)
+        self._rebuild_visible_items()
+        self._last_action_label = "Paste selection"
+        self.content_changed.emit()
+        return True
+
     def delete_selected_annotations(self) -> bool:
         """
         Removes all currently selected annotation models from the timeline.
@@ -1945,18 +2062,14 @@ class VideoCanvas(QGraphicsView):
             bool: True when at least one annotation was deleted.
         """
 
-        selected = [
-            item
-            for item in self._scene.selectedItems()
-            if item is not self._resize_overlay_item and item is not self._video_item
-        ]
+        selected = self._selected_annotation_items()
         if not selected:
             return False
 
         ids_to_remove = {
             str(item.data(ITEM_ROLE_ID) or "")
             for item in selected
-            if item.data(ITEM_ROLE_ID) and not bool(item.data(ITEM_ROLE_LOCKED) or False)
+            if not bool(item.data(ITEM_ROLE_LOCKED) or False)
         }
         if not ids_to_remove:
             return False

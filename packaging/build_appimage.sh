@@ -28,6 +28,14 @@ rsync -a \
   --exclude "__pycache__" \
   "$PROJECT_ROOT/" "$APPDIR/usr/share/snappix/"
 
+# The AppImage's squashfs is mounted read-only at runtime, so run.py's own
+# uv/venv bootstrap (which writes into the project root) cannot work here.
+# Bundle the pinned requirements as a vendored PYTHONPATH directory instead,
+# so PySide6 et al. are already importable and that bootstrap path is never hit.
+echo "[snappix] Vendoring Python dependencies..."
+VENDOR_DIR="$APPDIR/usr/share/snappix/vendor"
+python3 -m pip install --no-cache-dir --target "$VENDOR_DIR" -r "$PROJECT_ROOT/requirements.txt"
+
 cat > "$APPDIR/AppRun" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -38,6 +46,7 @@ chmod 0755 "$APPDIR/AppRun"
 cat > "$APPDIR/usr/bin/snappix" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+export PYTHONPATH="$APPDIR/usr/share/snappix/vendor${PYTHONPATH:+:$PYTHONPATH}"
 exec python3 "$APPDIR/usr/share/snappix/run.py" "$@"
 EOF
 chmod 0755 "$APPDIR/usr/bin/snappix"

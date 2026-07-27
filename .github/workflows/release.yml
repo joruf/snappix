@@ -15,7 +15,22 @@ permissions:
   contents: write
 
 jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      value: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Resolve release version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
   build-artifacts:
+    needs: resolve-version
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -35,15 +50,6 @@ jobs:
         run: |
           python -m py_compile run.py src/*.py
 
-      - name: Resolve release version
-        id: version
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "value=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Prepare appimagetool
         run: |
           curl -L "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" -o /tmp/appimagetool.AppImage
@@ -53,11 +59,11 @@ jobs:
       - name: Build Debian package
         run: |
           chmod +x packaging/build_deb.sh packaging/build_appimage.sh
-          ./packaging/build_deb.sh "${{ steps.version.outputs.value }}"
+          ./packaging/build_deb.sh "${{ needs.resolve-version.outputs.value }}"
 
       - name: Build AppImage
         run: |
-          ./packaging/build_appimage.sh "${{ steps.version.outputs.value }}"
+          ./packaging/build_appimage.sh "${{ needs.resolve-version.outputs.value }}"
 
       - name: Publish release artifacts
         if: startsWith(github.ref, 'refs/tags/v')
@@ -66,3 +72,60 @@ jobs:
           files: |
             dist/*.deb
             dist/*.AppImage
+
+  build-flatpak-artifacts:
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install flatpak-builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+
+      - name: Build Flatpak bundle
+        run: |
+          chmod +x packaging/build_flatpak.sh
+          ./packaging/build_flatpak.sh "${{ needs.resolve-version.outputs.value }}"
+
+      - name: Publish release artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.flatpak
+
+  build-windows-artifacts:
+    needs: resolve-version
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Run smoke tests
+        run: |
+          python -m py_compile run.py
+          Get-ChildItem -Path src -Filter *.py -Recurse | ForEach-Object { python -m py_compile $_.FullName }
+
+      - name: Build Windows executable
+        run: python packaging/build_windows.py "${{ needs.resolve-version.outputs.value }}"
+
+      - name: Publish release artifacts
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip

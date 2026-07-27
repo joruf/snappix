@@ -1,0 +1,48 @@
+app-id: io.github.joruf.Snappix
+runtime: org.kde.Platform
+runtime-version: "6.9"
+sdk: org.kde.Sdk
+command: snappix
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=x11
+  - --socket=wayland
+  - --device=dri
+  # Snappix shells out to xdotool/x11-utils (X11 window picking) and, on Wayland,
+  # grim/slurp/ffmpeg/tesseract — same host tools the .deb package depends on
+  # (see packaging/build_deb.sh). Bundling all of those as Flatpak modules too is a
+  # much larger build; --filesystem=host keeps this consistent with the existing
+  # .deb/AppImage packages, which also assume those tools are already on the host.
+  - --filesystem=host
+  - --talk-name=org.kde.StatusNotifierWatcher
+  - --talk-name=org.freedesktop.Notifications
+
+modules:
+  - python3-snappix-requirements.yaml
+
+  - name: snappix
+    buildsystem: simple
+    build-commands:
+      - install -d /app/share/snappix
+      - cp -r assets src run.py /app/share/snappix/
+      - install -Dm755 packaging/flatpak/snappix-launcher.sh /app/bin/snappix
+      - install -Dm644 assets/snappix.svg
+        /app/share/icons/hicolor/scalable/apps/io.github.joruf.Snappix.svg
+      - install -Dm644 packaging/flatpak/io.github.joruf.Snappix.desktop
+        /app/share/applications/io.github.joruf.Snappix.desktop
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - .git
+          - .venv
+          - .build
+          - .snappix-runtime
+          - __pycache__
+          - .pytest_cache
+          - .github
+          - .cursor
+          - dist
+          - docs
+          - tests

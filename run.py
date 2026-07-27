@@ -47,6 +47,7 @@ from src.config import (
     normalize_export_preset,
 )
 from src.constants import ABOUT_GITHUB, APP_FILE_EXTENSION, APP_NAME
+from src.paths import user_data_dir
 from src.theme import (
     THEME_DARK,
     THEME_LIGHT,
@@ -73,14 +74,20 @@ def _project_root() -> Path:
     """
     Returns project root path.
 
+    Under a PyInstaller-frozen build, this is the bundled resource directory
+    (``sys._MEIPASS``) rather than the source checkout.
+
     Returns:
         Path: Project root.
     """
 
+    frozen_root = getattr(sys, "_MEIPASS", None)
+    if frozen_root:
+        return Path(frozen_root)
     return Path(__file__).resolve().parent
 
 
-_INITIALIZED_FILE = _project_root() / ".initialized"
+_INITIALIZED_FILE = user_data_dir() / ".initialized"
 
 
 def _capture_icon_path() -> Path:
@@ -464,13 +471,14 @@ def _install_desktop_shortcut() -> bool:
 
 def _mark_initialized() -> None:
     """
-    Creates first-run marker file in the project root.
+    Creates first-run marker file in the user data directory.
 
     Returns:
         None
     """
 
     try:
+        _INITIALIZED_FILE.parent.mkdir(parents=True, exist_ok=True)
         _INITIALIZED_FILE.touch(exist_ok=True)
     except OSError:
         pass
