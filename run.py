@@ -685,6 +685,7 @@ class AppController:
                 self._on_layout_changed()
 
         from src.video_recorder import has_ffmpeg
+        from src.platform import has_tesseract
 
         self._QMessageBox = QMessageBox
         self.app = app
@@ -697,11 +698,13 @@ class AppController:
         self.capture_panel.setWindowIcon(self._capture_icon)
         self.capture_panel.capture_requested.connect(self.start_capture)
         self.capture_panel.color_pick_requested.connect(self.start_color_pick)
+        self.capture_panel.text_recognition_requested.connect(self.start_text_recognition)
         self.capture_panel.autostart_toggled.connect(self.toggle_autostart)
         self.capture_panel.close_requested.connect(self._on_capture_panel_close)
         self.capture_panel.editor_requested.connect(self.open_editor_from_capture)
         self.capture_panel.video_capture_requested.connect(self.start_video_capture)
         self.capture_panel.set_video_capture_available(has_ffmpeg())
+        self.capture_panel.set_text_recognition_available(has_tesseract())
         self.editors: list[EditorWindow] = []
         self.video_editors: list = []
 
@@ -2372,6 +2375,58 @@ class AppController:
             lambda: execute_color_pick(
                 on_picked=on_color_picked,
                 on_cancel=on_color_pick_cancelled,
+            )
+        )
+
+    def start_text_recognition(self) -> None:
+        """
+        Starts capture overlay mode for recognizing text in a selected region.
+
+        The selected region's screenshot is discarded once OCR has run over
+        it; only the recognized text is copied to the clipboard.
+
+        Returns:
+            None
+        """
+
+        from PySide6.QtGui import QGuiApplication
+        from src.capture import execute_text_recognition, schedule_capture_after_ui_settle
+        from src.ocr import format_ocr_copied_status
+
+        self._hide_windows_for_capture()
+
+        def on_text_recognized(text: str) -> None:
+            QGuiApplication.clipboard().setText(text)
+            self.capture_panel.show()
+            self.capture_panel.raise_()
+            if self._tray_available and self.tray_icon.isVisible():
+                self.tray_icon.showMessage(
+                    APP_NAME,
+                    format_ocr_copied_status(text),
+                    self.tray_icon.MessageIcon.Information,
+                    2200,
+                )
+
+        def on_no_text_found() -> None:
+            self.capture_panel.show()
+            self.capture_panel.raise_()
+            if self._tray_available and self.tray_icon.isVisible():
+                self.tray_icon.showMessage(
+                    APP_NAME,
+                    "OCR completed, but no text was found.",
+                    self.tray_icon.MessageIcon.Information,
+                    2200,
+                )
+
+        def on_text_recognition_cancelled() -> None:
+            self.capture_panel.show()
+            self.capture_panel.raise_()
+
+        schedule_capture_after_ui_settle(
+            lambda: execute_text_recognition(
+                on_recognized=on_text_recognized,
+                on_no_text=on_no_text_found,
+                on_cancel=on_text_recognition_cancelled,
             )
         )
 

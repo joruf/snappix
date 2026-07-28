@@ -45,6 +45,8 @@ from PySide6.QtWidgets import (
 from src.constants import APP_NAME
 from src.auto_scroll_capture import MAX_SCROLL_FRAMES, perform_auto_scroll_capture
 from src.flow_layout import FlowLayoutWidget
+from src.ocr import extract_text_from_png_bytes
+from src.scroll_capture import pixmap_to_png_bytes
 from src.platform import (
     capture_desktop_png_bytes,
     capture_region_with_grim_slurp,
@@ -203,6 +205,7 @@ class CapturePanel(QWidget):
     capture_requested = Signal(CaptureRequest)
     video_capture_requested = Signal()
     color_pick_requested = Signal()
+    text_recognition_requested = Signal()
     autostart_toggled = Signal(bool)
     close_requested = Signal()
     editor_requested = Signal()
@@ -336,6 +339,15 @@ class CapturePanel(QWidget):
         self.pick_color_button.clicked.connect(self.color_pick_requested.emit)
         button_widgets.append(self.pick_color_button)
 
+        self.recognize_text_button = QPushButton("")
+        self.recognize_text_button.setIcon(_build_text_recognition_icon())
+        self.recognize_text_button.setFixedSize(32, 32)
+        self.recognize_text_button.setToolTip(
+            "Select a screen region, recognize its text, and copy it to clipboard."
+        )
+        self.recognize_text_button.clicked.connect(self.text_recognition_requested.emit)
+        button_widgets.append(self.recognize_text_button)
+
         self._capture_buttons_row_width = self._measure_row_width(
             button_widgets, buttons_flow.flow_layout.horizontalSpacing()
         )
@@ -379,6 +391,7 @@ class CapturePanel(QWidget):
             self.capture_scroll_button,
             self.capture_video_button,
             self.pick_color_button,
+            self.recognize_text_button,
             self.open_editor_button,
         ]
         visible_buttons = [button for button in candidates if not button.isHidden()]
@@ -413,6 +426,29 @@ class CapturePanel(QWidget):
         else:
             self.capture_video_button.setToolTip(
                 "Video capture requires ffmpeg. Please install ffmpeg to enable this feature."
+            )
+        self._refresh_capture_button_flow()
+
+    def set_text_recognition_available(self, available: bool) -> None:
+        """
+        Shows or hides the text recognition button based on tesseract availability.
+
+        Args:
+            available: Whether the tesseract OCR binary was found on the system.
+
+        Returns:
+            None
+        """
+
+        self.recognize_text_button.setVisible(available)
+        self.recognize_text_button.setEnabled(available)
+        if available:
+            self.recognize_text_button.setToolTip(
+                "Select a screen region, recognize its text, and copy it to clipboard."
+            )
+        else:
+            self.recognize_text_button.setToolTip(
+                "Text recognition requires tesseract-ocr. Please install tesseract-ocr to enable this feature."
             )
         self._refresh_capture_button_flow()
 
@@ -2445,6 +2481,59 @@ def execute_color_pick(
     overlay.repaint()
 
 
+def execute_text_recognition(
+    on_recognized: Callable[[str], None],
+    on_no_text: Callable[[], None],
+    on_cancel: Callable[[], None],
+) -> None:
+    """
+    Starts interactive region selection and copies its recognized text to clipboard.
+
+    The captured region image itself is discarded once OCR has run over it;
+    only the recognized text is handed back to the caller.
+
+    Args:
+        on_recognized: Callback with the recognized, non-empty text.
+        on_no_text: Callback when the selected region contained no text.
+        on_cancel: Callback when selection is cancelled.
+
+    Returns:
+        None
+    """
+
+    snapshot = capture_full_screen()
+    if snapshot.pixmap.isNull() or snapshot.virtual_geometry.isNull():
+        on_cancel()
+        return
+
+    overlay = RegionCaptureOverlay(snapshot.pixmap, snapshot.virtual_geometry)
+    _track_overlay(overlay)
+
+    def on_region_captured(pixmap: QPixmap) -> None:
+        _untrack_overlay(overlay)
+        text = extract_text_from_png_bytes(pixmap_to_png_bytes(pixmap))
+        if text:
+            on_recognized(text)
+        else:
+            on_no_text()
+
+    def on_region_cancelled() -> None:
+        _untrack_overlay(overlay)
+        on_cancel()
+
+    overlay.capture_done.connect(on_region_captured)
+    overlay.capture_cancelled.connect(on_region_cancelled)
+    overlay.show()
+    overlay.raise_()
+    overlay.activateWindow()
+    overlay.grabKeyboard()
+    # Force an immediate synchronous paint: some compositors race the very
+    # first async update() on a freshly mapped always-on-top fullscreen
+    # window, occasionally dropping the initial frame (dimming/crosshair/
+    # selection border never appear until the next repaint trigger).
+    overlay.repaint()
+
+
 def execute_capture_request(
     request: CaptureRequest,
     on_capture: Callable[[QPixmap], None],
@@ -2738,6 +2827,28 @@ def _build_color_picker_icon() -> QIcon:
     path.addEllipse(11.5, 2.5, 4, 4)
     painter.drawPath(path)
     painter.drawLine(3, 14, 2, 16)
+    painter.end()
+    return QIcon(icon)
+
+
+def _build_text_recognition_icon() -> QIcon:
+    """
+    Renders a compact "OCR" text icon for capture panel action.
+
+    Returns:
+        QIcon: Icon image.
+    """
+
+    icon = QPixmap(18, 18)
+    icon.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(icon)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    font = QFont()
+    font.setBold(True)
+    font.setPointSize(7)
+    painter.setFont(font)
+    painter.setPen(QPen(QColor(46, 204, 113), 1))
+    painter.drawText(QRect(0, 1, 18, 16), Qt.AlignmentFlag.AlignCenter, "OCR")
     painter.end()
     return QIcon(icon)
 
