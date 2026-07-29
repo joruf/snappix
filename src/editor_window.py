@@ -231,6 +231,33 @@ _COLOR_TARGETS_BY_TOOL: dict[str, frozenset[str]] = {
     Tool.TEXT: _COLOR_TARGETS_TEXT,
     Tool.CALLOUT: _COLOR_TARGETS_TEXT,
 }
+
+# Style-tab shape controls (thickness/style/radius) apply to a single-object
+# selection only -- never to the active tool -- since the per-tool popups
+# remain the place to set defaults for newly drawn objects. Text/callout are
+# intentionally excluded: their border thickness stays in the Text tool menu
+# alongside its other text-specific settings (font, spacing, padding, ...).
+_SHAPE_THICKNESS_SELECTION_TYPES = frozenset(
+    {
+        "rect",
+        "ellipse",
+        "triangle",
+        "round_rect",
+        "star",
+        "highlight",
+        "spotlight",
+        "cross",
+        "checkmark",
+        "line",
+        "arrow",
+        "double_arrow",
+        "polyline",
+        "polygon",
+        "bent_arrow",
+    }
+)
+_SHAPE_STYLE_SELECTION_TYPES = frozenset(STYLE_AWARE_TOOLS)
+_SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect"})
 # Tools that edit existing content: Style colors follow the selection, not the tool.
 _COLOR_SELECTION_CONTEXT_TOOLS = frozenset(
     {
@@ -550,6 +577,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.canvas.crop_selection_changed.connect(self._on_crop_state_changed)
         self.canvas.crop_applied.connect(self._on_crop_applied)
         self.canvas.status_message.connect(self._on_canvas_status_message)
+        self.canvas.tool_lock_escape_requested.connect(self._on_tool_lock_escape_requested)
 
         self._toolbar_widget = self._build_toolbar()
         root.addWidget(self._toolbar_widget, 0)
@@ -831,6 +859,57 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         text_widgets.append(self.text_alpha_label)
         style_widgets.extend(text_widgets)
 
+        shape_gap = self._create_toolbar_gap(6)
+        self._color_group_gaps["shape"] = shape_gap
+        style_widgets.append(shape_gap)
+        shape_widgets: list[QWidget] = []
+
+        thickness_caption = self._create_toolbar_label("Thickness")
+        shape_widgets.append(thickness_caption)
+        self.style_thickness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.style_thickness_slider.setRange(0, 64)
+        self.style_thickness_slider.setFixedWidth(72)
+        self.style_thickness_slider.setToolTip("Stroke thickness of the selected object.")
+        self.style_thickness_slider.valueChanged.connect(self._style_thickness_changed)
+        self._configure_compact_toolbar_height(self.style_thickness_slider, 22)
+        shape_widgets.append(self.style_thickness_slider)
+        self.style_thickness_label = QLabel("0")
+        self.style_thickness_label.setMinimumWidth(20)
+        self._configure_compact_toolbar_height(self.style_thickness_label, 22)
+        shape_widgets.append(self.style_thickness_label)
+
+        style_caption = self._create_toolbar_label("Style")
+        shape_widgets.append(style_caption)
+        self.style_stroke_style_combo = QComboBox()
+        self.style_stroke_style_combo.addItem("Solid", STROKE_STYLE_SOLID)
+        self.style_stroke_style_combo.addItem("Dash", STROKE_STYLE_DASH)
+        self.style_stroke_style_combo.addItem("Dot", STROKE_STYLE_DOT)
+        self.style_stroke_style_combo.addItem("Dash dot", STROKE_STYLE_DASH_DOT)
+        self.style_stroke_style_combo.setToolTip("Line/border style of the selected object.")
+        self.style_stroke_style_combo.currentIndexChanged.connect(self._style_stroke_style_changed)
+        self._configure_compact_combo(self.style_stroke_style_combo, 90)
+        self._configure_compact_toolbar_height(self.style_stroke_style_combo)
+        shape_widgets.append(self.style_stroke_style_combo)
+
+        radius_caption = self._create_toolbar_label("Radius")
+        shape_widgets.append(radius_caption)
+        self.style_radius_spin = QDoubleSpinBox()
+        self.style_radius_spin.setDecimals(1)
+        self.style_radius_spin.setSingleStep(1.0)
+        self.style_radius_spin.setRange(0.0, 200.0)
+        self.style_radius_spin.setFixedWidth(64)
+        self.style_radius_spin.setToolTip("Corner radius of the selected rectangle.")
+        self.style_radius_spin.valueChanged.connect(self._style_corner_radius_changed)
+        self._configure_compact_toolbar_height(self.style_radius_spin)
+        shape_widgets.append(self.style_radius_spin)
+
+        style_widgets.extend(shape_widgets)
+        self._shape_group_widgets = {
+            "thickness": [thickness_caption, self.style_thickness_slider, self.style_thickness_label],
+            "style": [style_caption, self.style_stroke_style_combo],
+            "radius": [radius_caption, self.style_radius_spin],
+        }
+
         self._color_target_widgets = {
             "stroke": stroke_widgets,
             "fill": fill_widgets,
@@ -1111,6 +1190,33 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             return frozenset()
         return _COLOR_TARGETS_BY_TOOL.get(resolved_tool, frozenset())
 
+    def _resolve_style_shape_targets(self, selection_type: str | None) -> frozenset[str]:
+        """
+        Resolves which Style shape controls (thickness/style/radius) apply.
+
+        Unlike colors, shape controls only ever follow a single-object
+        selection -- never the active tool -- since per-tool popups remain
+        the place to set defaults for new draws.
+
+        Args:
+            selection_type: Selected annotation type, if any.
+
+        Returns:
+            frozenset[str]: Target keys among ``thickness``, ``style``, and ``radius``.
+        """
+
+        resolved = str(selection_type or "").strip().lower()
+        if not resolved or resolved == "document":
+            return frozenset()
+        targets = set()
+        if resolved in _SHAPE_THICKNESS_SELECTION_TYPES:
+            targets.add("thickness")
+        if resolved in _SHAPE_STYLE_SELECTION_TYPES:
+            targets.add("style")
+        if resolved in _SHAPE_RADIUS_SELECTION_TYPES:
+            targets.add("radius")
+        return frozenset(targets)
+
     def _update_style_color_visibility(
         self,
         *,
@@ -1118,7 +1224,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         selection_type: str | None = None,
     ) -> None:
         """
-        Shows only the Style color groups relevant to tool or selection.
+        Shows only the Style color/shape groups relevant to tool or selection.
 
         Args:
             tool: Optional tool override.
@@ -1139,16 +1245,27 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             for widget in widgets:
                 widget.setVisible(visible)
 
+        shape_targets = self._resolve_style_shape_targets(selection_type)
+        for target_name, widgets in self._shape_group_widgets.items():
+            visible = target_name in shape_targets
+            for widget in widgets:
+                widget.setVisible(visible)
+
         ordered = [name for name in ("stroke", "fill", "text") if name in targets]
         for gap_name, gap in self._color_group_gaps.items():
+            if gap_name == "shape":
+                continue
             # Show the leading gap only when a previous group is also visible.
             if gap_name not in targets:
                 gap.setVisible(False)
                 continue
             index = ordered.index(gap_name) if gap_name in ordered else -1
             gap.setVisible(index > 0)
+        shape_gap = self._color_group_gaps.get("shape")
+        if shape_gap is not None:
+            shape_gap.setVisible(bool(shape_targets) and bool(targets))
 
-        style_visible = bool(targets)
+        style_visible = bool(targets) or bool(shape_targets)
         self._property_tabs.setTabVisible(self._PROPERTY_TAB_STYLE, style_visible)
         if style_visible:
             self._fit_property_tabs_height()
@@ -1948,12 +2065,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
             width_row = QHBoxLayout()
             width_row.setSpacing(8)
-            width_title = QLabel("Width", panel)
+            width_title = QLabel("Thickness", panel)
             width_title.setMinimumWidth(44)
             width_title.setToolTip(
                 "Default stroke thickness for new draws with this tool "
-                "(0 = no border for shapes). Selected elements keep their own width "
-                "unless you change Width while they are selected."
+                "(0 = no border for shapes). Edit a selected object's own "
+                "thickness from the Style panel instead."
             )
             width_row.addWidget(width_title)
             slider = QSlider(Qt.Orientation.Horizontal, panel)
@@ -2010,7 +2127,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                 style_title.setMinimumWidth(44)
                 style_title.setToolTip(
                     "Default line/border style for new draws with this tool. "
-                    "Selected lines/shapes update when changed while selected."
+                    "Edit a selected object's own style from the Style panel instead."
                 )
                 style_row.addWidget(style_title)
                 style_combo = QComboBox(panel)
@@ -2035,8 +2152,8 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                 radius_title = QLabel("Radius", panel)
                 radius_title.setMinimumWidth(44)
                 radius_title.setToolTip(
-                    "Corner radius for rectangles (0 = sharp corners). "
-                    "Applies to new draws and to a selected rectangle."
+                    "Default corner radius for new rectangles (0 = sharp corners). "
+                    "Edit a selected rectangle's own radius from the Style panel instead."
                 )
                 radius_row.addWidget(radius_title)
                 radius_spin = QDoubleSpinBox(panel)
@@ -2130,7 +2247,9 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
     def _tool_menu_radius_changed(self, value: float) -> None:
         """
-        Applies a rectangle corner-radius change from the Rectangle tool menu.
+        Updates the Rectangle tool's default corner radius for new draws.
+
+        Edit a selected rectangle's own radius from the Style panel instead.
 
         Args:
             value: New corner radius in pixels.
@@ -2149,13 +2268,16 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._rect_corner_radius = resolved
         self.canvas.set_rect_corner_radius(
             resolved,
-            apply_to_selection=True,
-            emit_history=True,
+            apply_to_selection=False,
+            emit_history=False,
         )
 
     def _prepare_stroke_tool_menu(self, tool_key: str) -> None:
         """
-        Refreshes one stroke-tool popup from selection or tool defaults.
+        Refreshes one stroke-tool popup to its tool defaults.
+
+        Shape/line tool popups always show the tool default now; a selected
+        object's own thickness/style/radius is edited from the Style panel.
 
         Args:
             tool_key: Tool identifier for the opening menu.
@@ -2164,10 +2286,6 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             None
         """
 
-        payload = self._primary_selection_payload()
-        if payload is not None and self._selection_uses_stroke_menu(payload, tool_key):
-            self._sync_stroke_tool_menu_widgets(payload, tool_key=tool_key)
-            return
         self._restore_stroke_tool_menu_widgets(tool_key=tool_key)
 
     def _prepare_text_tool_menu(self) -> None:
@@ -2196,27 +2314,6 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         if not selected:
             return None
         return self.canvas._build_selection_payload(selected[0])  # pylint: disable=protected-access
-
-    def _selection_uses_stroke_menu(self, payload: dict[str, Any], tool_key: str) -> bool:
-        """
-        Checks whether a selection should drive one stroke-tool popup.
-
-        Args:
-            payload: Selection payload.
-            tool_key: Tool menu being prepared.
-
-        Returns:
-            bool: True when the selection maps to this menu.
-        """
-
-        selection_type = str(payload.get("type") or "")
-        if tool_key in {Tool.BRUSH, Tool.ERASER}:
-            # Brush/eraser menus always edit tool defaults; raster strokes are not
-            # re-editable annotation objects.
-            return False
-        if selection_type in {"rect", "ellipse", "triangle", "round_rect", "star", "highlight", "spotlight", "cross", "checkmark", "line", "arrow", "double_arrow", "polyline", "polygon", "bent_arrow"}:
-            return True
-        return False
 
     def _set_width_slider_value(self, tool_key: str, width: int) -> None:
         """
@@ -2296,49 +2393,124 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         if label is not None:
             label.setText(f"{resolved}%")
 
-    def _sync_stroke_tool_menu_widgets(
-        self,
-        payload: dict[str, Any],
-        *,
-        tool_key: str | None = None,
-    ) -> None:
+    def _sync_style_shape_controls(self, payload: dict[str, Any]) -> None:
         """
-        Shows selected annotation stroke properties in tool popup widgets.
+        Shows one selected object's thickness/style/radius in the Style panel.
 
         Args:
             payload: Selection payload.
-            tool_key: Optional single tool menu to update; all when omitted.
 
         Returns:
             None
         """
 
+        selection_type = str(payload.get("type") or "").strip().lower()
+
         stroke_width = payload.get("stroke_width")
+        if isinstance(stroke_width, (int, float)) and selection_type in _SHAPE_THICKNESS_SELECTION_TYPES:
+            resolved = normalize_stroke_width(int(round(float(stroke_width))), minimum=0)
+            self.style_thickness_slider.blockSignals(True)
+            self.style_thickness_slider.setValue(resolved)
+            self.style_thickness_slider.blockSignals(False)
+            self.style_thickness_label.setText(str(resolved))
+
         stroke_style = payload.get("stroke_style")
-        targets = (
-            [tool_key]
-            if tool_key
-            else [
-                key
-                for key in self._tool_width_sliders.keys()
-                if key not in {Tool.BRUSH, Tool.ERASER}
-            ]
+        if isinstance(stroke_style, str) and selection_type in _SHAPE_STYLE_SELECTION_TYPES:
+            index = self.style_stroke_style_combo.findData(normalize_named_stroke_style(stroke_style))
+            if index >= 0:
+                self.style_stroke_style_combo.blockSignals(True)
+                self.style_stroke_style_combo.setCurrentIndex(index)
+                self.style_stroke_style_combo.blockSignals(False)
+
+        corner_radius = payload.get("corner_radius")
+        if isinstance(corner_radius, (int, float)) and selection_type in _SHAPE_RADIUS_SELECTION_TYPES:
+            self.style_radius_spin.blockSignals(True)
+            self.style_radius_spin.setValue(float(corner_radius))
+            self.style_radius_spin.blockSignals(False)
+
+    def _restore_style_shape_controls(self) -> None:
+        """
+        Resets the Style panel's thickness/style/radius controls to neutral
+        placeholder values while they are hidden (no single-object selection).
+
+        Returns:
+            None
+        """
+
+        if not hasattr(self, "style_thickness_slider"):
+            return
+        self.style_thickness_slider.blockSignals(True)
+        self.style_thickness_slider.setValue(0)
+        self.style_thickness_slider.blockSignals(False)
+        self.style_thickness_label.setText("0")
+        self.style_stroke_style_combo.blockSignals(True)
+        self.style_stroke_style_combo.setCurrentIndex(0)
+        self.style_stroke_style_combo.blockSignals(False)
+        self.style_radius_spin.blockSignals(True)
+        self.style_radius_spin.setValue(0.0)
+        self.style_radius_spin.blockSignals(False)
+
+    def _style_thickness_changed(self, value: int) -> None:
+        """
+        Applies a thickness change from the Style panel to the current selection.
+
+        Args:
+            value: New stroke thickness in pixels.
+
+        Returns:
+            None
+        """
+
+        resolved = normalize_stroke_width(value, minimum=0)
+        self.style_thickness_label.setText(str(resolved))
+        self.canvas.set_style(
+            stroke_width=float(resolved),
+            emit_history=False,
+            apply_to_selection=True,
+            update_active_style=False,
         )
-        for key in targets:
-            if key is None or key in {Tool.BRUSH, Tool.ERASER}:
-                continue
-            if isinstance(stroke_width, (int, float)) and key in WIDTH_AWARE_TOOLS:
-                self._set_width_slider_value(key, int(round(float(stroke_width))))
-            if (
-                isinstance(stroke_style, str)
-                and key in STYLE_AWARE_TOOLS
-                and key in self._tool_style_combos
-            ):
-                self._set_style_combo_value(key, stroke_style)
-            if key == Tool.RECT and str(payload.get("type") or "") == "rect":
-                corner_radius = payload.get("corner_radius")
-                if isinstance(corner_radius, (int, float)):
-                    self._set_radius_spin_value(key, float(corner_radius))
+        self._set_next_history_label("Change border thickness")
+        self._push_history_state()
+
+    def _style_stroke_style_changed(self, _index: int) -> None:
+        """
+        Applies a stroke-style change from the Style panel to the current selection.
+
+        Returns:
+            None
+        """
+
+        resolved = normalize_named_stroke_style(
+            str(self.style_stroke_style_combo.currentData() or STROKE_STYLE_SOLID)
+        )
+        self.canvas.set_style(
+            stroke_style=resolved,
+            emit_history=False,
+            apply_to_selection=True,
+            update_active_style=False,
+        )
+        self._set_next_history_label("Change line style")
+        self._push_history_state()
+
+    def _style_corner_radius_changed(self, value: float) -> None:
+        """
+        Applies a corner-radius change from the Style panel to the selected rectangle.
+
+        Args:
+            value: New corner radius in pixels.
+
+        Returns:
+            None
+        """
+
+        self.canvas.set_rect_corner_radius(
+            max(0.0, float(value)),
+            apply_to_selection=True,
+            update_default=False,
+            emit_history=False,
+        )
+        self._set_next_history_label("Change rectangle radius")
+        self._push_history_state()
 
     def _restore_stroke_tool_menu_widgets(self, *, tool_key: str | None = None) -> None:
         """
@@ -2686,11 +2858,11 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         width_row = QHBoxLayout()
         width_row.setSpacing(8)
-        width_title = QLabel("Width", panel)
+        width_title = QLabel("Thickness", panel)
         width_title.setMinimumWidth(52)
         width_title.setToolTip(
             "Border thickness for boxed/bubble text (0 = no border). "
-            "Selected text keeps its own width unless Width is changed while selected."
+            "Selected text keeps its own thickness unless Thickness is changed while selected."
         )
         width_row.addWidget(width_title)
         self.text_width_menu_slider = QSlider(Qt.Orientation.Horizontal, panel)
@@ -2952,11 +3124,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         persist: bool = True,
     ) -> None:
         """
-        Updates stroke width for the current selection or a tool default.
+        Updates stroke width for a tool default, or a selected text object.
 
-        With a stroke-capable selection the width is written only to those
-        elements. Without a selection it updates the tool default used for
-        newly drawn items (``0`` disables shape/text borders).
+        Shape/line tool menus always edit the tool default now (edit a
+        selected shape's own thickness from the Style panel instead); the
+        Text tool menu still edits a selected text object directly, since its
+        border-thickness control has not moved to the Style panel.
 
         Args:
             width: Stroke width in pixels.
@@ -2971,19 +3144,14 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         minimum = 1 if target_tool in BRUSH_WIDTH_TOOLS else 0
         resolved = normalize_stroke_width(width, minimum=minimum)
 
-        # Brush/eraser menus always edit tool defaults. Shape/line/text menus edit
-        # the current selection when one exists.
-        if (
-            target_tool not in BRUSH_WIDTH_TOOLS
-            and self.canvas.has_stroke_width_selection()
-        ):
+        if target_tool == Tool.TEXT and self.canvas.has_stroke_width_selection():
             self.canvas.set_style(
                 stroke_width=float(resolved),
                 emit_history=False,
                 apply_to_selection=True,
                 update_active_style=False,
             )
-            self._set_next_history_label("Change border width")
+            self._set_next_history_label("Change border thickness")
             self._push_history_state()
             return
 
@@ -3046,7 +3214,9 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         persist: bool = True,
     ) -> None:
         """
-        Updates stroke style for the current selection or a tool default.
+        Updates the tool's default stroke style for new draws.
+
+        Edit a selected shape/line's own style from the Style panel instead.
 
         Args:
             stroke_style: Named stroke style.
@@ -3059,17 +3229,6 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         target_tool = tool if tool in STYLE_AWARE_TOOLS else self._active_tool
         resolved = normalize_named_stroke_style(stroke_style)
-
-        if self.canvas.has_stroke_style_selection():
-            self.canvas.set_style(
-                stroke_style=resolved,
-                emit_history=False,
-                apply_to_selection=True,
-                update_active_style=False,
-            )
-            self._set_next_history_label("Change line style")
-            self._push_history_state()
-            return
 
         if target_tool in STYLE_AWARE_TOOLS:
             self._tool_stroke_styles[target_tool] = resolved
@@ -3239,6 +3398,20 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         self._locked_tool = None
         self._update_tool_lock_visuals()
+
+    def _on_tool_lock_escape_requested(self) -> None:
+        """
+        Unlocks a locked draw tool and returns to Select when Escape is
+        pressed on the canvas with no other cancellable state active.
+
+        Returns:
+            None
+        """
+
+        if self._locked_tool is None:
+            return
+        self._clear_tool_lock()
+        self._set_tool(Tool.SELECT)
 
     def _update_tool_lock_visuals(self) -> None:
         """
@@ -4031,6 +4204,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         """
         Synchronizes toolbar controls to selected object style.
 
+        The Style panel (colors + thickness/style/radius) tracks a single
+        selected object and hides entirely for an empty or multi-object
+        selection, since different objects in a multi-selection can have
+        different settings. Geometry/layer/transform/arrange controls still
+        track any non-empty selection, single or multiple, as before.
+
         Args:
             payload: Selected style payload.
 
@@ -4039,53 +4218,71 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         """
 
         selection_type = str(payload.get("type", "") or "").strip().lower()
+        selected_count = payload.get("count")
+        is_multi_select = isinstance(selected_count, int) and selected_count > 1
+
         if selection_type == "document" or not selection_type:
             self._restore_stroke_tool_menu_widgets()
             self._restore_text_tool_menu_widgets()
+            self._restore_style_shape_controls()
             self._update_style_color_visibility(selection_type="document")
             self._update_arrange_action_enabled_state()
             self._selection_info_label.setText(format_selection_info(payload))
             return
 
-        self._focus_property_tab_for_context(selection_type=selection_type)
-
-        stroke_rgba = payload.get("stroke_rgba")
-        if isinstance(stroke_rgba, list) and len(stroke_rgba) == 4:
-            color = QColor(
-                int(stroke_rgba[0]),
-                int(stroke_rgba[1]),
-                int(stroke_rgba[2]),
-                int(stroke_rgba[3]),
-            )
-            self._set_target_color("stroke", color, apply_to_canvas=False)
-
-        fill_rgba = payload.get("fill_rgba")
-        if isinstance(fill_rgba, list) and len(fill_rgba) == 4:
-            color = QColor(
-                int(fill_rgba[0]),
-                int(fill_rgba[1]),
-                int(fill_rgba[2]),
-                int(fill_rgba[3]),
-            )
-            self._set_target_color("fill", color, apply_to_canvas=False)
-
-        text_rgba = payload.get("text_rgba")
-        if isinstance(text_rgba, list) and len(text_rgba) == 4:
-            color = QColor(
-                int(text_rgba[0]),
-                int(text_rgba[1]),
-                int(text_rgba[2]),
-                int(text_rgba[3]),
-            )
-            self._set_target_color("text", color, apply_to_canvas=False)
-
-        if selection_type in {"rect", "ellipse", "triangle", "round_rect", "star", "highlight", "spotlight", "cross", "checkmark", "line", "arrow", "double_arrow", "polyline", "polygon", "bent_arrow"}:
-            self._sync_stroke_tool_menu_widgets(payload)
-        elif selection_type == "text":
-            self._sync_text_tool_menu_widgets(payload)
-        else:
+        if is_multi_select:
             self._restore_stroke_tool_menu_widgets()
             self._restore_text_tool_menu_widgets()
+            self._restore_style_shape_controls()
+            self._update_style_color_visibility(selection_type="document")
+        else:
+            self._focus_property_tab_for_context(selection_type=selection_type)
+
+            stroke_rgba = payload.get("stroke_rgba")
+            if isinstance(stroke_rgba, list) and len(stroke_rgba) == 4:
+                color = QColor(
+                    int(stroke_rgba[0]),
+                    int(stroke_rgba[1]),
+                    int(stroke_rgba[2]),
+                    int(stroke_rgba[3]),
+                )
+                self._set_target_color("stroke", color, apply_to_canvas=False)
+
+            fill_rgba = payload.get("fill_rgba")
+            if isinstance(fill_rgba, list) and len(fill_rgba) == 4:
+                color = QColor(
+                    int(fill_rgba[0]),
+                    int(fill_rgba[1]),
+                    int(fill_rgba[2]),
+                    int(fill_rgba[3]),
+                )
+                self._set_target_color("fill", color, apply_to_canvas=False)
+
+            text_rgba = payload.get("text_rgba")
+            if isinstance(text_rgba, list) and len(text_rgba) == 4:
+                color = QColor(
+                    int(text_rgba[0]),
+                    int(text_rgba[1]),
+                    int(text_rgba[2]),
+                    int(text_rgba[3]),
+                )
+                self._set_target_color("text", color, apply_to_canvas=False)
+
+            shape_targets = (
+                _SHAPE_THICKNESS_SELECTION_TYPES
+                | _SHAPE_STYLE_SELECTION_TYPES
+                | _SHAPE_RADIUS_SELECTION_TYPES
+            )
+            if selection_type in shape_targets:
+                self._sync_style_shape_controls(payload)
+            else:
+                self._restore_style_shape_controls()
+
+            if selection_type == "text":
+                self._sync_text_tool_menu_widgets(payload)
+            else:
+                self._restore_text_tool_menu_widgets()
+            self._restore_stroke_tool_menu_widgets()
 
         self._update_geometry_controls_from_payload(payload)
         self._sync_layer_controls_from_payload(payload)
@@ -6492,14 +6689,9 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         if not self.has_drawn_annotations():
             return True
-        answer = QMessageBox.question(
-            self,
-            "Close Tab",
-            "This tab contains annotations. Close it anyway?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        return answer == QMessageBox.StandardButton.Yes
+        from src.close_tab_dialog import confirm_close_tab
+
+        return confirm_close_tab(self, "This tab contains annotations. Close it anyway?")
 
     def closeEvent(self, event) -> None:
         """

@@ -56,9 +56,12 @@ from src.shape_items import (
     PathShapeItem,
     PolyPathItem,
     SpotlightItem,
+    bounding_rect_from_points,
     points_from_payload,
+    points_to_payload,
 )
 from src.resize_overlay import ResizeOverlayMixin, rect_or_line_geometry_rect
+from src.video_effects import apply_effect_render_state, compute_effect_render_state
 from src.video_models import VideoAnnotationModel
 from src.zoomable_canvas import ZoomableCanvasMixin
 
@@ -260,6 +263,8 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
     content_changed = Signal()
     selection_style_changed = Signal(object)
     zoom_changed = Signal(float)
+    playback_finished = Signal()
+    tool_lock_escape_requested = Signal()
 
     def __init__(self) -> None:
         """
@@ -510,18 +515,48 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self.tool_changed.emit(tool)
         self._update_style_color_context()
 
-    def set_rect_corner_radius(self, radius: float) -> None:
+    def set_rect_corner_radius(
+        self,
+        radius: float,
+        *,
+        apply_to_selection: bool = False,
+        update_default: bool = True,
+        emit_history: bool = True,
+    ) -> None:
         """
-        Sets the default corner radius for new rectangle annotations.
+        Updates the rectangle corner radius for new draws and/or a selection.
 
         Args:
-            radius: Corner radius in pixels.
+            radius: Corner radius in pixels (0 = sharp corners).
+            apply_to_selection: When True, updates selected rectangle items.
+            update_default: When False, leaves the tool's default radius
+                unchanged and only updates the selection (per-element edits
+                from the Style panel, as opposed to the tool menu's default).
+            emit_history: When True, records a history entry after selection edits.
 
         Returns:
             None
         """
 
-        self._rect_corner_radius = max(0.0, float(radius))
+        if update_default:
+            self._rect_corner_radius = max(0.0, float(radius))
+        if not apply_to_selection:
+            return
+        resolved = max(0.0, float(radius))
+        changed = False
+        for item in self._selected_annotation_items():
+            if bool(item.data(ITEM_ROLE_LOCKED) or False):
+                continue
+            if str(item.data(ITEM_ROLE_TYPE) or "") != "rect":
+                continue
+            if isinstance(item, PathShapeItem):
+                item.set_corner_radius(resolved)
+                changed = True
+        if changed:
+            self._sync_visible_items_to_models()
+            if emit_history:
+                self._last_action_label = "Change rectangle radius"
+                self.content_changed.emit()
 
     def consume_last_action_label(self) -> str:
         """
@@ -863,7 +898,8 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
     def _on_media_status_changed(self, status) -> None:
         """
-        Forces the first video frame to render once media finishes loading.
+        Forces the first video frame to render once media finishes loading,
+        and rewinds to the start once playback reaches the end.
 
         Qt Multimedia only decodes/pushes a frame to the video item while
         actively playing, so a freshly loaded, never-played video shows a
@@ -879,6 +915,11 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             None
         """
 
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
+            self._player.pause()
+            self._player.setPosition(0)
+            self.playback_finished.emit()
+            return
         if self._first_frame_forced:
             return
         if status not in (
@@ -939,6 +980,8 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 item = build_annotation_item(annotation)
                 if item is None:
                     continue
+                if not self._show_all_annotations:
+                    apply_effect_render_state(item, annotation, self._position_ms)
                 if annotation.annotation_id in selected_ids:
                     item.setSelected(True)
                 self._scene.addItem(item)
@@ -1008,6 +1051,9 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 "type": serialized.annotation_type,
                 "stroke_rgba": serialized.stroke_rgba,
                 "fill_rgba": serialized.fill_rgba,
+                "stroke_width": serialized.stroke_width,
+                "stroke_style": serialized.payload.get("stroke_style"),
+                "corner_radius": serialized.payload.get("corner_radius"),
             }
         )
 
@@ -1495,6 +1541,14 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         """
         Writes current scene geometry from visible items back to annotation models.
 
+        Items currently distorted by an active zoom/slide effect transform
+        (applied by ``apply_effect_render_state`` for live preview) are only
+        synced for their payload's ``effects`` list -- their geometry is left
+        untouched so the transient effect offset/scale is never baked into
+        the model's true position/size. ``annotation_from_item`` is not
+        effects-aware, so the ``effects`` payload entry is always preserved
+        across this sync regardless of which effects are active.
+
         Returns:
             bool: True when at least one model was updated.
         """
@@ -1507,24 +1561,36 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             annotation_id = str(item.data(ITEM_ROLE_ID) or "")
             if not annotation_id or annotation_id not in models_by_id:
                 continue
+            model = models_by_id[annotation_id]
             serialized = annotation_from_item(item)
             if serialized is None:
                 continue
-            model = models_by_id[annotation_id]
+            merged_payload = dict(serialized.payload)
+            existing_effects = model.payload.get("effects")
+            if existing_effects is not None:
+                merged_payload["effects"] = existing_effects
+
+            _opacity, scale, offset_x = compute_effect_render_state(model, self._position_ms)
+            if scale != 1.0 or offset_x != 0.0:
+                if model.payload != merged_payload:
+                    model.payload = merged_payload
+                    changed = True
+                continue
+
             if (
                 model.x != serialized.x
                 or model.y != serialized.y
                 or model.width != serialized.width
                 or model.height != serialized.height
                 or model.text != serialized.text
-                or model.payload != serialized.payload
+                or model.payload != merged_payload
             ):
                 model.x = serialized.x
                 model.y = serialized.y
                 model.width = serialized.width
                 model.height = serialized.height
                 model.text = serialized.text
-                model.payload = dict(serialized.payload)
+                model.payload = merged_payload
                 changed = True
         return changed
 
@@ -1874,6 +1940,241 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self._rebuild_visible_items()
         return True
 
+    def _selected_unlocked_annotation_ids(self) -> set[str]:
+        """
+        Returns ids of currently selected annotations, excluding locked ones.
+
+        Returns:
+            set[str]: Selected, unlocked annotation ids.
+        """
+
+        return {
+            str(item.data(ITEM_ROLE_ID) or "")
+            for item in self._selected_annotation_items()
+            if not bool(item.data(ITEM_ROLE_LOCKED) or False)
+        }
+
+    def duplicate_selected_annotations(self) -> bool:
+        """
+        Duplicates the currently selected annotations with a small offset.
+
+        Returns:
+            bool: True when at least one annotation was duplicated.
+        """
+
+        self._sync_visible_items_to_models()
+        selected_ids = self._selected_unlocked_annotation_ids()
+        if not selected_ids:
+            return False
+
+        duplicated_ids: set[str] = set()
+        for annotation in list(self._annotations):
+            if annotation.annotation_id not in selected_ids:
+                continue
+            payload = copy.deepcopy(annotation.payload)
+            if annotation.annotation_type in POLY_DRAW_TOOLS:
+                points = points_from_payload(payload)
+                payload["points"] = points_to_payload(
+                    [QPointF(point.x() + 16.0, point.y() + 16.0) for point in points]
+                )
+            duplicate = VideoAnnotationModel(
+                annotation_type=annotation.annotation_type,
+                start_ms=annotation.start_ms,
+                end_ms=annotation.end_ms,
+                x=annotation.x + 16.0,
+                y=annotation.y + 16.0,
+                width=annotation.width,
+                height=annotation.height,
+                stroke_rgba=list(annotation.stroke_rgba),
+                fill_rgba=list(annotation.fill_rgba),
+                stroke_width=annotation.stroke_width,
+                text=annotation.text,
+                font_size=annotation.font_size,
+                font_family=annotation.font_family,
+                font_bold=annotation.font_bold,
+                font_italic=annotation.font_italic,
+                font_underline=annotation.font_underline,
+                payload=payload,
+            )
+            self._annotations.append(duplicate)
+            duplicated_ids.add(duplicate.annotation_id)
+            self.annotation_created.emit(duplicate)
+
+        if not duplicated_ids:
+            return False
+
+        self._pending_selection_ids = frozenset(duplicated_ids)
+        self._last_action_label = "Duplicate selection"
+        self._rebuild_visible_items()
+        self.content_changed.emit()
+        return True
+
+    def bring_selected_forward(self) -> bool:
+        """
+        Moves selected annotations one step toward the front (painted last).
+
+        Returns:
+            bool: True when the paint order changed.
+        """
+
+        selected_ids = self._selected_unlocked_annotation_ids()
+        if not selected_ids:
+            return False
+        changed = False
+        for index in range(len(self._annotations) - 2, -1, -1):
+            current = self._annotations[index]
+            successor = self._annotations[index + 1]
+            if (
+                current.annotation_id in selected_ids
+                and successor.annotation_id not in selected_ids
+            ):
+                self._annotations[index], self._annotations[index + 1] = successor, current
+                changed = True
+        if changed:
+            self._last_action_label = "Change layer order"
+            self._rebuild_visible_items()
+            self.content_changed.emit()
+        return changed
+
+    def send_selected_backward(self) -> bool:
+        """
+        Moves selected annotations one step toward the back (painted first).
+
+        Returns:
+            bool: True when the paint order changed.
+        """
+
+        selected_ids = self._selected_unlocked_annotation_ids()
+        if not selected_ids:
+            return False
+        changed = False
+        for index in range(1, len(self._annotations)):
+            current = self._annotations[index]
+            predecessor = self._annotations[index - 1]
+            if (
+                current.annotation_id in selected_ids
+                and predecessor.annotation_id not in selected_ids
+            ):
+                self._annotations[index], self._annotations[index - 1] = predecessor, current
+                changed = True
+        if changed:
+            self._last_action_label = "Change layer order"
+            self._rebuild_visible_items()
+            self.content_changed.emit()
+        return changed
+
+    def bring_selected_to_front(self) -> bool:
+        """
+        Moves selected annotations to the topmost paint order.
+
+        Returns:
+            bool: True when the paint order changed.
+        """
+
+        selected_ids = self._selected_unlocked_annotation_ids()
+        if not selected_ids:
+            return False
+        others = [a for a in self._annotations if a.annotation_id not in selected_ids]
+        moved = [a for a in self._annotations if a.annotation_id in selected_ids]
+        if not moved or self._annotations == others + moved:
+            return False
+        self._annotations[:] = others + moved
+        self._last_action_label = "Bring to front"
+        self._rebuild_visible_items()
+        self.content_changed.emit()
+        return True
+
+    def send_selected_to_back(self) -> bool:
+        """
+        Moves selected annotations to the bottommost paint order.
+
+        Returns:
+            bool: True when the paint order changed.
+        """
+
+        selected_ids = self._selected_unlocked_annotation_ids()
+        if not selected_ids:
+            return False
+        others = [a for a in self._annotations if a.annotation_id not in selected_ids]
+        moved = [a for a in self._annotations if a.annotation_id in selected_ids]
+        if not moved or self._annotations == moved + others:
+            return False
+        self._annotations[:] = moved + others
+        self._last_action_label = "Send to back"
+        self._rebuild_visible_items()
+        self.content_changed.emit()
+        return True
+
+    def resize_selected_annotations(self, scale_factor: float) -> bool:
+        """
+        Resizes currently selected annotations by a scale factor around their
+        own center.
+
+        Args:
+            scale_factor: Multiplicative resize factor.
+
+        Returns:
+            bool: True when at least one annotation was resized.
+        """
+
+        if scale_factor <= 0:
+            return False
+        self._sync_visible_items_to_models()
+        selected_ids = self._selected_unlocked_annotation_ids()
+        if not selected_ids:
+            return False
+
+        # Drop the stale (pre-resize) graphics items for the affected
+        # annotations now, so the rebuild below does not resync their old,
+        # unscaled geometry back over the models we are about to update.
+        for annotation_id in selected_ids:
+            stale_item = self._visible_items.pop(annotation_id, None)
+            if stale_item is not None:
+                self._scene.removeItem(stale_item)
+
+        min_size = 2.0
+        changed = False
+        for annotation in self._annotations:
+            if annotation.annotation_id not in selected_ids:
+                continue
+            if annotation.annotation_type in POLY_DRAW_TOOLS:
+                points = points_from_payload(annotation.payload)
+                if len(points) < 2:
+                    continue
+                bounds = bounding_rect_from_points(points)
+                center = bounds.center()
+                new_points = [
+                    QPointF(
+                        center.x() + (point.x() - center.x()) * scale_factor,
+                        center.y() + (point.y() - center.y()) * scale_factor,
+                    )
+                    for point in points
+                ]
+                annotation.payload["points"] = points_to_payload(new_points)
+                new_bounds = bounding_rect_from_points(new_points)
+                annotation.x = new_bounds.x()
+                annotation.y = new_bounds.y()
+                annotation.width = max(min_size, new_bounds.width())
+                annotation.height = max(min_size, new_bounds.height())
+                changed = True
+                continue
+            center_x = annotation.x + annotation.width / 2.0
+            center_y = annotation.y + annotation.height / 2.0
+            new_width = max(min_size, annotation.width * scale_factor)
+            new_height = max(min_size, annotation.height * scale_factor)
+            annotation.x = center_x - new_width / 2.0
+            annotation.y = center_y - new_height / 2.0
+            annotation.width = new_width
+            annotation.height = new_height
+            changed = True
+
+        if changed:
+            self._pending_selection_ids = frozenset(selected_ids)
+            self._last_action_label = "Resize selection"
+            self._rebuild_visible_items()
+            self.content_changed.emit()
+        return changed
+
     def keyPressEvent(self, event: QKeyEvent) -> None:
         """
         Handles keyboard shortcuts for poly draw, delete, and cancel.
@@ -1890,6 +2191,9 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 self._cancel_poly_draw()
                 event.accept()
                 return
+            self.tool_lock_escape_requested.emit()
+            event.accept()
+            return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
             if self._tool in POLY_DRAW_TOOLS and self._poly_points:
                 self._finalize_poly_draw()

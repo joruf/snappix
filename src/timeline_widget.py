@@ -5,16 +5,19 @@ Snappix video editor.
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QResizeEvent, QWheelEvent
-from PySide6.QtWidgets import QScrollBar, QSizePolicy, QWidget
+from PySide6.QtGui import QColor, QContextMenuEvent, QMouseEvent, QPainter, QPen, QResizeEvent, QWheelEvent
+from PySide6.QtWidgets import QMenu, QScrollBar, QSizePolicy, QWidget
 
 from src.annotation_items import list_to_color
+from src.video_effects import track_effect_summary
 from src.video_models import VideoAnnotationModel
 
 LABEL_WIDTH = 160
 RULER_HEIGHT = 28
-ROW_HEIGHT = 26
+ROW_HEIGHT = 22
 ROW_SPACING = 4
 SCROLLBAR_WIDTH = 14
 EDGE_HIT_PX = 6
@@ -29,6 +32,12 @@ DRAG_MODE_PLAYHEAD = "playhead"
 DRAG_MODE_MOVE = "move"
 DRAG_MODE_START = "start"
 DRAG_MODE_END = "end"
+DRAG_MODE_ZOOM = "zoom"
+
+# Pixels of double-click-and-hold horizontal drag needed for one e-fold
+# (~2.72x) change in the visible time range. Smaller values make the
+# stretch/compress gesture more sensitive.
+ZOOM_DRAG_SENSITIVITY_PX = 160.0
 
 
 class TimelineWidget(QWidget):
@@ -41,6 +50,7 @@ class TimelineWidget(QWidget):
     annotation_time_changed = Signal(str, int, int)
     annotation_time_change_committed = Signal(str, int, int)
     annotation_selected = Signal(str)
+    effect_edit_requested = Signal(str)
 
     def __init__(self) -> None:
         """
@@ -63,6 +73,8 @@ class TimelineWidget(QWidget):
         self._view_start_ms = 0
         self._view_duration_ms = 1
         self._ctrl_nav_anchor_x: int | None = None
+        self._zoom_drag_anchor_x = 0
+        self._zoom_drag_last_x = 0
         self._scroll_y = 0
         self._vscroll = QScrollBar(Qt.Orientation.Vertical, self)
         self._vscroll.setVisible(False)
@@ -667,6 +679,9 @@ class TimelineWidget(QWidget):
             label = f"{annotation.annotation_type}"
             if annotation.text:
                 label += f": {annotation.text[:16]}"
+            effects_summary = track_effect_summary(annotation)
+            if effects_summary:
+                label += f" [{effects_summary}]"
             painter.setPen(QPen(QColor(220, 220, 220)))
             painter.drawText(
                 QRect(6, row.y(), LABEL_WIDTH - 10, row.height()),
@@ -744,6 +759,10 @@ class TimelineWidget(QWidget):
 
         hit = self._hit_test(pos)
         if hit is None:
+            # A plain click on empty track space also scrubs the playhead,
+            # matching the ruler's click-to-seek behavior.
+            self._drag_mode = DRAG_MODE_PLAYHEAD
+            self.seek_requested.emit(self._x_to_ms(pos.x()))
             return
         _index, annotation, mode = hit
         self._selected_id = annotation.annotation_id
@@ -755,6 +774,31 @@ class TimelineWidget(QWidget):
         self._drag_orig_end = annotation.end_ms
         self.grabMouse()
         self.update()
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        """
+        Arms a stretch/compress zoom drag anchored at the double-click point.
+
+        Holding the button after the second click and dragging left or right
+        compresses or stretches the visible time range around this anchor;
+        releasing ends the gesture. The anchor stays fixed under the cursor
+        for the whole drag, like a pinch-zoom gesture.
+
+        Args:
+            event: Mouse double-click event.
+
+        Returns:
+            None
+        """
+
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = event.position().toPoint()
+        self._drag_mode = DRAG_MODE_ZOOM
+        self._zoom_drag_anchor_x = pos.x()
+        self._zoom_drag_last_x = pos.x()
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.grabMouse()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         """
@@ -779,6 +823,14 @@ class TimelineWidget(QWidget):
 
         if self._drag_mode == DRAG_MODE_PLAYHEAD:
             self.seek_requested.emit(self._x_to_ms(pos.x()))
+            return
+
+        if self._drag_mode == DRAG_MODE_ZOOM:
+            delta_x = pos.x() - self._zoom_drag_last_x
+            if delta_x != 0:
+                factor = math.exp(-delta_x / ZOOM_DRAG_SENSITIVITY_PX)
+                self._zoom_at_x(self._zoom_drag_anchor_x, factor)
+                self._zoom_drag_last_x = pos.x()
             return
 
         if self._drag_mode and self._drag_annotation is not None:
@@ -855,6 +907,51 @@ class TimelineWidget(QWidget):
         if self.mouseGrabber() == self:
             self.releaseMouse()
         self.unsetCursor()
+
+    def contextMenuEvent(self, event: QContextMenuEvent) -> None:
+        """
+        Shows an "Add Effect..." context menu when right-clicking one
+        annotation's track bar.
+
+        Args:
+            event: Context menu event.
+
+        Returns:
+            None
+        """
+
+        pos = event.pos()
+        hit = self._hit_test(pos)
+        if hit is None:
+            return
+        _index, annotation, _mode = hit
+        self._selected_id = annotation.annotation_id
+        self.annotation_selected.emit(annotation.annotation_id)
+        self.update()
+
+        menu = self._build_effect_context_menu(annotation)
+        menu.exec(event.globalPos())
+
+    def _build_effect_context_menu(self, annotation: VideoAnnotationModel) -> QMenu:
+        """
+        Builds the right-click menu for one annotation's track bar.
+
+        Kept separate from :meth:`contextMenuEvent` so tests can trigger its
+        actions directly without spinning a real modal ``QMenu.exec`` loop.
+
+        Args:
+            annotation: Annotation the menu applies to.
+
+        Returns:
+            QMenu: Menu with an "Add Effect..." action wired up.
+        """
+
+        menu = QMenu(self)
+        effect_action = menu.addAction("Add Effect...")
+        effect_action.triggered.connect(
+            lambda: self.effect_edit_requested.emit(annotation.annotation_id)
+        )
+        return menu
 
     def wheelEvent(self, event: QWheelEvent) -> None:
         """

@@ -122,7 +122,9 @@ class TestDesignerPhase1(unittest.TestCase):
 
     def test_selection_width_change_records_history(self) -> None:
         """
-        Ensures changing a selected element's width creates one undo step.
+        Ensures changing a selected element's thickness from the Style panel
+        creates one undo step, while the Rect tool's popup (now defaults-only)
+        creates none.
         """
 
         window = EditorWindow(_solid_pixmap(120, 80))
@@ -140,9 +142,13 @@ class TestDesignerPhase1(unittest.TestCase):
         for item in window.canvas._annotation_items():  # pylint: disable=protected-access
             item.setSelected(True)
         before = len(window._history)  # pylint: disable=protected-access
+
         window._apply_tool_stroke_width(18, tool="rect", persist=False)  # pylint: disable=protected-access
+        self.assertEqual(len(window._history), before)  # pylint: disable=protected-access
+
+        window._style_thickness_changed(18)  # pylint: disable=protected-access
         self.assertEqual(len(window._history), before + 1)  # pylint: disable=protected-access
-        self.assertEqual(window._history_labels[-1], "Change border width")  # pylint: disable=protected-access
+        self.assertEqual(window._history_labels[-1], "Change border thickness")  # pylint: disable=protected-access
         window.close()
 
     def test_align_and_distribute_selection(self) -> None:

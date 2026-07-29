@@ -162,7 +162,11 @@ class TestToolStrokeWidthEditor(unittest.TestCase):
 
     def test_element_width_independent_of_tool_default(self) -> None:
         """
-        Ensures editing a selected element's width does not change tool defaults.
+        Ensures the Line tool's default-thickness popup and the Style panel's
+        per-element thickness control are fully independent: the popup only
+        ever changes the tool default (never a selected element), and the
+        Style panel only ever changes the selected element (never the
+        tool default).
         """
 
         pixmap = QPixmap(120, 90)
@@ -212,12 +216,23 @@ class TestToolStrokeWidthEditor(unittest.TestCase):
             if abs(float(item.pen().widthF()) - 12.0) < 0.1
         )
         thin.setSelected(True)
+
+        # The Line tool popup only ever edits the tool default now.
         window._apply_tool_stroke_width(20, tool=Tool.LINE, persist=False)  # pylint: disable=protected-access
-        self.assertEqual(int(thin.pen().widthF()), 20)
+        self.assertEqual(int(thin.pen().widthF()), 2)
         self.assertEqual(int(thick.pen().widthF()), 12)
         self.assertEqual(
             window._tool_stroke_widths["line"],  # pylint: disable=protected-access
-            8,
+            20,
+        )
+
+        # The Style panel's thickness slider only ever edits the selection.
+        window._style_thickness_changed(30)  # pylint: disable=protected-access
+        self.assertEqual(int(thin.pen().widthF()), 30)
+        self.assertEqual(int(thick.pen().widthF()), 12)
+        self.assertEqual(
+            window._tool_stroke_widths["line"],  # pylint: disable=protected-access
+            20,
         )
         window.close()
 

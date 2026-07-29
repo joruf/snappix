@@ -166,13 +166,14 @@ Flatpak modules too would be a much larger, slower build.
 
 ### Capture
 
-- Compact **Capture Panel** with delay (0–20 s)
-- Modes: **Fullscreen**, **Area**, **Color Picker**, **Capture Window**, **Scroll**; **Capture Video** when tools are present
+- Compact **Capture Panel** with delay (0–20 s); startup width fits the primary capture buttons on one row, with Color Picker/OCR/Open Editor wrapping below
+- Modes: **Fullscreen**, **Area**, **Color Picker**, **OCR** (select a region, recognized text is copied to clipboard — the screenshot itself is discarded), **Capture Window**, **Scroll**; **Capture Video** when tools are present
 - On Windows: Scroll uses Win32 PageDown (best-effort); Capture Video appears when `ffmpeg` is available
 - **Auto scroll capture** for long pages on Linux (scrollbar detect + stitch)
 - Post-capture: open editor, copy clipboard, or save to folder
 - Global hotkeys (defaults include `Ctrl+Shift+A/W/F/V/P/R`; unavailable modes are not registered)
 - Wayland region capture via `grim` + `slurp` when available
+- **Autostart mode**: launching via the OS boot/login entry (`--autostart`) keeps Snappix tray-only — no Capture window, no restored Editor tabs; a normal manual start is unaffected
 
 ### Video (X11)
 
@@ -182,6 +183,10 @@ Flatpak modules too would be a much larger, slower build.
 - Elapsed recording timer above the capture border
 - **Video Editor** tab: playback canvas, vector toolbar (parity with image editor), scrubbable **timeline** with page navigation
 - Time-ranged annotations (Rectangle, Ellipse, Line, Arrow, Text, …) with draggable/resizable bars
+- Timeline: click anywhere sets the playhead; double-click and hold, then drag left/right to stretch/compress the visible time range (shows a resize cursor while held)
+- **Entry/exit effects** per annotation: Fade, Zoom, and Slide, each applied at the object's start or end with its own duration — right-click a timeline bar → *Add Effect...*; applied effects are listed on the bar (e.g. `[Fade In, Zoom Out]`) and render live in the editor preview (MP4 export currently burns objects in at full visibility — animated effects are not yet baked into exported video)
+- Playback automatically rewinds to the start and re-arms the Play button once a clip finishes
+- Full menu parity with the Image editor where it makes sense for video: Duplicate, layer order (Bring Forward/Send Backward/Bring/Send to Front/Back), Copy/Paste Drawing Area, Scale Selection, Theme, Settings, Help (Flatten Annotations has no video equivalent — Export MP4 already burns annotations in permanently)
 - Save a re-editable project (`.sfpv`) or export a flattened MP4 with annotations burned in
 
 ### Editor
@@ -190,9 +195,10 @@ Flatpak modules too would be a much larger, slower build.
 - Drawing tools: Select, Rectangle, Ellipse, Line, Arrow, Text, Step, Crop, Polyline, Polygon, Bent Arrow, …
 - Pixel tools: Rect/Ellipse/Lasso selection, Magic Wand, Brush, Eraser, Fill, Eyedropper
 - Redaction: **Blur**; background paint: **Bg Fill**; **OCR** region → clipboard
-- **Per-tool menus** (Width, Hard, Style) with selection-aware updates
+- **Per-tool menus** (Thickness, Hard, Style) set the *default* for newly drawn objects — they no longer edit an existing selection
+- **Style panel**: selecting one drawn object shows its Thickness, Style, Radius (rectangles), and colors together, editable in place; hidden again on deselect or when multiple objects are selected (since they may have different settings)
 - Text tool menu: font, size, plain / box / bubble, spacing, padding
-- One-shot tools → return to Select; **double-click** locks a tool
+- One-shot tools → return to Select; **double-click** locks a tool; **Esc** unlocks it again
 - Layers, geometry inspector (`X/Y/W/H`), document footer when nothing is selected
 - History with labeled undo list; zoom, grid, snap, smart guides
 - Export PNG / JPEG / PDF / SVG, batch export profiles, print
@@ -201,7 +207,7 @@ Flatpak modules too would be a much larger, slower build.
 
 - Unsaved image and video tabs persist in a configurable **workspace folder** (default `~/.snappix/`)
 - Closing Snappix restores all open tabs on the next launch — annotations, timeline, and tab titles included
-- Closing a tab deletes that tab's workspace data; tabs with unsaved annotations ask for confirmation first
+- Closing a tab deletes that tab's workspace data; tabs with unsaved annotations ask via a Cancel / Close Tab dialog first
 - Auto-save every 30 s into the workspace
 
 ### Desktop integration

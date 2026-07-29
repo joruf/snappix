@@ -85,10 +85,10 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
     ToolHelpEntry(
         tool=Tool.BRUSH,
         name="Brush",
-        tooltip_blurb="soft freehand paint; tool menu: Width + Hard",
+        tooltip_blurb="soft freehand paint; tool menu: Thickness + Hard",
         description=(
             "Freehand soft brush on the screenshot using the Border color and opacity. "
-            "Open the Brush tool menu for Width and Hard (edge softness). "
+            "Open the Brush tool menu for Thickness and Hard (edge softness). "
             "If a pixel selection is active, painting stays inside it."
         ),
         shortcut_hint="B",
@@ -96,10 +96,10 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
     ToolHelpEntry(
         tool=Tool.ERASER,
         name="Eraser",
-        tooltip_blurb="soft freehand erase; tool menu: Width + Hard",
+        tooltip_blurb="soft freehand erase; tool menu: Thickness + Hard",
         description=(
             "Soft eraser that removes screenshot pixels. "
-            "Open the Eraser tool menu for Width and Hard. "
+            "Open the Eraser tool menu for Thickness and Hard. "
             "Border opacity controls erase strength. Clips to an active pixel selection."
         ),
         shortcut_hint="E",
@@ -127,32 +127,32 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
     ToolHelpEntry(
         tool=Tool.RECT,
         name="Rectangle",
-        tooltip_blurb="draw a rectangle; tool menu: Width, Style, Radius",
+        tooltip_blurb="draw a rectangle; tool menu: Thickness, Style, Radius",
         description=(
             "Draws a rectangle annotation on top of the screenshot. "
-            "Open the tool menu for Width, line Style, and corner Radius "
+            "Open the tool menu for Thickness, line Style, and corner Radius "
             "(0 = sharp corners)."
         ),
     ),
     ToolHelpEntry(
         tool=Tool.ELLIPSE,
         name="Ellipse",
-        tooltip_blurb="draw an ellipse; tool menu: Width + Style",
+        tooltip_blurb="draw an ellipse; tool menu: Thickness + Style",
         description=(
             "Draws an ellipse or circle annotation on top of the screenshot. "
-            "Open the tool menu for Width and line Style (solid/dash/dot)."
+            "Open the tool menu for Thickness and line Style (solid/dash/dot)."
         ),
     ),
     ToolHelpEntry(
         tool=Tool.TRIANGLE,
         name="Triangle",
-        tooltip_blurb="draw a triangle; tool menu: Width + Style",
+        tooltip_blurb="draw a triangle; tool menu: Thickness + Style",
         description="Draws a triangle annotation for warnings and directional callouts.",
     ),
     ToolHelpEntry(
         tool=Tool.STAR,
         name="Star",
-        tooltip_blurb="draw a star badge; tool menu: Width + Style",
+        tooltip_blurb="draw a star badge; tool menu: Thickness + Style",
         description="Draws a star badge to draw attention to an area.",
     ),
     ToolHelpEntry(
@@ -167,10 +167,10 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
     ToolHelpEntry(
         tool=Tool.LINE,
         name="Line",
-        tooltip_blurb="draw a straight line; tool menu: Width + Style",
+        tooltip_blurb="draw a straight line; tool menu: Thickness + Style",
         description=(
             "Draws a straight line annotation. "
-            "Open the tool menu for Width and line Style (solid/dash/dot)."
+            "Open the tool menu for Thickness and line Style (solid/dash/dot)."
         ),
     ),
     ToolHelpEntry(
@@ -185,16 +185,16 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
     ToolHelpEntry(
         tool=Tool.ARROW,
         name="Arrow",
-        tooltip_blurb="draw an arrow; tool menu: Width + Style",
+        tooltip_blurb="draw an arrow; tool menu: Thickness + Style",
         description=(
             "Draws an arrow annotation pointing from start to end. "
-            "Open the tool menu for Width and line Style (solid/dash/dot)."
+            "Open the tool menu for Thickness and line Style (solid/dash/dot)."
         ),
     ),
     ToolHelpEntry(
         tool=Tool.DOUBLE_ARROW,
         name="Double Arrow",
-        tooltip_blurb="draw a double-headed arrow; tool menu: Width + Style",
+        tooltip_blurb="draw a double-headed arrow; tool menu: Thickness + Style",
         description="Draws a double-headed arrow useful for distances and relationships.",
     ),
     ToolHelpEntry(

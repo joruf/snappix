@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 from src.config import (
     STYLE_AWARE_TOOLS,
     WIDTH_AWARE_TOOLS,
+    normalize_named_stroke_style,
     normalize_stroke_width,
     normalize_tool_stroke_styles,
     normalize_tool_stroke_widths,
@@ -95,6 +96,31 @@ _COLOR_TARGETS_BY_SELECTION: dict[str, frozenset[str]] = {
     "callout": _COLOR_TARGETS_TEXT,
 }
 _COLOR_SELECTION_CONTEXT_TOOLS = frozenset({Tool.SELECT})
+
+# Style-tab shape controls (thickness/style/radius) apply to a single-object
+# selection only -- never to the active tool -- since the per-tool popups
+# remain the place to set defaults for newly drawn objects. Text/callout are
+# intentionally excluded, matching the Image editor's Style panel.
+_SHAPE_THICKNESS_SELECTION_TYPES = frozenset(
+    {
+        "rect",
+        "ellipse",
+        "triangle",
+        "star",
+        "highlight",
+        "spotlight",
+        "cross",
+        "checkmark",
+        "line",
+        "arrow",
+        "double_arrow",
+        "polyline",
+        "polygon",
+        "bent_arrow",
+    }
+)
+_SHAPE_STYLE_SELECTION_TYPES = frozenset(STYLE_AWARE_TOOLS)
+_SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect"})
 
 _LOCKABLE_TOOLS = frozenset(
     {
@@ -304,6 +330,51 @@ class VideoVectorToolbar:
         text_widgets.append(self.text_alpha_label)
         style_widgets.extend(text_widgets)
 
+        shape_gap = self._create_gap()
+        self._color_group_gaps["shape"] = shape_gap
+        style_widgets.append(shape_gap)
+        shape_widgets: list[QWidget] = []
+
+        thickness_caption = QLabel("Thickness")
+        shape_widgets.append(thickness_caption)
+        self.style_thickness_slider = QSlider(Qt.Orientation.Horizontal)
+        self.style_thickness_slider.setRange(0, 64)
+        self.style_thickness_slider.setFixedWidth(72)
+        self.style_thickness_slider.setToolTip("Stroke thickness of the selected object.")
+        self.style_thickness_slider.valueChanged.connect(self._style_thickness_changed)
+        shape_widgets.append(self.style_thickness_slider)
+        self.style_thickness_label = QLabel("0")
+        shape_widgets.append(self.style_thickness_label)
+
+        style_caption = QLabel("Style")
+        shape_widgets.append(style_caption)
+        self.style_stroke_style_combo = QComboBox()
+        self.style_stroke_style_combo.addItem("Solid", STROKE_STYLE_SOLID)
+        self.style_stroke_style_combo.addItem("Dash", STROKE_STYLE_DASH)
+        self.style_stroke_style_combo.addItem("Dot", STROKE_STYLE_DOT)
+        self.style_stroke_style_combo.addItem("Dash dot", STROKE_STYLE_DASH_DOT)
+        self.style_stroke_style_combo.setToolTip("Line/border style of the selected object.")
+        self.style_stroke_style_combo.currentIndexChanged.connect(self._style_stroke_style_changed)
+        shape_widgets.append(self.style_stroke_style_combo)
+
+        radius_caption = QLabel("Radius")
+        shape_widgets.append(radius_caption)
+        self.style_radius_spin = QDoubleSpinBox()
+        self.style_radius_spin.setDecimals(1)
+        self.style_radius_spin.setSingleStep(1.0)
+        self.style_radius_spin.setRange(0.0, 200.0)
+        self.style_radius_spin.setFixedWidth(64)
+        self.style_radius_spin.setToolTip("Corner radius of the selected rectangle.")
+        self.style_radius_spin.valueChanged.connect(self._style_corner_radius_changed)
+        shape_widgets.append(self.style_radius_spin)
+
+        style_widgets.extend(shape_widgets)
+        self._shape_group_widgets = {
+            "thickness": [thickness_caption, self.style_thickness_slider, self.style_thickness_label],
+            "style": [style_caption, self.style_stroke_style_combo],
+            "radius": [radius_caption, self.style_radius_spin],
+        }
+
         self._color_target_widgets = {
             "stroke": stroke_widgets,
             "fill": fill_widgets,
@@ -363,6 +434,7 @@ class VideoVectorToolbar:
         self._selection_type = str(payload.get("type") or "").strip().lower()
         self._update_style_color_visibility(selection_type=self._selection_type)
         if self._selection_type in {"", "document"}:
+            self._restore_style_shape_controls()
             return
 
         stroke_rgba = payload.get("stroke_rgba")
@@ -403,6 +475,122 @@ class VideoVectorToolbar:
                 ),
                 apply_to_canvas=False,
             )
+
+        shape_targets = (
+            _SHAPE_THICKNESS_SELECTION_TYPES
+            | _SHAPE_STYLE_SELECTION_TYPES
+            | _SHAPE_RADIUS_SELECTION_TYPES
+        )
+        if self._selection_type in shape_targets:
+            self._sync_style_shape_controls(payload)
+        else:
+            self._restore_style_shape_controls()
+
+    def _sync_style_shape_controls(self, payload: dict[str, Any]) -> None:
+        """
+        Shows one selected object's thickness/style/radius in the Style panel.
+
+        Args:
+            payload: Selection payload.
+
+        Returns:
+            None
+        """
+
+        stroke_width = payload.get("stroke_width")
+        if isinstance(stroke_width, (int, float)) and self._selection_type in _SHAPE_THICKNESS_SELECTION_TYPES:
+            resolved = normalize_stroke_width(int(round(float(stroke_width))), minimum=0)
+            self.style_thickness_slider.blockSignals(True)
+            self.style_thickness_slider.setValue(resolved)
+            self.style_thickness_slider.blockSignals(False)
+            self.style_thickness_label.setText(str(resolved))
+
+        stroke_style = payload.get("stroke_style")
+        if isinstance(stroke_style, str) and self._selection_type in _SHAPE_STYLE_SELECTION_TYPES:
+            index = self.style_stroke_style_combo.findData(normalize_named_stroke_style(stroke_style))
+            if index >= 0:
+                self.style_stroke_style_combo.blockSignals(True)
+                self.style_stroke_style_combo.setCurrentIndex(index)
+                self.style_stroke_style_combo.blockSignals(False)
+
+        corner_radius = payload.get("corner_radius")
+        if isinstance(corner_radius, (int, float)) and self._selection_type in _SHAPE_RADIUS_SELECTION_TYPES:
+            self.style_radius_spin.blockSignals(True)
+            self.style_radius_spin.setValue(float(corner_radius))
+            self.style_radius_spin.blockSignals(False)
+
+    def _restore_style_shape_controls(self) -> None:
+        """
+        Resets the Style panel's thickness/style/radius controls to neutral
+        placeholder values while they are hidden (no single-object selection).
+
+        Returns:
+            None
+        """
+
+        self.style_thickness_slider.blockSignals(True)
+        self.style_thickness_slider.setValue(0)
+        self.style_thickness_slider.blockSignals(False)
+        self.style_thickness_label.setText("0")
+        self.style_stroke_style_combo.blockSignals(True)
+        self.style_stroke_style_combo.setCurrentIndex(0)
+        self.style_stroke_style_combo.blockSignals(False)
+        self.style_radius_spin.blockSignals(True)
+        self.style_radius_spin.setValue(0.0)
+        self.style_radius_spin.blockSignals(False)
+
+    def _style_thickness_changed(self, value: int) -> None:
+        """
+        Applies a thickness change from the Style panel to the current selection.
+
+        Args:
+            value: New stroke thickness in pixels.
+
+        Returns:
+            None
+        """
+
+        resolved = normalize_stroke_width(value, minimum=0)
+        self.style_thickness_label.setText(str(resolved))
+        self._canvas.update_style(
+            stroke_width=float(resolved),
+            apply_to_selection=True,
+            update_active_style=False,
+        )
+
+    def _style_stroke_style_changed(self, _index: int) -> None:
+        """
+        Applies a stroke-style change from the Style panel to the current selection.
+
+        Returns:
+            None
+        """
+
+        resolved = normalize_named_stroke_style(
+            str(self.style_stroke_style_combo.currentData() or STROKE_STYLE_SOLID)
+        )
+        self._canvas.update_style(
+            stroke_style=resolved,
+            apply_to_selection=True,
+            update_active_style=False,
+        )
+
+    def _style_corner_radius_changed(self, value: float) -> None:
+        """
+        Applies a corner-radius change from the Style panel to the selected rectangle.
+
+        Args:
+            value: New corner radius in pixels.
+
+        Returns:
+            None
+        """
+
+        self._canvas.set_rect_corner_radius(
+            max(0.0, float(value)),
+            apply_to_selection=True,
+            update_default=False,
+        )
 
     def show_tools_reference(self) -> None:
         """
@@ -623,6 +811,33 @@ class VideoVectorToolbar:
             return frozenset()
         return _COLOR_TARGETS_BY_TOOL.get(resolved_tool, frozenset())
 
+    def _resolve_style_shape_targets(self, selection_type: str | None) -> frozenset[str]:
+        """
+        Resolves which Style shape controls (thickness/style/radius) apply.
+
+        Unlike colors, shape controls only ever follow a single-object
+        selection -- never the active tool -- since per-tool popups remain
+        the place to set defaults for new draws.
+
+        Args:
+            selection_type: Selected annotation type, if any.
+
+        Returns:
+            frozenset[str]: Target keys among ``thickness``, ``style``, and ``radius``.
+        """
+
+        resolved = str(selection_type or "").strip().lower()
+        if not resolved or resolved == "document":
+            return frozenset()
+        targets = set()
+        if resolved in _SHAPE_THICKNESS_SELECTION_TYPES:
+            targets.add("thickness")
+        if resolved in _SHAPE_STYLE_SELECTION_TYPES:
+            targets.add("style")
+        if resolved in _SHAPE_RADIUS_SELECTION_TYPES:
+            targets.add("radius")
+        return frozenset(targets)
+
     def _update_style_color_visibility(
         self,
         *,
@@ -630,7 +845,8 @@ class VideoVectorToolbar:
         selection_type: str | None = None,
     ) -> None:
         """
-        Shows or hides the Style tab's color pickers to match the active tool/selection.
+        Shows or hides the Style tab's color/shape controls to match the
+        active tool/selection.
 
         Args:
             tool: Tool id to resolve for; defaults to the active tool.
@@ -647,14 +863,28 @@ class VideoVectorToolbar:
             visible = target_name in targets
             for widget in widgets:
                 widget.setVisible(visible)
+
+        resolved_selection_type = selection_type if selection_type is not None else self._selection_type
+        shape_targets = self._resolve_style_shape_targets(resolved_selection_type)
+        for target_name, widgets in self._shape_group_widgets.items():
+            visible = target_name in shape_targets
+            for widget in widgets:
+                widget.setVisible(visible)
+
         ordered = [name for name in ("stroke", "fill", "text") if name in targets]
         for gap_name, gap in self._color_group_gaps.items():
+            if gap_name == "shape":
+                continue
             if gap_name not in targets:
                 gap.setVisible(False)
                 continue
             index = ordered.index(gap_name) if gap_name in ordered else -1
             gap.setVisible(index > 0)
-        self._property_tabs.setTabVisible(0, bool(targets))
+        shape_gap = self._color_group_gaps.get("shape")
+        if shape_gap is not None:
+            shape_gap.setVisible(bool(shape_targets) and bool(targets))
+
+        self._property_tabs.setTabVisible(0, bool(targets) or bool(shape_targets))
 
     def _configure_menu_tool_button(self, button: QToolButton) -> None:
         """
@@ -707,13 +937,15 @@ class VideoVectorToolbar:
             root = QVBoxLayout(panel)
             root.setContentsMargins(10, 8, 10, 8)
             width_row = QHBoxLayout()
-            width_row.addWidget(QLabel("Width", panel))
+            width_row.addWidget(QLabel("Thickness", panel))
             slider = QSlider(Qt.Orientation.Horizontal, panel)
             slider.setRange(0, 64)
             slider.setValue(self._tool_stroke_widths.get(tool_key, 6))
             slider.setMinimumWidth(120)
             slider.setProperty("widthTool", tool_key)
-            slider.valueChanged.connect(self._tool_menu_width_changed)
+            slider.valueChanged.connect(
+                lambda value, key=tool_key: self._tool_menu_width_changed(key, value)
+            )
             width_row.addWidget(slider, 1)
             value_label = QLabel(str(slider.value()), panel)
             slider.valueChanged.connect(
@@ -736,7 +968,11 @@ class VideoVectorToolbar:
                 if style_index >= 0:
                     style_combo.setCurrentIndex(style_index)
                 style_combo.setProperty("styleTool", tool_key)
-                style_combo.currentIndexChanged.connect(self._tool_menu_style_changed)
+                style_combo.currentIndexChanged.connect(
+                    lambda _index, key=tool_key, combo=style_combo: self._tool_menu_style_changed(
+                        key, combo
+                    )
+                )
                 style_row.addWidget(style_combo, 1)
                 root.addLayout(style_row)
                 self._tool_style_combos[tool_key] = style_combo
@@ -749,7 +985,9 @@ class VideoVectorToolbar:
                 radius_spin.setRange(0.0, 200.0)
                 radius_spin.setValue(self._rect_corner_radius)
                 radius_spin.setProperty("radiusTool", tool_key)
-                radius_spin.valueChanged.connect(self._tool_menu_radius_changed)
+                radius_spin.valueChanged.connect(
+                    lambda value, key=tool_key: self._tool_menu_radius_changed(key, value)
+                )
                 radius_row.addWidget(radius_spin, 1)
                 root.addLayout(radius_row)
                 self._tool_radius_spins[tool_key] = radius_spin
@@ -759,21 +997,18 @@ class VideoVectorToolbar:
             button.setMenu(menu)
             self._configure_menu_tool_button(button)
 
-    def _tool_menu_width_changed(self, value: int) -> None:
+    def _tool_menu_width_changed(self, tool_key: str, value: int) -> None:
         """
         Stores a tool's stroke-width menu change and applies it if that tool is active.
 
         Args:
+            tool_key: Tool the changed slider belongs to.
             value: New stroke width in pixels.
 
         Returns:
             None
         """
 
-        slider = self.sender()
-        if not isinstance(slider, QSlider):
-            return
-        tool_key = str(slider.property("widthTool") or "")
         if not tool_key:
             return
         self._tool_stroke_widths[tool_key] = int(value)
@@ -782,21 +1017,18 @@ class VideoVectorToolbar:
             style.stroke_width = float(value)
             self._canvas.set_style(style)
 
-    def _tool_menu_style_changed(self, _index: int) -> None:
+    def _tool_menu_style_changed(self, tool_key: str, combo: QComboBox) -> None:
         """
         Stores a tool's stroke-style menu change and applies it if that tool is active.
 
         Args:
-            _index: New combo box index (unused; current data is read from the sender).
+            tool_key: Tool the changed combo box belongs to.
+            combo: Combo box holding the newly selected stroke style.
 
         Returns:
             None
         """
 
-        combo = self.sender()
-        if not isinstance(combo, QComboBox):
-            return
-        tool_key = str(combo.property("styleTool") or "")
         if not tool_key:
             return
         self._tool_stroke_styles[tool_key] = str(combo.currentData())
@@ -805,19 +1037,19 @@ class VideoVectorToolbar:
             style.stroke_style = str(combo.currentData())
             self._canvas.set_style(style)
 
-    def _tool_menu_radius_changed(self, value: float) -> None:
+    def _tool_menu_radius_changed(self, tool_key: str, value: float) -> None:
         """
         Applies a rectangle corner-radius menu change to new rectangle annotations.
 
         Args:
+            tool_key: Tool the changed spin box belongs to (always Tool.RECT today).
             value: New corner radius in pixels.
 
         Returns:
             None
         """
 
-        spin = self.sender()
-        if not isinstance(spin, QDoubleSpinBox):
+        if not tool_key:
             return
         self._rect_corner_radius = float(value)
         self._canvas.set_rect_corner_radius(self._rect_corner_radius)
@@ -888,6 +1120,20 @@ class VideoVectorToolbar:
 
         self._locked_tool = None
         self._update_tool_lock_visuals()
+
+    def clear_tool_lock_via_escape(self) -> None:
+        """
+        Unlocks a locked draw tool and returns to Select when Escape is
+        pressed on the canvas with no other cancellable state active.
+
+        Returns:
+            None
+        """
+
+        if self._locked_tool is None:
+            return
+        self._clear_tool_lock()
+        self._set_tool(Tool.SELECT)
 
     def _update_tool_lock_visuals(self) -> None:
         """

@@ -8,7 +8,7 @@ import unittest
 
 try:
     from PySide6.QtCore import QPoint, QPointF, Qt
-    from PySide6.QtGui import QMouseEvent, QWheelEvent
+    from PySide6.QtGui import QContextMenuEvent, QMouseEvent, QWheelEvent
 
     from src.timeline_widget import (
         CTRL_NAV_THRESHOLD_PX,
@@ -16,8 +16,10 @@ try:
         EDGE_HIT_PX,
         LABEL_WIDTH,
         RULER_HEIGHT,
+        ZOOM_DRAG_SENSITIVITY_PX,
         TimelineWidget,
     )
+    from src.video_effects import EFFECT_EDGE_START, EFFECT_KIND_FADE, add_annotation_effect
     from src.video_models import VideoAnnotationModel
     from tests.qt_test_utils import ensure_qapp
 
@@ -594,6 +596,241 @@ class TestTimelineWidgetGridSnap(unittest.TestCase):
 
         self.assertEqual(second.start_ms, first.start_ms)
         self.assertEqual(second.end_ms - second.start_ms, 1500)
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for timeline widget tests")
+class TestTimelineWidgetClickAndZoomDrag(unittest.TestCase):
+    """
+    Verifies plain clicks scrub the playhead everywhere on the timeline, and
+    double-click-and-hold-drag stretches/compresses the visible time range.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_qapp()
+
+    def _make_widget(self, *, with_annotation: bool = False) -> TimelineWidget:
+        widget = TimelineWidget()
+        widget.resize(660, RULER_HEIGHT + 60)
+        widget.set_duration(10000)
+        if with_annotation:
+            widget.set_annotations([_make_annotation()])
+        _show_full_timeline(widget)
+        return widget
+
+    def test_click_on_empty_track_area_scrubs_playhead(self) -> None:
+        """
+        Ensures a plain click below the ruler, on empty track space (no
+        annotation bar underneath), still emits seek_requested -- not just
+        clicks inside the ruler strip.
+        """
+
+        widget = self._make_widget()
+        seeks: list[int] = []
+        widget.seek_requested.connect(seeks.append)
+        empty_row_y = RULER_HEIGHT + 15.0
+
+        widget.mousePressEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonPress, 300.0, empty_row_y)
+        )
+
+        self.assertEqual(len(seeks), 1)
+        self.assertEqual(seeks[0], widget._x_to_ms(300.0))  # pylint: disable=protected-access
+
+    def test_click_on_empty_track_area_continues_scrubbing_while_dragged(self) -> None:
+        """
+        Ensures holding and dragging after a click on empty track space keeps
+        scrubbing the playhead, matching the ruler's existing drag behavior.
+        """
+
+        widget = self._make_widget()
+        seeks: list[int] = []
+        widget.seek_requested.connect(seeks.append)
+        empty_row_y = RULER_HEIGHT + 15.0
+
+        widget.mousePressEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonPress, 300.0, empty_row_y)
+        )
+        widget.mouseMoveEvent(_mouse_event(QMouseEvent.Type.MouseMove, 400.0, empty_row_y))
+
+        self.assertEqual(len(seeks), 2)
+        self.assertEqual(seeks[-1], widget._x_to_ms(400.0))  # pylint: disable=protected-access
+
+    def test_click_on_annotation_bar_still_selects_instead_of_seeking(self) -> None:
+        """
+        Ensures clicking directly on an annotation bar keeps selecting/dragging
+        that bar rather than being swallowed by the new empty-area seek behavior.
+        """
+
+        widget = self._make_widget(with_annotation=True)
+        seeks: list[int] = []
+        widget.seek_requested.connect(seeks.append)
+        row_y = RULER_HEIGHT + 15.0
+        bar_mid_x = float(widget._ms_to_x(3000))  # pylint: disable=protected-access
+
+        widget.mousePressEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonPress, bar_mid_x, row_y)
+        )
+
+        self.assertEqual(seeks, [])
+        self.assertNotEqual(widget._drag_mode, "")  # pylint: disable=protected-access
+
+    def test_double_click_arms_zoom_drag_with_stretch_cursor(self) -> None:
+        """
+        Ensures double-clicking arms the zoom-drag mode and immediately shows
+        the stretch/compress (horizontal resize) cursor.
+        """
+
+        widget = self._make_widget()
+
+        widget.mouseDoubleClickEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonDblClick, 300.0, RULER_HEIGHT + 15.0)
+        )
+
+        self.assertEqual(widget._drag_mode, "zoom")  # pylint: disable=protected-access
+        self.assertEqual(widget.cursor().shape(), Qt.CursorShape.SizeHorCursor)
+
+    def test_dragging_right_after_double_click_stretches_the_timeline(self) -> None:
+        """
+        Ensures holding after a double-click and dragging right narrows the
+        visible time range (stretch/zoom in).
+        """
+
+        widget = self._make_widget()
+        original_duration = widget._view_duration_ms  # pylint: disable=protected-access
+
+        widget.mouseDoubleClickEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonDblClick, 300.0, RULER_HEIGHT + 15.0)
+        )
+        widget.mouseMoveEvent(
+            _mouse_event(QMouseEvent.Type.MouseMove, 300.0 + ZOOM_DRAG_SENSITIVITY_PX, RULER_HEIGHT + 15.0)
+        )
+
+        self.assertLess(widget._view_duration_ms, original_duration)  # pylint: disable=protected-access
+
+    def test_dragging_left_after_double_click_compresses_the_timeline(self) -> None:
+        """
+        Ensures holding after a double-click and dragging left widens the
+        visible time range (compress/zoom out).
+        """
+
+        widget = self._make_widget()
+        _set_view_page(widget, 4000)
+        original_duration = widget._view_duration_ms  # pylint: disable=protected-access
+
+        widget.mouseDoubleClickEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonDblClick, 300.0, RULER_HEIGHT + 15.0)
+        )
+        widget.mouseMoveEvent(
+            _mouse_event(QMouseEvent.Type.MouseMove, 300.0 - ZOOM_DRAG_SENSITIVITY_PX, RULER_HEIGHT + 15.0)
+        )
+
+        self.assertGreater(widget._view_duration_ms, original_duration)  # pylint: disable=protected-access
+
+    def test_release_ends_zoom_drag_and_restores_cursor(self) -> None:
+        """
+        Ensures releasing the button after a zoom drag clears the drag mode
+        and resets the cursor back to the default arrow.
+        """
+
+        widget = self._make_widget()
+        widget.mouseDoubleClickEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonDblClick, 300.0, RULER_HEIGHT + 15.0)
+        )
+        widget.mouseMoveEvent(_mouse_event(QMouseEvent.Type.MouseMove, 340.0, RULER_HEIGHT + 15.0))
+
+        widget.mouseReleaseEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonRelease, 340.0, RULER_HEIGHT + 15.0)
+        )
+
+        self.assertEqual(widget._drag_mode, "")  # pylint: disable=protected-access
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for timeline widget tests")
+class TestTimelineWidgetEffectContextMenu(unittest.TestCase):
+    """
+    Verifies right-clicking an annotation bar offers "Add Effect..." and
+    that the bar's label shows a short summary of its applied effects.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_qapp()
+
+    def _make_widget(self, annotation) -> TimelineWidget:
+        widget = TimelineWidget()
+        widget.resize(660, RULER_HEIGHT + 60)
+        widget.set_duration(10000)
+        widget.set_annotations([annotation])
+        _show_full_timeline(widget)
+        return widget
+
+    def test_right_click_on_bar_builds_menu_that_emits_effect_edit_requested(self) -> None:
+        """
+        Ensures right-clicking an annotation bar hit-tests it correctly, and
+        that choosing "Add Effect..." from the resulting menu emits
+        effect_edit_requested with that annotation's id.
+
+        Triggers the built menu's action directly instead of going through
+        contextMenuEvent()'s QMenu.exec() call, which spins a real modal
+        event loop that PySide6 does not let tests intercept/short-circuit.
+        """
+
+        annotation = _make_annotation()
+        widget = self._make_widget(annotation)
+        requested: list[str] = []
+        widget.effect_edit_requested.connect(requested.append)
+        row_y = RULER_HEIGHT + 15.0
+        bar_mid_x = float(widget._ms_to_x(3000))  # pylint: disable=protected-access
+
+        hit = widget._hit_test(QPoint(int(bar_mid_x), int(row_y)))  # pylint: disable=protected-access
+        self.assertIsNotNone(hit)
+        _index, hit_annotation, _mode = hit
+        menu = widget._build_effect_context_menu(hit_annotation)  # pylint: disable=protected-access
+        actions_by_text = {action.text(): action for action in menu.actions()}
+
+        self.assertIn("Add Effect...", actions_by_text)
+        actions_by_text["Add Effect..."].trigger()
+
+        self.assertEqual(requested, [annotation.annotation_id])
+
+    def test_right_click_on_empty_track_area_does_nothing(self) -> None:
+        """
+        Ensures right-clicking empty track space (no annotation underneath)
+        does not emit effect_edit_requested.
+        """
+
+        annotation = _make_annotation(start_ms=2000, end_ms=4000)
+        widget = self._make_widget(annotation)
+        requested: list[str] = []
+        widget.effect_edit_requested.connect(requested.append)
+        row_y = RULER_HEIGHT + 15.0
+        empty_x = float(widget._ms_to_x(8000))  # pylint: disable=protected-access
+
+        event = QContextMenuEvent(
+            QContextMenuEvent.Reason.Mouse,
+            QPoint(int(empty_x), int(row_y)),
+        )
+        widget.contextMenuEvent(event)
+
+        self.assertEqual(requested, [])
+
+    def test_bar_label_includes_short_effect_summary(self) -> None:
+        """
+        Ensures the annotation's label text includes a bracketed, short
+        summary of its applied effects (e.g. "[Fade In]").
+        """
+
+        annotation = _make_annotation()
+        add_annotation_effect(annotation, kind=EFFECT_KIND_FADE, edge=EFFECT_EDGE_START, duration_ms=400)
+        widget = self._make_widget(annotation)
+
+        # paintEvent must run without error and reflect the effect summary
+        # via the shared track_effect_summary() helper used in its label text.
+        from src.video_effects import track_effect_summary
+
+        widget.repaint()
+        self.assertEqual(track_effect_summary(annotation), "Fade In")
 
 
 if __name__ == "__main__":

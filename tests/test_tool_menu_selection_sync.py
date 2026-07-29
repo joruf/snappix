@@ -34,9 +34,12 @@ class TestToolMenuSelectionSync(unittest.TestCase):
 
         cls._app = ensure_qapp()
 
-    def test_selected_line_shows_object_width_in_tool_menu(self) -> None:
+    def test_selected_line_keeps_tool_menu_at_default_but_updates_style_panel(self) -> None:
         """
-        Ensures selecting a line shows that line's width in the Line menu.
+        Ensures selecting a line leaves the Line tool's popup menu showing
+        the tool default (it always sets defaults for new draws now), while
+        the Style panel's own thickness/style controls show that line's
+        actual values instead.
         """
 
         pixmap = QPixmap(140, 100)
@@ -64,12 +67,14 @@ class TestToolMenuSelectionSync(unittest.TestCase):
 
         slider = window._tool_width_sliders[Tool.LINE]  # pylint: disable=protected-access
         combo = window._tool_style_combos[Tool.LINE]  # pylint: disable=protected-access
-        self.assertEqual(slider.value(), 14)
-        self.assertEqual(combo.currentData(), STROKE_STYLE_DASH)
+        self.assertEqual(slider.value(), 4)
+        self.assertEqual(combo.currentData(), STROKE_STYLE_SOLID)
         self.assertEqual(
             window._tool_stroke_widths["line"],  # pylint: disable=protected-access
             4,
         )
+        self.assertEqual(window.style_thickness_slider.value(), 14)
+        self.assertEqual(window.style_stroke_style_combo.currentData(), STROKE_STYLE_DASH)
         window.close()
 
     def test_deselect_restores_tool_menu_defaults(self) -> None:

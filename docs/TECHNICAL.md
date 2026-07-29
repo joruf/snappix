@@ -183,6 +183,8 @@ Accent styling: `build_editor_accent_stylesheet(theme)` on the host; capture pan
 - One row per annotation; draggable/resizable time-range bars
 - Full-width track area; page-based pan (`◀` / `▶`, Ctrl+drag, Ctrl+wheel zoom)
 - Initial view: full width for clips ≤20s; fixed 20s pages for longer clips (100s → five pages). Zoom/pan adjust afterward.
+- A plain click anywhere on the timeline (ruler or empty track space) scrubs the playhead; double-click and hold, then drag, stretches/compresses the visible time range around the double-click point (`SizeHorCursor` while held)
+- Right-click a bar → *Add Effect...* opens `EffectsDialog` (`src/effects_dialog.py`) to add/edit/remove Fade/Zoom/Slide entry/exit effects, stored per-annotation in `payload["effects"]` (see `src/video_effects.py`); the bar label shows a short summary (e.g. `[Fade In, Zoom Out]`). Effects render live via `apply_effect_render_state()` during playback/scrubbing; MP4 export does not yet interpolate them (out of scope — would need the export pipeline's per-segment static overlays reworked into finer time slices)
 
 ### Tool identifiers (image editor)
 
@@ -215,11 +217,11 @@ Stored in `config.json` and restored on tool switch / editor open:
 
 | Map | Tools | UI |
 |-----|-------|-----|
-| `tool_stroke_widths` | brush, eraser, rect, ellipse, line, arrow, text, … | Tool popup **Width** |
+| `tool_stroke_widths` | brush, eraser, rect, ellipse, line, arrow, text, … | Tool popup **Thickness** (config/JSON key kept as `tool_stroke_widths`/`stroke_width` for saved-file compatibility; only the UI label reads "Thickness") |
 | `tool_brush_hardness` | brush, eraser | Tool popup **Hard** |
 | `tool_stroke_styles` | rect, ellipse, line, arrow, … | Tool popup **Style** |
 
-With a matching selection, Width/Style updates apply to selected items instead of only the tool default.
+Tool popups (Thickness/Style/Radius) only ever set the tool's default for newly drawn objects — they no longer edit a live selection. Editing an existing object's thickness/style/(rect) radius happens via the **Style property tab** instead, alongside its colors; that tab shows only a single selected object's settings and hides entirely when nothing, or more than one object, is selected. Both `EditorWindow` and `VideoVectorToolbar` implement this the same way (`_SHAPE_THICKNESS_SELECTION_TYPES` / `_SHAPE_STYLE_SELECTION_TYPES` / `_SHAPE_RADIUS_SELECTION_TYPES`, kept in sync by `tests/test_editor_video_parity.py`). Brush/eraser hardness has no selectable object to re-edit (baked into raster pixels at draw time), so it stays tool-default-only in both editors.
 
 ### History and autosave
 
@@ -344,7 +346,7 @@ Path: `~/.config/snappix/config.json`
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `autostart_enabled` | bool | `false` | XDG autostart |
+| `autostart_enabled` | bool | `false` | XDG autostart; the generated autostart entry launches with `--autostart`, which keeps the app tray-only (no Capture window, no restored Editor tabs) — see `run.py:_autostart_login_exec_command` / `AppController(autostart_launch=...)` |
 | `theme` | str | `"dark"` | `dark` / `light` / `slate` / `sepia` |
 | `hotkeys_enabled` | bool | `true` | Global shortcuts |
 | `hotkey_capture_region` | str | `ctrl+shift+a` | Area hotkey |
@@ -397,9 +399,10 @@ Reliable on X11; Wayland depends on the compositor.
 
 ## OCR
 
-1. OCR tool → drag region.
-2. Composited crop → temp PNG.
-3. `tesseract` CLI → clipboard (+ status bar message).
+Two entry points share `src/ocr.py`'s `extract_text_from_png_bytes()`:
+
+1. **Editor OCR tool** (`Tool.OCR`) → drag a region on an open document → composited crop → temp PNG → `tesseract` CLI → clipboard (+ status bar message).
+2. **Capture panel OCR button** (`src/capture.py:execute_text_recognition`) → drag a region directly off the screen (like Capture Area) → the captured pixmap is run through OCR and discarded; only the recognized text is copied to the clipboard. Hidden automatically when `tesseract` isn't installed (`CapturePanel.set_text_recognition_available`).
 
 Requires `tesseract` on `PATH`.
 
@@ -466,3 +469,4 @@ System (installed on demand): `xdotool`, `x11-utils`, `tesseract-ocr`, `grim`, `
 - OCR quality depends on Tesseract language packs and image clarity.
 - Embedding `QMainWindow` tabs is intentional but unusual; destroy/autosave paths must keep Qt object validity checks.
 - Changing the workspace folder in settings applies on next path resolution; migrate data manually if needed.
+- Video annotation entry/exit effects (Fade/Zoom/Slide) render live in the editor but are not yet baked into MP4 export; the export pipeline currently burns each visibility segment in as a single static overlay, which has no notion of a mid-segment animation.

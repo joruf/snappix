@@ -221,6 +221,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
     crop_selection_changed = Signal(bool)
     crop_applied = Signal()
     status_message = Signal(str)
+    tool_lock_escape_requested = Signal()
 
     def __init__(self) -> None:
         """
@@ -1109,23 +1110,29 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         radius: float,
         *,
         apply_to_selection: bool = True,
+        update_default: bool = True,
         emit_history: bool = True,
     ) -> None:
         """
-        Updates the rectangle corner radius for new draws and optional selection.
+        Updates the rectangle corner radius for new draws and/or a selection.
 
         Args:
             radius: Corner radius in pixels (0 = sharp corners).
             apply_to_selection: When True, updates selected rectangle items.
+            update_default: When False, leaves the tool's default radius
+                unchanged and only updates the selection (per-element edits
+                from the Style toolbar, as opposed to the tool menu's default).
             emit_history: When True, records a history entry after selection edits.
 
         Returns:
             None
         """
 
-        self._rect_corner_radius = max(0.0, float(radius))
+        if update_default:
+            self._rect_corner_radius = max(0.0, float(radius))
         if not apply_to_selection:
             return
+        radius = max(0.0, float(radius))
         changed = False
         for item in self._selected_annotation_items():
             if bool(item.data(ITEM_ROLE_LOCKED) or False):
@@ -1133,7 +1140,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             if str(item.data(ITEM_ROLE_TYPE) or "") != "rect":
                 continue
             if isinstance(item, PathShapeItem):
-                item.set_corner_radius(self._rect_corner_radius)
+                item.set_corner_radius(radius)
                 changed = True
         if changed and emit_history:
             self._emit_content_changed("Change rectangle radius")
@@ -3421,6 +3428,8 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             if self.has_pixel_selection():
                 self.clear_pixel_selection()
                 return
+            self.tool_lock_escape_requested.emit()
+            return
         if event.key() == Qt.Key.Key_Delete:
             if self.has_pending_crop() and self._crop_item is not None and self._crop_item.isSelected():
                 self.cancel_crop()

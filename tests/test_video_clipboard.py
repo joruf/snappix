@@ -200,6 +200,44 @@ class TestVideoEditorWindowClipboard(unittest.TestCase):
         self.assertEqual(pasted.annotation_type, annotation.annotation_type)
         self.assertNotEqual(pasted.annotation_id, annotation.annotation_id)
 
+    def test_copy_drawing_area_ignores_selection_and_copies_everything(self) -> None:
+        """
+        Ensures "Copy Drawing Area" copies every annotation in the tab, not
+        just the selected ones, mirroring the Image editor's equivalent action.
+        """
+
+        source_editor = self._make_editor()
+        selected = _sample_annotation(10.0, 10.0, 0, 1000)
+        unselected = _sample_annotation(60.0, 10.0, 0, 1000)
+        source_editor.canvas.set_annotations([selected, unselected])
+        source_editor.canvas._visible_items[selected.annotation_id].setSelected(  # pylint: disable=protected-access
+            True
+        )
+
+        source_editor.copy_drawing_area_to_clipboard()
+
+        mime = QGuiApplication.clipboard().mimeData()
+        self.assertTrue(mime.hasFormat(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME))
+        payload = json.loads(bytes(mime.data(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME)).decode("utf-8"))
+        self.assertEqual(len(payload.get("annotations") or []), 2)
+
+        target_editor = self._make_editor()
+        target_editor.paste_annotations_from_clipboard()
+        self.assertEqual(len(target_editor.canvas.annotations()), 2)
+
+    def test_copy_drawing_area_with_no_annotations_is_a_no_op(self) -> None:
+        """
+        Ensures "Copy Drawing Area" does nothing when the tab has no annotations.
+        """
+
+        editor = self._make_editor()
+        QGuiApplication.clipboard().clear()
+
+        editor.copy_drawing_area_to_clipboard()
+
+        mime = QGuiApplication.clipboard().mimeData()
+        self.assertFalse(mime is not None and mime.hasFormat(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME))
+
 
 if __name__ == "__main__":
     unittest.main()

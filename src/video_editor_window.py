@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QEvent, QMimeData, Qt, QSize, Signal
-from PySide6.QtGui import QAction, QColor, QGuiApplication
+from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QSizePolicy,
     QSlider,
@@ -34,8 +35,10 @@ from src.clipboard_json import get_json_clipboard_data, set_json_clipboard_data
 from src.draw_style_defaults import create_default_style_state
 from src.history_mixin import EditorHistoryMixin
 from src.shortcut_registry_mixin import ShortcutRegistryMixin
-from src.constants import APP_NAME
+from src.constants import APP_NAME, build_about_dialog_html
 from src.flow_layout import FlowLayoutWidget
+from src.shortcuts import build_shortcuts_reference_text
+from src.theme import THEME_DARK, THEME_LIGHT, THEME_SEPIA, THEME_SLATE, get_theme_colors
 from src.timeline_widget import TimelineWidget
 from src.tool_icons import build_playback_icon
 from src.video_canvas import VideoCanvas
@@ -60,6 +63,8 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
     content_changed = Signal()
     import_image_tab_requested = Signal()
     import_video_tab_requested = Signal()
+    theme_changed = Signal(str)
+    settings_requested = Signal()
 
     def __init__(self, video_path: str, video_width: int, video_height: int) -> None:
         """
@@ -115,6 +120,8 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.canvas.content_changed.connect(self._on_canvas_content_changed)
         self.canvas.selection_style_changed.connect(self._vector_toolbar.on_selection_style_changed)
         self.canvas.zoom_changed.connect(self._on_zoom_changed)
+        self.canvas.playback_finished.connect(self._on_playback_finished)
+        self.canvas.tool_lock_escape_requested.connect(self._vector_toolbar.clear_tool_lock_via_escape)
 
         self.timeline = TimelineWidget()
         self.timeline.set_annotations(self._annotations)
@@ -123,6 +130,7 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.timeline.annotation_time_change_committed.connect(
             self._on_annotation_time_committed
         )
+        self.timeline.effect_edit_requested.connect(self._on_effect_edit_requested)
 
         self.timeline_pan_left = QToolButton()
         self.timeline_pan_left.setText("◀")
@@ -176,6 +184,8 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         file_menu = self.menuBar().addMenu("File")
         edit_menu = self.menuBar().addMenu("Edit")
+        view_menu = self.menuBar().addMenu("View")
+        help_menu = self.menuBar().addMenu("Help")
 
         import_image_tab_action = QAction("Import Image as New Tab...", self)
         import_image_tab_action.setToolTip(
@@ -203,6 +213,44 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         export_action.triggered.connect(self.export_mp4)
         file_menu.addAction(export_action)
 
+        file_menu.addSeparator()
+
+        close_action = QAction("Close", self)
+        close_action.setToolTip("Close this editor tab.")
+        close_action.triggered.connect(self.close)
+        file_menu.addAction(close_action)
+        self._register_shortcut_action("close_tab", close_action)
+
+        duplicate_action = QAction("Duplicate", self)
+        duplicate_action.setToolTip("Duplicates the selected drawn objects with a small offset.")
+        duplicate_action.triggered.connect(self.canvas.duplicate_selected_annotations)
+        edit_menu.addAction(duplicate_action)
+        self._register_shortcut_action("duplicate", duplicate_action)
+
+        edit_menu.addSeparator()
+
+        bring_forward_action = QAction("Bring Forward", self)
+        bring_forward_action.setToolTip("Move selection one layer up.")
+        bring_forward_action.triggered.connect(self.canvas.bring_selected_forward)
+        edit_menu.addAction(bring_forward_action)
+
+        send_backward_action = QAction("Send Backward", self)
+        send_backward_action.setToolTip("Move selection one layer down.")
+        send_backward_action.triggered.connect(self.canvas.send_selected_backward)
+        edit_menu.addAction(send_backward_action)
+
+        bring_to_front_action = QAction("Bring to Front", self)
+        bring_to_front_action.setToolTip("Move selection to the top layer.")
+        bring_to_front_action.triggered.connect(self.canvas.bring_selected_to_front)
+        edit_menu.addAction(bring_to_front_action)
+
+        send_to_back_action = QAction("Send to Back", self)
+        send_to_back_action.setToolTip("Move selection to the bottom layer.")
+        send_to_back_action.triggered.connect(self.canvas.send_selected_to_back)
+        edit_menu.addAction(send_to_back_action)
+
+        edit_menu.addSeparator()
+
         import_image_action = QAction("Import Image...", self)
         import_image_action.setToolTip(
             "Insert an image overlay on the current video at the playhead."
@@ -228,6 +276,20 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         edit_menu.addAction(paste_action)
         self._register_shortcut_action("paste", paste_action)
 
+        copy_drawing_area_action = QAction("Copy Drawing Area", self)
+        copy_drawing_area_action.setToolTip(
+            "Copies every drawn object in this tab, regardless of selection."
+        )
+        copy_drawing_area_action.triggered.connect(self.copy_drawing_area_to_clipboard)
+        edit_menu.addAction(copy_drawing_area_action)
+        self._register_shortcut_action("copy_drawing_area", copy_drawing_area_action)
+
+        paste_drawing_area_action = QAction("Paste Drawing Area", self)
+        paste_drawing_area_action.setToolTip("Pastes a copied drawing area into this tab.")
+        paste_drawing_area_action.triggered.connect(self.paste_annotations_from_clipboard)
+        edit_menu.addAction(paste_drawing_area_action)
+        self._register_shortcut_action("paste_drawing_area", paste_drawing_area_action)
+
         edit_menu.addSeparator()
 
         self.undo_action = QAction("Undo", self)
@@ -241,8 +303,6 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.redo_action.triggered.connect(self.redo)
         edit_menu.addAction(self.redo_action)
         self._register_shortcut_action("redo", self.redo_action)
-
-        view_menu = self.menuBar().addMenu("View")
 
         zoom_in_action = QAction("Zoom In", self)
         zoom_in_action.setToolTip("Zooms into the video canvas.")
@@ -261,6 +321,63 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         zoom_reset_action.triggered.connect(self.canvas.reset_zoom)
         view_menu.addAction(zoom_reset_action)
         self._register_shortcut_action("zoom_reset", zoom_reset_action)
+
+        scale_up_action = QAction("Scale Selection Up", self)
+        scale_up_action.setToolTip("Scale the current selection larger.")
+        scale_up_action.triggered.connect(lambda: self.canvas.resize_selected_annotations(1.1))
+        view_menu.addAction(scale_up_action)
+        self._register_shortcut_action("scale_selection_up", scale_up_action)
+
+        scale_down_action = QAction("Scale Selection Down", self)
+        scale_down_action.setToolTip("Scale the current selection smaller.")
+        scale_down_action.triggered.connect(lambda: self.canvas.resize_selected_annotations(0.9))
+        view_menu.addAction(scale_down_action)
+        self._register_shortcut_action("scale_selection_down", scale_down_action)
+
+        view_menu.addSeparator()
+
+        theme_menu = view_menu.addMenu("Theme")
+        self._theme_action_group = QActionGroup(self)
+        self._theme_action_group.setExclusive(True)
+        self.theme_dark_action = QAction("Dark", self)
+        self.theme_dark_action.setCheckable(True)
+        self.theme_dark_action.setToolTip("Use the dark application theme.")
+        self.theme_dark_action.triggered.connect(lambda: self.theme_changed.emit(THEME_DARK))
+        self._theme_action_group.addAction(self.theme_dark_action)
+        theme_menu.addAction(self.theme_dark_action)
+        self.theme_light_action = QAction("Light", self)
+        self.theme_light_action.setCheckable(True)
+        self.theme_light_action.setToolTip("Use the light application theme.")
+        self.theme_light_action.triggered.connect(lambda: self.theme_changed.emit(THEME_LIGHT))
+        self._theme_action_group.addAction(self.theme_light_action)
+        theme_menu.addAction(self.theme_light_action)
+        self.theme_slate_action = QAction("Slate", self)
+        self.theme_slate_action.setCheckable(True)
+        self.theme_slate_action.setToolTip("Use the cool slate application theme.")
+        self.theme_slate_action.triggered.connect(lambda: self.theme_changed.emit(THEME_SLATE))
+        self._theme_action_group.addAction(self.theme_slate_action)
+        theme_menu.addAction(self.theme_slate_action)
+        self.theme_sepia_action = QAction("Sepia", self)
+        self.theme_sepia_action.setCheckable(True)
+        self.theme_sepia_action.setToolTip("Use the warm sepia application theme.")
+        self.theme_sepia_action.triggered.connect(lambda: self.theme_changed.emit(THEME_SEPIA))
+        self._theme_action_group.addAction(self.theme_sepia_action)
+        theme_menu.addAction(self.theme_sepia_action)
+
+        settings_action = QAction("Settings...", self)
+        settings_action.setToolTip("Configure hotkeys, shortcuts, and capture behavior.")
+        settings_action.triggered.connect(self.settings_requested.emit)
+        view_menu.addAction(settings_action)
+
+        about_action = QAction("About", self)
+        about_action.setToolTip("Show application information.")
+        about_action.triggered.connect(self.show_about)
+        help_menu.addAction(about_action)
+
+        manual_action = QAction("Manual", self)
+        manual_action.setToolTip("Show a short manual and the current keyboard shortcuts.")
+        manual_action.triggered.connect(self.show_manual)
+        help_menu.addAction(manual_action)
 
         self.apply_editor_shortcuts({})
 
@@ -316,6 +433,32 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         count = len(annotations)
         label = "object" if count == 1 else "objects"
         self.statusBar().showMessage(f"Copied {count} {label}", 3500)
+
+    def copy_drawing_area_to_clipboard(self) -> None:
+        """
+        Copies every drawn object in this tab, regardless of selection, so
+        the whole drawing area can be pasted into another video tab.
+
+        Returns:
+            None
+        """
+
+        annotations = self.canvas.annotations()
+        if not annotations:
+            self.statusBar().showMessage("No annotations to copy", 2500)
+            return
+
+        payload = {
+            "kind": "video_annotations",
+            "annotations": [annotation.to_dict() for annotation in annotations],
+        }
+        mime_data = QMimeData()
+        set_json_clipboard_data(mime_data, _VIDEO_ANNOTATIONS_CLIPBOARD_MIME, payload)
+        QGuiApplication.clipboard().setMimeData(mime_data)
+
+        count = len(annotations)
+        label = "object" if count == 1 else "objects"
+        self.statusBar().showMessage(f"Copied drawing area ({count} {label})", 3500)
 
     def paste_annotations_from_clipboard(self) -> None:
         """
@@ -706,6 +849,21 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         else:
             self.canvas.play()
         self._is_playing = not self._is_playing
+        self._sync_playback_action_icons()
+
+    def _on_playback_finished(self) -> None:
+        """
+        Resets playback UI once the video plays through to its end.
+
+        The canvas has already rewound the playhead to the start; this only
+        needs to resync the Play/Pause button so playback can be started
+        again immediately.
+
+        Returns:
+            None
+        """
+
+        self._is_playing = False
         self._sync_playback_action_icons()
 
     def _stop_playback(self) -> None:
@@ -1157,6 +1315,38 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._push_history_state()
         self._mark_dirty()
 
+    def _on_effect_edit_requested(self, annotation_id: str) -> None:
+        """
+        Opens the Effects dialog for one annotation and applies the result.
+
+        Args:
+            annotation_id: Id of the annotation to edit effects for.
+
+        Returns:
+            None
+        """
+
+        from src.effects_dialog import EffectsDialog
+        from src.video_effects import set_annotation_effects
+
+        annotation = next(
+            (item for item in self._annotations if item.annotation_id == annotation_id),
+            None,
+        )
+        if annotation is None:
+            return
+
+        dialog = EffectsDialog(annotation, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+
+        set_annotation_effects(annotation, dialog.effects())
+        self.canvas.refresh_visible_items()
+        self.timeline.update()
+        self._set_next_history_label("Change effects")
+        self._push_history_state()
+        self._mark_dirty()
+
     def _mark_dirty(self) -> None:
         """
         Marks the project as having unsaved changes.
@@ -1188,14 +1378,104 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         if not self.has_annotations():
             return True
-        answer = QMessageBox.question(
-            self,
-            "Close Tab",
-            "This video has unsaved annotations. Close it anyway?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+        from src.close_tab_dialog import confirm_close_tab
+
+        return confirm_close_tab(self, "This video has unsaved annotations. Close it anyway?")
+
+    def set_theme_selection(self, theme_name: str) -> None:
+        """
+        Updates theme menu actions without emitting change signal.
+
+        Args:
+            theme_name: Theme identifier to select.
+
+        Returns:
+            None
+        """
+
+        from src.theme import normalize_theme_name
+
+        normalized = normalize_theme_name(theme_name)
+        actions = (
+            self.theme_dark_action,
+            self.theme_light_action,
+            self.theme_slate_action,
+            self.theme_sepia_action,
         )
-        return answer == QMessageBox.StandardButton.Yes
+        for action in actions:
+            action.blockSignals(True)
+        self.theme_dark_action.setChecked(normalized == THEME_DARK)
+        self.theme_light_action.setChecked(normalized == THEME_LIGHT)
+        self.theme_slate_action.setChecked(normalized == THEME_SLATE)
+        self.theme_sepia_action.setChecked(normalized == THEME_SEPIA)
+        for action in actions:
+            action.blockSignals(False)
+
+    def show_about(self) -> None:
+        """
+        Displays About dialog information with clickable website links.
+
+        Returns:
+            None
+        """
+
+        box = QMessageBox(self)
+        box.setWindowTitle(f"About {APP_NAME}")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setTextFormat(Qt.TextFormat.RichText)
+        box.setText(build_about_dialog_html())
+        box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        # QMessageBox labels do not open links unless explicitly enabled.
+        colors = get_theme_colors()
+        for label in box.findChildren(QLabel):
+            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+            label.setOpenExternalLinks(True)
+            label.setStyleSheet(
+                f"QLabel {{ color: {colors.text}; }}"
+                f"QLabel a {{ color: {colors.link}; text-decoration: underline; }}"
+            )
+        box.exec()
+
+    def show_manual(self) -> None:
+        """
+        Displays a short manual and the currently configured shortcuts.
+
+        Returns:
+            None
+        """
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Manual")
+        dialog.setModal(True)
+        dialog.resize(720, 560)
+        dialog.setMinimumSize(640, 420)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(10)
+
+        text = QPlainTextEdit(dialog)
+        text.setReadOnly(True)
+        text.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        text.setPlainText(
+            "How it works:\n"
+            "1) Record or import a video.\n"
+            "2) Annotate with time-based tools in the top bar and timeline.\n"
+            "3) Save the project or export a flattened MP4 from the File menu.\n\n"
+            + build_shortcuts_reference_text(self._editor_shortcut_overrides)
+        )
+        text.setUndoRedoEnabled(False)
+        text.moveCursor(QTextCursor.MoveOperation.Start)
+        layout.addWidget(text, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
+        close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
+        if close_button is not None:
+            close_button.clicked.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        dialog.exec()
 
     def set_minimize_to_tray_on_close(self, enabled: bool) -> None:
         """

@@ -348,8 +348,18 @@ class CapturePanel(QWidget):
         self.recognize_text_button.clicked.connect(self.text_recognition_requested.emit)
         button_widgets.append(self.recognize_text_button)
 
+        # Only the primary (accent-colored) capture-mode buttons define the
+        # startup row width -- the color picker, OCR, and Open Editor controls
+        # are expected to wrap onto the row(s) below on first show.
+        self._primary_capture_buttons = [
+            self.capture_fullscreen_button,
+            self.capture_area_button,
+            self.capture_window_button,
+            self.capture_scroll_button,
+            self.capture_video_button,
+        ]
         self._capture_buttons_row_width = self._measure_row_width(
-            button_widgets, buttons_flow.flow_layout.horizontalSpacing()
+            self._primary_capture_buttons, buttons_flow.flow_layout.horizontalSpacing()
         )
         self._buttons_flow = buttons_flow
 
@@ -396,11 +406,7 @@ class CapturePanel(QWidget):
         ]
         visible_buttons = [button for button in candidates if not button.isHidden()]
         self._buttons_flow.set_flow_widgets(visible_buttons)
-        row_buttons = [
-            button
-            for button in candidates
-            if button is not self.open_editor_button and not button.isHidden()
-        ]
+        row_buttons = [button for button in self._primary_capture_buttons if not button.isHidden()]
         self._capture_buttons_row_width = self._measure_row_width(
             row_buttons,
             self._buttons_flow.flow_layout.horizontalSpacing(),
@@ -587,9 +593,10 @@ class CapturePanel(QWidget):
 
     def _apply_initial_window_geometry(self) -> None:
         """
-        Applies the initial size (wide enough for all capture buttons on one row,
-        the Open Editor link wrapping below, and no more height than needed) and
-        top-right position once per run.
+        Applies the initial size (wide enough for the primary capture-mode
+        buttons on one row, with the color picker, OCR, and Open Editor
+        controls wrapping onto the row(s) below, and no more height than
+        needed) and top-right position once per run.
 
         Returns:
             None
@@ -597,10 +604,11 @@ class CapturePanel(QWidget):
 
         if self._initial_position_done:
             return
-        # Temporarily force the flow container's minimum width to fit all capture
-        # buttons on one row, so adjustSize()/minimumSizeHint() below compute the
-        # window's default size (and height-for-width row count) around that row
-        # width analytically, without depending on a live resize round-trip.
+        # Temporarily force the flow container's minimum width to fit the primary
+        # capture buttons on one row, so adjustSize()/minimumSizeHint() below
+        # compute the window's default size (and height-for-width row count)
+        # around that row width analytically, without depending on a live
+        # resize round-trip.
         self._buttons_flow.setMinimumWidth(self._capture_buttons_row_width)
         self.adjustSize()
         target_size = self.minimumSizeHint()

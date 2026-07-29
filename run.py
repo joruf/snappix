@@ -390,6 +390,19 @@ def _autostart_exec_command() -> str:
     return f'python3 "{script_path}"'
 
 
+def _autostart_login_exec_command() -> str:
+    """
+    Builds the launch command used specifically by the boot/login autostart
+    entry, so Snappix knows to stay tray-only on that particular launch.
+
+    Returns:
+        str: Command string for the OS autostart entry (desktop file or
+            Startup batch file), including the ``--autostart`` flag.
+    """
+
+    return f"{_autostart_exec_command()} --autostart"
+
+
 def _user_desktop_dir() -> Path:
     """
     Resolves the user's desktop folder with XDG and localization fallback.
@@ -603,12 +616,21 @@ class AppController:
     Coordinates capture panel, editor windows, and app settings.
     """
 
-    def __init__(self, app: QApplication, startup_project_path: str = "") -> None:
+    def __init__(
+        self,
+        app: QApplication,
+        startup_project_path: str = "",
+        autostart_launch: bool = False,
+    ) -> None:
         """
         Initializes controller state.
 
         Args:
             app: Qt application instance.
+            startup_project_path: Optional project path to open at startup.
+            autostart_launch: True when launched from the OS boot/login
+                autostart entry -- the Capture panel and Editor stay closed
+                and only the system tray icon is shown.
         """
 
         from PySide6.QtCore import Qt, Signal
@@ -690,6 +712,7 @@ class AppController:
         self._QMessageBox = QMessageBox
         self.app = app
         self._startup_project_path = startup_project_path.strip()
+        self._autostart_launch = autostart_launch
         self._is_quitting = False
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
         self._capture_icon = _build_capture_icon()
@@ -720,7 +743,7 @@ class AppController:
             try:
                 # Refresh legacy/broken autostart entries to current Exec command.
                 self.autostart_manager.enable(
-                    _autostart_exec_command(),
+                    _autostart_login_exec_command(),
                     APP_NAME,
                     str(_icon_path()),
                 )
@@ -1223,6 +1246,8 @@ class AppController:
         editor.import_video_tab_requested.connect(
             lambda: self.import_video_as_new_tab(editor),
         )
+        editor.theme_changed.connect(self.set_theme)
+        editor.settings_requested.connect(self.show_settings_dialog)
         editor.setWindowIcon(self._editor_icon)
         editor.set_minimize_to_tray_on_close(False)
         # Embed as a plain widget so Windows does not paint a second title bar.
@@ -1529,7 +1554,7 @@ class AppController:
             None
         """
 
-        for editor in list(self.editors):
+        for editor in list(self.editors) + list(self.video_editors):
             try:
                 editor.set_theme_selection(theme_name)
             except RuntimeError:
@@ -1816,11 +1841,17 @@ class AppController:
         """
         Shows the capture panel.
 
+        When launched from the boot/login autostart entry, the Capture panel
+        and Editor stay closed -- only the system tray icon is shown, and no
+        project or recovery snapshot is restored.
+
         Returns:
             None
         """
 
         self._apply_capture_taskbar_identity()
+        if self._autostart_launch:
+            return
         self.capture_panel.show()
         if self._startup_project_path:
             self._open_project_in_editor(self._startup_project_path)
@@ -2444,7 +2475,7 @@ class AppController:
         try:
             if enabled:
                 self.autostart_manager.enable(
-                    _autostart_exec_command(),
+                    _autostart_login_exec_command(),
                     APP_NAME,
                     str(_icon_path()),
                 )
@@ -2932,6 +2963,7 @@ def main() -> int:
     runtime_code = _ensure_qt_runtime()
     if runtime_code != 0:
         return runtime_code
+    autostart_launch = "--autostart" in sys.argv[1:]
     cli_commands = {"capture", "pick-color", "export", "batch-export", "open"}
     if len(sys.argv) > 1 and sys.argv[1] in cli_commands:
         from src.cli import run_cli
@@ -2940,15 +2972,18 @@ def main() -> int:
             return _launch_gui(startup_project_path=project_path)
 
         return run_cli(sys.argv[1:], launch_gui_with_project)
-    return _launch_gui()
+    return _launch_gui(autostart_launch=autostart_launch)
 
 
-def _launch_gui(startup_project_path: str = "") -> int:
+def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) -> int:
     """
     Starts the Qt GUI application.
 
     Args:
         startup_project_path: Optional project path to open at startup.
+        autostart_launch: True when launched via ``--autostart`` from the OS
+            boot/login autostart entry -- the Capture panel and Editor stay
+            closed and only the system tray icon is shown.
 
     Returns:
         int: Process exit code.
@@ -2976,9 +3011,13 @@ def _launch_gui(startup_project_path: str = "") -> int:
     app.setQuitOnLastWindowClosed(False)
     capture_icon = _build_capture_icon()
     app.setWindowIcon(capture_icon)
-    if is_linux():
+    if is_linux() and not autostart_launch:
         _maybe_prompt_desktop_shortcut()
-    controller = AppController(app, startup_project_path=startup_project_path)
+    controller = AppController(
+        app,
+        startup_project_path=startup_project_path,
+        autostart_launch=autostart_launch,
+    )
     app.aboutToQuit.connect(controller._save_editor_session)
     controller.show()
     return app.exec()

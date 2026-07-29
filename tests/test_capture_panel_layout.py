@@ -98,10 +98,11 @@ class TestCapturePanelLayout(unittest.TestCase):
         self.assertEqual(wide_last_button_y, panel.capture_fullscreen_button.geometry().y())
         self.assertGreater(narrow_last_button_y, panel.capture_fullscreen_button.geometry().y())
 
-    def test_default_window_width_fits_all_capture_buttons_on_one_row(self) -> None:
+    def test_default_window_width_fits_primary_capture_buttons_on_one_row(self) -> None:
         """
-        Ensures the panel's default size places visible capture buttons on one row
-        with the Open Editor link wrapping onto the row below, and stays no taller
+        Ensures the panel's default size places the primary (accent-colored)
+        capture-mode buttons on one row, with the color picker, OCR, and Open
+        Editor controls wrapping onto the row(s) below, and stays no taller
         than needed to show that layout.
         """
 
@@ -110,7 +111,7 @@ class TestCapturePanelLayout(unittest.TestCase):
         panel.show()
         panel._apply_initial_window_geometry()
 
-        capture_buttons = [
+        primary_buttons = [
             button
             for button in (
                 panel.capture_fullscreen_button,
@@ -118,18 +119,27 @@ class TestCapturePanelLayout(unittest.TestCase):
                 panel.capture_window_button,
                 panel.capture_scroll_button,
                 panel.capture_video_button,
-                panel.pick_color_button,
             )
             if not button.isHidden()
         ]
-        self.assertGreaterEqual(len(capture_buttons), 3)
-        reference = capture_buttons[0].geometry()
-        for button in capture_buttons[1:]:
+        self.assertGreaterEqual(len(primary_buttons), 3)
+        reference = primary_buttons[0].geometry()
+        for button in primary_buttons[1:]:
             self.assertTrue(_vertical_ranges_overlap(reference, button.geometry()))
-        self.assertFalse(
-            _vertical_ranges_overlap(reference, panel.open_editor_button.geometry())
-        )
-        self.assertGreater(panel.open_editor_button.geometry().y(), reference.y())
+
+        secondary_buttons = [
+            button
+            for button in (
+                panel.pick_color_button,
+                panel.recognize_text_button,
+                panel.open_editor_button,
+            )
+            if not button.isHidden()
+        ]
+        for button in secondary_buttons:
+            self.assertFalse(_vertical_ranges_overlap(reference, button.geometry()))
+            self.assertGreater(button.geometry().y(), reference.y())
+
         self.assertEqual(panel.height(), panel.minimumSizeHint().height())
 
     def test_unsupported_modes_are_hidden_not_just_disabled(self) -> None:
