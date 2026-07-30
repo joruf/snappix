@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QEvent, QMimeData, Qt, QSize, Signal
-from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QTextCursor
+from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -52,6 +52,13 @@ from src.video_storage import (
 from src.video_vector_toolbar import VideoVectorToolbar
 
 _VIDEO_ANNOTATIONS_CLIPBOARD_MIME = "application/x-snappix-video-annotations"
+
+# Keys the canvas owns (cancel/finalize a draw, delete a selection). They are
+# re-offered to the canvas when another focused widget — notably the timeline —
+# let them bubble up unhandled.
+CANVAS_FALLBACK_KEYS = frozenset(
+    {Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Delete}
+)
 
 
 class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
@@ -550,6 +557,28 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         if self._vector_toolbar.handle_event_filter(watched, event):
             return True
         return super().eventFilter(watched, event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """
+        Routes canvas keys that bubbled up from another focused widget.
+
+        The timeline takes click focus so Delete can reach its track bars.
+        Without this, clicking the timeline would strand the canvas's own
+        Escape/Enter/Delete handling until the user clicked the canvas again.
+
+        Args:
+            event: Key press event that no focused child consumed.
+
+        Returns:
+            None
+        """
+
+        if event.key() in CANVAS_FALLBACK_KEYS:
+            event.ignore()
+            self.canvas.keyPressEvent(event)
+            if event.isAccepted():
+                return
+        super().keyPressEvent(event)
 
     def build_history_strip_widgets(self, parent: QWidget) -> list[QWidget]:
         """
