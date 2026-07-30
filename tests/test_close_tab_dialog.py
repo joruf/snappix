@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 try:
-    from PySide6.QtWidgets import QMessageBox, QWidget
+    from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
     from src.close_tab_dialog import confirm_close_tab
     from tests.qt_test_utils import ensure_qapp
@@ -93,6 +93,36 @@ class TestConfirmCloseTab(unittest.TestCase):
         self.assertEqual(set(seen_buttons.keys()), {"Cancel", "Close Tab"})
         for button in seen_buttons.values():
             self.assertFalse(button.icon().isNull())
+
+    def test_cancel_sits_left_of_close_tab(self) -> None:
+        """
+        Ensures Cancel is the leftmost button.
+
+        QMessageBox orders buttons by role using a platform-specific layout,
+        which put the destructive "Close Tab" first; the dialog pins the order
+        explicitly instead.
+        """
+
+        positions = {}
+
+        def _capture_exec(self) -> int:
+            self.show()
+            QApplication.processEvents()
+            self.layout().activate()
+            QApplication.processEvents()
+            for button in self.buttons():
+                positions[button.text()] = button.x()
+            self.hide()
+            self.clickedButton = lambda: None
+            return 0
+
+        parent = QWidget()
+        with patch.object(QMessageBox, "exec", _capture_exec):
+            confirm_close_tab(parent, "message")
+
+        self.assertIn("Cancel", positions)
+        self.assertIn("Close Tab", positions)
+        self.assertLess(positions["Cancel"], positions["Close Tab"])
 
 
 if __name__ == "__main__":

@@ -33,6 +33,9 @@ EDGE_HIT_PX = 6
 MIN_ANNOTATION_DURATION_MS = 100
 MIN_VIEW_DURATION_MS = 500
 DEFAULT_PAGE_DURATION_MS = 20_000
+# Cap on how many pages the initial 20s view may split a video into. Without it
+# a 30-minute recording would open as 90 pages of arrow-button paging.
+MAX_DEFAULT_PAGES = 12
 ZOOM_WHEEL_FACTOR = 1.15
 CTRL_NAV_THRESHOLD_PX = 48
 DRAG_AUTO_PAN_EDGE_PX = 24
@@ -152,6 +155,82 @@ class TimelineWidget(QWidget):
         max_start = max(0, self._duration_ms - self._view_duration_ms)
         return self._view_start_ms < max_start
 
+    def next_annotation_start_ms(self) -> int | None:
+        """
+        Returns the start of the first annotation beginning after the playhead.
+
+        Returns:
+            int | None: Timeline position in milliseconds, or None when the
+            playhead is already at or past the last annotation start.
+        """
+
+        later = [
+            annotation.start_ms
+            for annotation in self._annotations
+            if annotation.start_ms > self._position_ms
+        ]
+        return min(later) if later else None
+
+    def previous_annotation_start_ms(self) -> int | None:
+        """
+        Returns the start of the last annotation beginning before the playhead.
+
+        Returns:
+            int | None: Timeline position in milliseconds, or None when no
+            annotation starts earlier.
+        """
+
+        earlier = [
+            annotation.start_ms
+            for annotation in self._annotations
+            if annotation.start_ms < self._position_ms
+        ]
+        return max(earlier) if earlier else None
+
+    def jump_to_next_annotation(self) -> bool:
+        """
+        Moves the playhead to the next annotation start and reveals it.
+
+        Returns:
+            bool: True when a later annotation existed to jump to.
+        """
+
+        return self._jump_to_position(self.next_annotation_start_ms())
+
+    def jump_to_previous_annotation(self) -> bool:
+        """
+        Moves the playhead to the previous annotation start and reveals it.
+
+        Returns:
+            bool: True when an earlier annotation existed to jump to.
+        """
+
+        return self._jump_to_position(self.previous_annotation_start_ms())
+
+    def _jump_to_position(self, target_ms: int | None) -> bool:
+        """
+        Seeks to one timeline position, scrolling it into view when off-screen.
+
+        Args:
+            target_ms: Destination in milliseconds, or None for "nothing to do".
+
+        Returns:
+            bool: True when a seek was performed.
+        """
+
+        if target_ms is None:
+            return False
+
+        view_end = self._view_start_ms + self._view_duration_ms
+        if not self._view_start_ms <= target_ms <= view_end:
+            self._view_start_ms = target_ms - self._view_duration_ms // 2
+            self._clamp_view()
+
+        self._position_ms = target_ms
+        self.seek_requested.emit(target_ms)
+        self.update()
+        return True
+
     def pan_left(self) -> None:
         """
         Jumps one page toward earlier times.
@@ -241,6 +320,9 @@ class TimelineWidget(QWidget):
 
         Short clips (20 seconds or less) use the full duration. Longer videos
         start on a fixed 20-second page so a 100-second clip spans five pages.
+        Very long videos widen the page instead, so paging never exceeds
+        :data:`MAX_DEFAULT_PAGES` steps (a 30-minute video opens on 2.5-minute
+        pages rather than 90 twenty-second ones).
 
         Returns:
             int: Visible duration in milliseconds.
@@ -248,7 +330,7 @@ class TimelineWidget(QWidget):
 
         if self._duration_ms <= DEFAULT_PAGE_DURATION_MS:
             return self._duration_ms
-        return DEFAULT_PAGE_DURATION_MS
+        return max(DEFAULT_PAGE_DURATION_MS, self._duration_ms // MAX_DEFAULT_PAGES)
 
     def _rows_content_height(self) -> int:
         """

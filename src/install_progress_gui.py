@@ -24,6 +24,10 @@ SPLASH_PEN_BODY = "#e8c547"
 ANIM_CANVAS_WIDTH = 420
 ANIM_CANVAS_HEIGHT = 130
 ANIM_TAG = "anim"
+# Ink stroke thickness. Must stay an int: Tk parses -width through Tk_GetPixels,
+# which rejects "2.8" as a "bad screen distance" once LC_NUMERIC uses a comma
+# decimal separator — which is exactly what Qt does when a QApplication exists.
+INK_STROKE_WIDTH_PX = 3
 # Arc length advanced per frame (~30fps) — intentionally fast.
 PEN_SPEED_PX_PER_FRAME = 14.0
 PEN_SAMPLE_STEP_PX = 3.0
@@ -597,7 +601,7 @@ class SplashPenAnimation:
                 x1,
                 y1,
                 fill=color,
-                width=2.8,
+                width=INK_STROKE_WIDTH_PX,
                 capstyle=tk.ROUND,
                 joinstyle=tk.ROUND,
                 tags=ANIM_TAG,

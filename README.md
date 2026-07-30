@@ -185,8 +185,10 @@ Flatpak modules too would be a much larger, slower build.
 - Time-ranged annotations (Rectangle, Ellipse, Line, Arrow, Text, …) with draggable/resizable bars
 - Timeline: click anywhere sets the playhead; double-click and hold, then drag left/right to stretch/compress the visible time range (shows a resize cursor while held)
 - Click a track bar and press `Del` to remove that annotation — the timeline row and the object on the canvas both disappear in one undoable step
+- `|◀` / `▶|` jump the playhead to the previous/next annotation, scrolling it into view — the practical way to navigate a long recording instead of paging through it
+- MP4 export runs behind a cancellable progress dialog that follows ffmpeg's own encode progress
 - Videos may be up to **30 minutes** long; recordings, imported files, and opened projects beyond that are rejected with a "video is too long" message (a too-long recording is still kept on disk, and the dialog names its location)
-- **Entry/exit effects** per annotation: Fade, Zoom, and Slide, each applied at the object's start or end with its own duration — right-click a timeline bar → *Add Effect...*; applied effects are listed on the bar (e.g. `[Fade In, Zoom Out]`) and render live in the editor preview (MP4 export currently burns objects in at full visibility — animated effects are not yet baked into exported video)
+- **Entry/exit effects** per annotation: Fade, Zoom, and Slide, each applied at the object's start or end with its own duration — right-click a timeline bar → *Add Effect...*; applied effects are listed on the bar (e.g. `[Fade In, Zoom Out]`), render live in the editor preview, and are baked into the exported MP4 as stepped animation
 - Playback automatically rewinds to the start and re-arms the Play button once a clip finishes
 - Full menu parity with the Image editor where it makes sense for video: Duplicate, layer order (Bring Forward/Send Backward/Bring/Send to Front/Back), Copy/Paste Drawing Area, Scale Selection, Theme, Settings, Help (Flatten Annotations has no video equivalent — Export MP4 already burns annotations in permanently)
 - Save a re-editable project (`.sfpv`) or export a flattened MP4 with annotations burned in

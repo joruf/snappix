@@ -4,10 +4,12 @@ Unit tests for the installer splash pen animation.
 
 from __future__ import annotations
 
+import locale
 import math
 import unittest
 
 from src.install_progress_gui import (
+    INK_STROKE_WIDTH_PX,
     SplashPenAnimation,
     blend_hex_toward_background,
     hsv_to_hex,
@@ -163,6 +165,53 @@ class TestSplashPenAnimationLifecycle(unittest.TestCase):
         animation.stop()
         self.assertFalse(animation.is_running)
         self.assertEqual(animation.distance, stopped_at)
+
+    def test_ink_stroke_width_is_an_integer(self) -> None:
+        """
+        Pins the stroke width as an int.
+
+        Tk parses -width through Tk_GetPixels, which rejects a float like "2.8"
+        as a "bad screen distance" as soon as LC_NUMERIC uses a comma decimal
+        separator. Creating a QApplication does exactly that, so a float here
+        silently killed the animation after its first frame.
+        """
+
+        self.assertIsInstance(INK_STROKE_WIDTH_PX, int)
+
+    def test_animation_survives_a_comma_decimal_locale(self) -> None:
+        """
+        Ensures a frame still draws when LC_NUMERIC uses a comma separator.
+        """
+
+        if self._tk is None:
+            self.skipTest(f"Tk unavailable: {self._skip_reason}")
+
+        import tkinter as tk
+
+        candidates = ("de_DE.UTF-8", "fr_FR.UTF-8", "de_DE", "")
+        previous = locale.setlocale(locale.LC_NUMERIC)
+        applied = ""
+        for candidate in candidates:
+            try:
+                locale.setlocale(locale.LC_NUMERIC, candidate)
+            except locale.Error:
+                continue
+            if locale.localeconv().get("decimal_point") == ",":
+                applied = candidate
+                break
+        self.addCleanup(locale.setlocale, locale.LC_NUMERIC, previous)
+        if not applied:
+            self.skipTest("No comma-decimal locale available on this host")
+
+        canvas = tk.Canvas(self._tk, width=420, height=130)
+        animation = SplashPenAnimation(canvas, interval_ms=20, speed_px=10.0)
+        animation.start()
+        try:
+            self.assertTrue(animation.is_running)
+            self._tk.update()
+            self.assertTrue(animation.is_running)
+        finally:
+            animation.stop()
 
 
 if __name__ == "__main__":

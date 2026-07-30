@@ -123,5 +123,121 @@ class TestVideoEditorEffectEditRequested(unittest.TestCase):
             editor._on_effect_edit_requested("missing-id")  # pylint: disable=protected-access
 
 
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for effects integration tests")
+class TestExportCutPoints(unittest.TestCase):
+    """
+    Verifies the export slices effect windows finely enough to animate them,
+    instead of burning one static overlay per visibility segment.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_qapp()
+
+    def _make_editor(self) -> "VideoEditorWindow":
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        source_video = Path(tmp_dir.name) / "source.mp4"
+        source_video.write_bytes(b"not-a-real-video")
+        return VideoEditorWindow(str(source_video), 320, 240)
+
+    def test_annotation_without_effects_only_cuts_at_its_edges(self) -> None:
+        """
+        Ensures an effect-free timeline keeps the original coarse segmentation.
+        """
+
+        editor = self._make_editor()
+        annotation = _sample_annotation()
+        editor._annotations.append(annotation)  # pylint: disable=protected-access
+
+        cuts = editor.export_cut_points(5000)
+
+        self.assertEqual(cuts, [0, 2000, 5000])
+
+    def test_fade_in_window_is_sliced_into_steps(self) -> None:
+        """
+        Ensures a Fade In produces intermediate cuts across its window only.
+        """
+
+        editor = self._make_editor()
+        annotation = _sample_annotation()
+        add_annotation_effect(
+            annotation,
+            kind=EFFECT_KIND_FADE,
+            edge=EFFECT_EDGE_START,
+            duration_ms=1000,
+        )
+        editor._annotations.append(annotation)  # pylint: disable=protected-access
+
+        cuts = editor.export_cut_points(5000)
+
+        inside_window = [cut for cut in cuts if 0 < cut < 1000]
+        self.assertGreater(len(inside_window), 1)
+        # Nothing between the fade window's end and the annotation's end.
+        self.assertEqual([cut for cut in cuts if 1000 < cut < 2000], [])
+        self.assertEqual(cuts, sorted(set(cuts)))
+
+    def test_slice_count_stays_bounded_for_long_effects(self) -> None:
+        """
+        Ensures a maximum-length effect cannot explode the ffmpeg filter graph.
+        """
+
+        editor = self._make_editor()
+        annotation = _sample_annotation()
+        annotation.end_ms = 30_000
+        add_annotation_effect(
+            annotation,
+            kind=EFFECT_KIND_FADE,
+            edge=EFFECT_EDGE_START,
+            duration_ms=5000,
+        )
+        editor._annotations.append(annotation)  # pylint: disable=protected-access
+
+        cuts = editor.export_cut_points(30_000)
+
+        inside_window = [cut for cut in cuts if 0 < cut < 5000]
+        self.assertLessEqual(len(inside_window), 24)
+
+    def test_effect_overlays_differ_across_the_fade_window(self) -> None:
+        """
+        Ensures the baked overlays actually change, i.e. the fade is animated
+        rather than rendered at one constant opacity.
+        """
+
+        from PySide6.QtGui import QImage, QPainter
+        from PySide6.QtWidgets import QStyleOptionGraphicsItem
+
+        editor = self._make_editor()
+        annotation = _sample_annotation()
+        add_annotation_effect(
+            annotation,
+            kind=EFFECT_KIND_FADE,
+            edge=EFFECT_EDGE_START,
+            duration_ms=1000,
+        )
+
+        def _alpha_sum_at(position_ms: int) -> int:
+            image = QImage(320, 240, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(0)
+            painter = QPainter(image)
+            editor._paint_annotation_for_export(  # pylint: disable=protected-access
+                painter,
+                QStyleOptionGraphicsItem(),
+                annotation,
+                position_ms,
+            )
+            painter.end()
+            return sum(
+                image.pixelColor(x, y).alpha()
+                for y in range(0, 240, 4)
+                for x in range(0, 320, 4)
+            )
+
+        early = _alpha_sum_at(100)
+        late = _alpha_sum_at(900)
+
+        self.assertLess(early, late)
+
+
 if __name__ == "__main__":
     unittest.main()

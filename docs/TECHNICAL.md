@@ -198,7 +198,7 @@ Accent styling: `build_editor_accent_stylesheet(theme)` on the host; capture pan
 - Full-width track area; page-based pan (`◀` / `▶`, Ctrl+drag, Ctrl+wheel zoom)
 - Initial view: full width for clips ≤20s; fixed 20s pages for longer clips (100s → five pages). Zoom/pan adjust afterward.
 - A plain click anywhere on the timeline (ruler or empty track space) scrubs the playhead; double-click and hold, then drag, stretches/compresses the visible time range around the double-click point (`SizeHorCursor` while held)
-- Right-click a bar → *Add Effect...* opens `EffectsDialog` (`src/effects_dialog.py`) to add/edit/remove Fade/Zoom/Slide entry/exit effects, stored per-annotation in `payload["effects"]` (see `src/video_effects.py`); the bar label shows a short summary (e.g. `[Fade In, Zoom Out]`). Effects render live via `apply_effect_render_state()` during playback/scrubbing; MP4 export does not yet interpolate them (out of scope — would need the export pipeline's per-segment static overlays reworked into finer time slices)
+- Right-click a bar → *Add Effect...* opens `EffectsDialog` (`src/effects_dialog.py`) to add/edit/remove Fade/Zoom/Slide entry/exit effects, stored per-annotation in `payload["effects"]` (see `src/video_effects.py`); the bar label shows a short summary (e.g. `[Fade In, Zoom Out]`). Effects render live via `apply_effect_render_state()` during playback/scrubbing, and are baked into MP4 export: `VideoEditorWindow.export_cut_points()` slices each effect window into at most `EXPORT_EFFECT_SLICES` steps (never below `EXPORT_MIN_SLICE_MS`), and `_paint_annotation_for_export()` applies the same opacity/scale/offset per slice
 
 ### Tool identifiers (image editor)
 
@@ -483,4 +483,4 @@ System (installed on demand): `xdotool`, `x11-utils`, `tesseract-ocr`, `grim`, `
 - OCR quality depends on Tesseract language packs and image clarity.
 - Embedding `QMainWindow` tabs is intentional but unusual; destroy/autosave paths must keep Qt object validity checks.
 - Changing the workspace folder in settings applies on next path resolution; migrate data manually if needed.
-- Video annotation entry/exit effects (Fade/Zoom/Slide) render live in the editor but are not yet baked into MP4 export; the export pipeline currently burns each visibility segment in as a single static overlay, which has no notion of a mid-segment animation.
+- MP4 export re-encodes with `libx264 -crf 18`; long videos take minutes. The progress dialog stays cancellable throughout, but there is no background-queue export.

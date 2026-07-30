@@ -954,6 +954,21 @@ class TestTimelineWidgetDeleteKey(unittest.TestCase):
         self.assertEqual(ROW_HEIGHT, 20)
         self.assertEqual(bar.height(), 20)
 
+    def test_long_video_page_stays_within_a_sane_page_count(self) -> None:
+        """
+        Ensures a 30-minute video does not open as 90 twenty-second pages.
+        """
+
+        widget = TimelineWidget()
+        widget.resize(660, RULER_HEIGHT + 60)
+        widget.set_duration(30 * 60 * 1000)
+
+        page_ms = widget._view_duration_ms  # pylint: disable=protected-access
+        pages = widget.duration_ms() / page_ms
+
+        self.assertGreater(page_ms, DEFAULT_PAGE_DURATION_MS)
+        self.assertLessEqual(pages, 12)
+
     def test_timeline_accepts_keyboard_focus_on_click(self) -> None:
         """
         Ensures the timeline can take focus, so Delete reaches it after a click.
@@ -964,6 +979,126 @@ class TestTimelineWidgetDeleteKey(unittest.TestCase):
         self.assertTrue(
             widget.focusPolicy() & Qt.FocusPolicy.ClickFocus == Qt.FocusPolicy.ClickFocus
         )
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for timeline widget tests")
+class TestTimelineAnnotationJumps(unittest.TestCase):
+    """
+    Verifies jumping the playhead between annotation starts, which is how long
+    videos stay navigable without paging through the whole timeline.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_qapp()
+
+    def _make_widget(self) -> TimelineWidget:
+        """
+        Builds a timeline over a long video with three spaced-out annotations.
+
+        Returns:
+            TimelineWidget: Configured widget.
+        """
+
+        widget = TimelineWidget()
+        widget.resize(660, RULER_HEIGHT + 60)
+        widget.set_duration(600_000)
+        widget.set_annotations(
+            [
+                _make_annotation(start_ms=5_000, end_ms=6_000),
+                _make_annotation(start_ms=200_000, end_ms=201_000),
+                _make_annotation(start_ms=500_000, end_ms=501_000),
+            ]
+        )
+        return widget
+
+    def test_next_jump_seeks_to_the_following_annotation(self) -> None:
+        """
+        Ensures the jump emits a seek at the next annotation's start.
+        """
+
+        widget = self._make_widget()
+        seeks: list[int] = []
+        widget.seek_requested.connect(seeks.append)
+        widget.set_position(0)
+
+        self.assertTrue(widget.jump_to_next_annotation())
+
+        self.assertEqual(seeks, [5_000])
+
+    def test_repeated_next_jumps_walk_forward(self) -> None:
+        """
+        Ensures consecutive jumps advance instead of sticking on one annotation.
+        """
+
+        widget = self._make_widget()
+        seeks: list[int] = []
+        widget.seek_requested.connect(seeks.append)
+        widget.set_position(0)
+
+        widget.jump_to_next_annotation()
+        widget.jump_to_next_annotation()
+        widget.jump_to_next_annotation()
+
+        self.assertEqual(seeks, [5_000, 200_000, 500_000])
+
+    def test_next_jump_past_the_last_annotation_does_nothing(self) -> None:
+        """
+        Ensures the jump reports failure instead of seeking past the end.
+        """
+
+        widget = self._make_widget()
+        seeks: list[int] = []
+        widget.seek_requested.connect(seeks.append)
+        widget.set_position(500_000)
+
+        self.assertFalse(widget.jump_to_next_annotation())
+        self.assertEqual(seeks, [])
+
+    def test_previous_jump_seeks_backwards(self) -> None:
+        """
+        Ensures jumping back lands on the preceding annotation start.
+        """
+
+        widget = self._make_widget()
+        seeks: list[int] = []
+        widget.seek_requested.connect(seeks.append)
+        widget.set_position(500_000)
+
+        self.assertTrue(widget.jump_to_previous_annotation())
+
+        self.assertEqual(seeks, [200_000])
+
+    def test_previous_jump_before_the_first_annotation_does_nothing(self) -> None:
+        """
+        Ensures there is nothing to jump back to from the very start.
+        """
+
+        widget = self._make_widget()
+        seeks: list[int] = []
+        widget.seek_requested.connect(seeks.append)
+        widget.set_position(0)
+
+        self.assertFalse(widget.jump_to_previous_annotation())
+        self.assertEqual(seeks, [])
+
+    def test_jump_scrolls_an_offscreen_target_into_view(self) -> None:
+        """
+        Ensures a jump beyond the visible page pans the view to the target.
+        """
+
+        widget = self._make_widget()
+        _set_view_page(widget, 20_000)
+        widget.set_position(0)
+
+        widget.jump_to_next_annotation()  # 5_000, already visible
+        self.assertEqual(widget._view_start_ms, 0)  # pylint: disable=protected-access
+
+        widget.jump_to_next_annotation()  # 200_000, off-screen
+        view_start = widget._view_start_ms  # pylint: disable=protected-access
+        view_end = view_start + widget._view_duration_ms  # pylint: disable=protected-access
+        self.assertLessEqual(view_start, 200_000)
+        self.assertLessEqual(200_000, view_end)
 
 
 if __name__ == "__main__":

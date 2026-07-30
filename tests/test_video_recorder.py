@@ -5,6 +5,7 @@ Unit tests for the ffmpeg-based video recording engine.
 from __future__ import annotations
 
 import signal
+import sys
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -19,6 +20,8 @@ try:
         build_export_command,
         build_record_command,
         clamp_region_to_even_dimensions,
+        parse_ffmpeg_progress_ms,
+        run_ffmpeg_with_progress,
         scale_rect_to_physical_pixels,
     )
     from tests.qt_test_utils import ensure_qapp
@@ -234,6 +237,162 @@ class TestBuildExportCommand(unittest.TestCase):
         )
         self.assertIn("-an", command)
         self.assertNotIn("0:a?", command)
+
+    def test_report_progress_adds_progress_pipe(self) -> None:
+        """
+        Ensures the export command can stream machine-readable progress.
+        """
+
+        command = build_export_command(
+            Path("/tmp/in.mp4"),
+            [],
+            Path("/tmp/out.mp4"),
+            report_progress=True,
+        )
+        self.assertIn("-progress", command)
+        self.assertIn("pipe:1", command)
+        self.assertIn("-nostats", command)
+        # Progress flags must precede the input so ffmpeg applies them globally.
+        self.assertLess(command.index("-progress"), command.index("-i"))
+
+    def test_progress_flags_absent_by_default(self) -> None:
+        """
+        Ensures ordinary export commands stay unchanged.
+        """
+
+        command = build_export_command(Path("/tmp/in.mp4"), [], Path("/tmp/out.mp4"))
+        self.assertNotIn("-progress", command)
+        self.assertNotIn("-nostats", command)
+
+
+class TestFfmpegProgressParsing(unittest.TestCase):
+    """
+    Verifies parsing of ffmpeg's ``-progress`` key/value output.
+    """
+
+    def test_out_time_us_is_microseconds(self) -> None:
+        """
+        Ensures out_time_us converts from microseconds to milliseconds.
+        """
+
+        self.assertEqual(parse_ffmpeg_progress_ms("out_time_us=4000000"), 4000)
+
+    def test_out_time_ms_is_also_microseconds(self) -> None:
+        """
+        Pins ffmpeg's upstream misnomer: out_time_ms carries microseconds.
+        """
+
+        self.assertEqual(parse_ffmpeg_progress_ms("out_time_ms=2500000"), 2500)
+
+    def test_out_time_clock_string_is_parsed(self) -> None:
+        """
+        Ensures the HH:MM:SS.ffffff form is understood.
+        """
+
+        self.assertEqual(parse_ffmpeg_progress_ms("out_time=00:01:02.500000"), 62500)
+
+    def test_unrelated_and_malformed_lines_are_ignored(self) -> None:
+        """
+        Ensures non-position lines never produce a bogus position.
+        """
+
+        for line in (
+            "frame=100",
+            "progress=continue",
+            "out_time_us=N/A",
+            "out_time=garbage",
+            "out_time=1:2",
+            "no-equals-sign",
+            "",
+        ):
+            self.assertIsNone(parse_ffmpeg_progress_ms(line), line)
+
+
+class TestRunFfmpegWithProgress(unittest.TestCase):
+    """
+    Verifies the monitored ffmpeg runner's success, cancel, and failure paths.
+    """
+
+    def test_successful_run_reports_progress_and_succeeds(self) -> None:
+        """
+        Ensures progress lines on stdout reach the callback and the run succeeds.
+        """
+
+        script = (
+            "import sys\n"
+            "sys.stdout.write('out_time_us=1000000\\n')\n"
+            "sys.stdout.flush()\n"
+        )
+        seen: list[int] = []
+        result = run_ffmpeg_with_progress(
+            [sys.executable, "-c", script],
+            on_progress=seen.append,
+            poll_interval_s=0.01,
+        )
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(result.returncode, 0)
+        self.assertFalse(result.cancelled)
+        self.assertIn(1000, seen)
+
+    def test_failing_run_captures_stderr(self) -> None:
+        """
+        Ensures a non-zero exit is reported with its stderr text.
+        """
+
+        script = "import sys; sys.stderr.write('boom\\n'); sys.exit(3)"
+        result = run_ffmpeg_with_progress(
+            [sys.executable, "-c", script],
+            poll_interval_s=0.01,
+        )
+
+        self.assertFalse(result.succeeded)
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("boom", result.stderr)
+
+    def test_cancel_terminates_the_process(self) -> None:
+        """
+        Ensures should_cancel stops a long-running ffmpeg instead of waiting.
+        """
+
+        script = "import time; time.sleep(60)"
+        result = run_ffmpeg_with_progress(
+            [sys.executable, "-c", script],
+            should_cancel=lambda: True,
+            poll_interval_s=0.01,
+        )
+
+        self.assertTrue(result.cancelled)
+        self.assertFalse(result.succeeded)
+
+    def test_timeout_kills_a_hung_process(self) -> None:
+        """
+        Ensures a run that never finishes is stopped by the time budget.
+        """
+
+        script = "import time; time.sleep(60)"
+        result = run_ffmpeg_with_progress(
+            [sys.executable, "-c", script],
+            poll_interval_s=0.01,
+            timeout_s=0.2,
+        )
+
+        self.assertTrue(result.timed_out)
+        self.assertFalse(result.succeeded)
+
+    def test_missing_binary_is_reported_not_raised(self) -> None:
+        """
+        Ensures a missing executable returns a failed result instead of raising.
+        """
+
+        result = run_ffmpeg_with_progress(
+            ["snappix-definitely-not-a-real-binary"],
+            poll_interval_s=0.01,
+        )
+
+        self.assertFalse(result.succeeded)
+        self.assertFalse(result.cancelled)
+        self.assertNotEqual(result.stderr, "")
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for recorder lifecycle tests")

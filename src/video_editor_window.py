@@ -11,6 +11,7 @@ from typing import Any
 from PySide6.QtCore import QEvent, QMimeData, Qt, QSize, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QKeyEvent, QTextCursor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressDialog,
     QPushButton,
     QSizePolicy,
     QSlider,
@@ -43,6 +45,7 @@ from src.timeline_widget import TimelineWidget
 from src.tool_icons import build_playback_icon
 from src.video_canvas import VideoCanvas
 from src.video_models import VideoAnnotationModel, VideoProjectModel
+from src.video_effects import normalize_effect_duration_ms
 from src.video_recorder import OverlaySegment, build_export_command
 from src.video_storage import (
     build_video_project_model,
@@ -59,6 +62,15 @@ _VIDEO_ANNOTATIONS_CLIPBOARD_MIME = "application/x-snappix-video-annotations"
 CANVAS_FALLBACK_KEYS = frozenset(
     {Qt.Key.Key_Escape, Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Delete}
 )
+
+# Export renders one static overlay PNG per timeline segment. Inside an animating
+# effect window that is too coarse, so those windows are sliced further: at most
+# EXPORT_EFFECT_SLICES steps, never shorter than EXPORT_MIN_SLICE_MS (~25 fps).
+EXPORT_EFFECT_SLICES = 24
+EXPORT_MIN_SLICE_MS = 40
+
+# Share of the progress bar spent rendering overlays before encoding starts.
+EXPORT_RENDER_PROGRESS_SHARE = 40
 
 
 class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
@@ -142,6 +154,13 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             self._on_timeline_annotation_delete_requested
         )
 
+        self.timeline_prev_annotation = QToolButton()
+        self.timeline_prev_annotation.setText("|◀")
+        self.timeline_prev_annotation.setToolTip("Jump to the previous annotation")
+        self.timeline_prev_annotation.clicked.connect(
+            self.timeline.jump_to_previous_annotation
+        )
+
         self.timeline_pan_left = QToolButton()
         self.timeline_pan_left.setText("◀")
         self.timeline_pan_left.setToolTip("Jump timeline one page earlier")
@@ -152,14 +171,23 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.timeline_pan_right.setToolTip("Jump timeline one page later")
         self.timeline_pan_right.clicked.connect(self.timeline.pan_right)
 
+        self.timeline_next_annotation = QToolButton()
+        self.timeline_next_annotation.setText("▶|")
+        self.timeline_next_annotation.setToolTip("Jump to the next annotation")
+        self.timeline_next_annotation.clicked.connect(
+            self.timeline.jump_to_next_annotation
+        )
+
         timeline_row = QWidget()
         timeline_row.setObjectName("videoTimelineRow")
         timeline_layout = QHBoxLayout(timeline_row)
         timeline_layout.setContentsMargins(4, 0, 4, 0)
         timeline_layout.setSpacing(4)
+        timeline_layout.addWidget(self.timeline_prev_annotation)
         timeline_layout.addWidget(self.timeline_pan_left)
         timeline_layout.addWidget(self.timeline, 1)
         timeline_layout.addWidget(self.timeline_pan_right)
+        timeline_layout.addWidget(self.timeline_next_annotation)
 
         central = QWidget()
         layout = QVBoxLayout(central)
@@ -1606,6 +1634,16 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             None
         """
 
+        from src.video_recorder import has_ffmpeg
+
+        if not has_ffmpeg():
+            QMessageBox.warning(
+                self,
+                "Export Video",
+                "Video export requires ffmpeg. Please install ffmpeg to enable this feature.",
+            )
+            return
+
         options = self._prompt_export_options()
         if options is None:
             return
@@ -1623,10 +1661,14 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         self.statusBar().showMessage("Exporting video…")
         try:
-            self._run_export(Path(path), include_audio=include_audio)
+            completed = self._run_export(Path(path), include_audio=include_audio)
         except (OSError, RuntimeError) as exc:
             QMessageBox.warning(self, "Export Video", f"Could not export video:\n{exc}")
             self.statusBar().showMessage("Export failed", 5000)
+            return
+
+        if not completed:
+            self.statusBar().showMessage("Export cancelled", 5000)
             return
 
         self.statusBar().showMessage(f"Exported to {path}", 5000)
@@ -1664,36 +1706,140 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             return None
         return {"include_audio": include_audio.isChecked()}
 
-    def _run_export(self, output_path: Path, *, include_audio: bool = True) -> None:
+    def export_cut_points(self, duration_ms: int) -> list[int]:
+        """
+        Builds the sorted timeline positions the export splits overlays at.
+
+        Every annotation start/end becomes a cut. Effect windows are sliced
+        further so a Fade/Zoom/Slide is baked in as a sequence of stepped
+        overlays instead of one static frame.
+
+        Args:
+            duration_ms: Total video duration in milliseconds.
+
+        Returns:
+            list[int]: Ascending, de-duplicated cut points.
+        """
+
+        from src.video_effects import EFFECT_EDGE_END, get_annotation_effects
+
+        cuts: set[int] = {0, max(0, duration_ms)}
+        for annotation in self._annotations:
+            cuts.add(annotation.start_ms)
+            cuts.add(annotation.end_ms)
+
+            for effect in get_annotation_effects(annotation):
+                duration = normalize_effect_duration_ms(effect.get("duration_ms"))
+                if effect.get("edge") == EFFECT_EDGE_END:
+                    window_start = max(annotation.start_ms, annotation.end_ms - duration)
+                    window_end = annotation.end_ms
+                else:
+                    window_start = annotation.start_ms
+                    window_end = min(annotation.end_ms, annotation.start_ms + duration)
+
+                window_length = window_end - window_start
+                if window_length <= 0:
+                    continue
+                step = max(EXPORT_MIN_SLICE_MS, window_length // EXPORT_EFFECT_SLICES)
+                position = window_start + step
+                while position < window_end:
+                    cuts.add(position)
+                    position += step
+
+        return sorted(cuts)
+
+    def _paint_annotation_for_export(
+        self,
+        painter,
+        style_option,
+        annotation: VideoAnnotationModel,
+        position_ms: int,
+    ) -> None:
+        """
+        Draws one annotation into the export overlay with its effects applied.
+
+        Mirrors the live preview's transform order: opacity, then the horizontal
+        slide offset, then scaling about the item's own center.
+
+        Args:
+            painter: Active QPainter on the overlay image.
+            style_option: Shared QStyleOptionGraphicsItem for item painting.
+            annotation: Annotation to draw.
+            position_ms: Timeline position the overlay represents.
+
+        Returns:
+            None
+        """
+
+        from src.video_canvas import build_annotation_item
+        from src.video_effects import compute_effect_render_state
+
+        item = build_annotation_item(annotation)
+        if item is None:
+            return
+
+        opacity, scale, offset_x = compute_effect_render_state(annotation, position_ms)
+        if opacity <= 0.0 or scale <= 0.0:
+            return
+
+        painter.save()
+        painter.setOpacity(max(0.0, min(1.0, opacity)))
+        position = item.pos()
+        painter.translate(position.x() + offset_x, position.y())
+        if scale != 1.0:
+            center = item.boundingRect().center()
+            painter.translate(center)
+            painter.scale(scale, scale)
+            painter.translate(-center)
+        item.paint(painter, style_option, None)
+        painter.restore()
+
+    def _run_export(self, output_path: Path, *, include_audio: bool = True) -> bool:
         """
         Composites annotation-layer PNGs and invokes ffmpeg to burn them into the video.
+
+        Runs behind a cancellable progress dialog: overlay rendering fills the
+        first part of the bar, ffmpeg's own encode progress the rest.
 
         Args:
             output_path: Destination MP4 file path.
             include_audio: When True, keep audio in the export; when False, strip it.
 
         Returns:
-            None
+            bool: True when the export finished, False when the user cancelled.
+
+        Raises:
+            RuntimeError: When ffmpeg fails or exceeds its time budget.
         """
 
-        import subprocess
         import tempfile
 
         from PySide6.QtGui import QImage, QPainter
         from PySide6.QtWidgets import QStyleOptionGraphicsItem
 
-        from src.video_canvas import build_annotation_item
+        from src.video_recorder import run_ffmpeg_with_progress
 
-        boundaries = sorted(
-            {0, self.canvas.duration_ms()}
-            | {annotation.start_ms for annotation in self._annotations}
-            | {annotation.end_ms for annotation in self._annotations}
-        )
+        duration_ms = max(0, self._effective_duration_ms())
+        boundaries = self.export_cut_points(duration_ms)
+
+        progress = QProgressDialog("Preparing annotation overlays…", "Cancel", 0, 100, self)
+        progress.setWindowTitle("Export Video")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setValue(0)
+        QApplication.processEvents()
 
         with tempfile.TemporaryDirectory(prefix="snappix-export-") as tmp_dir:
             tmp_root = Path(tmp_dir)
             segments: list[OverlaySegment] = []
+            total_spans = max(1, len(boundaries) - 1)
             for index in range(len(boundaries) - 1):
+                if progress.wasCanceled():
+                    progress.close()
+                    return False
+                progress.setValue(int(index / total_spans * EXPORT_RENDER_PROGRESS_SHARE))
+                QApplication.processEvents()
+
                 segment_start = boundaries[index]
                 segment_end = boundaries[index + 1]
                 if segment_end <= segment_start:
@@ -1717,13 +1863,12 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                 painter.setRenderHint(QPainter.RenderHint.Antialiasing)
                 style_option = QStyleOptionGraphicsItem()
                 for annotation in visible:
-                    item = build_annotation_item(annotation)
-                    if item is None:
-                        continue
-                    painter.save()
-                    painter.translate(item.pos())
-                    item.paint(painter, style_option, None)
-                    painter.restore()
+                    self._paint_annotation_for_export(
+                        painter,
+                        style_option,
+                        annotation,
+                        midpoint,
+                    )
                 painter.end()
 
                 png_path = tmp_root / f"overlay_{index}.png"
@@ -1741,7 +1886,52 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                 segments,
                 output_path,
                 include_audio=include_audio,
+                report_progress=True,
             )
-            result = subprocess.run(command, capture_output=True, text=True)
-            if result.returncode != 0:
+
+            def _on_encode_progress(position_ms: int) -> None:
+                """
+                Maps ffmpeg's encode position onto the remaining progress bar.
+
+                Args:
+                    position_ms: Encoded position in milliseconds.
+
+                Returns:
+                    None
+                """
+
+                ratio = min(1.0, position_ms / duration_ms) if duration_ms > 0 else 0.0
+                remaining = 100 - EXPORT_RENDER_PROGRESS_SHARE
+                progress.setValue(
+                    EXPORT_RENDER_PROGRESS_SHARE + int(ratio * remaining)
+                )
+                progress.setLabelText(f"Encoding video… {int(ratio * 100)}%")
+                QApplication.processEvents()
+
+            progress.setValue(EXPORT_RENDER_PROGRESS_SHARE)
+            progress.setLabelText("Encoding video…")
+            QApplication.processEvents()
+
+            # Generous backstop: cancelling is the normal way out, so this only
+            # catches an ffmpeg that hangs while nobody is watching the dialog.
+            timeout_s = max(900.0, (duration_ms / 1000.0) * 15.0)
+            result = run_ffmpeg_with_progress(
+                command,
+                on_progress=_on_encode_progress,
+                should_cancel=progress.wasCanceled,
+                timeout_s=timeout_s,
+            )
+            progress.close()
+
+            if result.cancelled:
+                Path(output_path).unlink(missing_ok=True)
+                return False
+            if result.timed_out:
+                Path(output_path).unlink(missing_ok=True)
+                raise RuntimeError(
+                    "ffmpeg did not finish within the expected time and was stopped."
+                )
+            if not result.succeeded:
                 raise RuntimeError(result.stderr[-2000:] if result.stderr else "ffmpeg failed")
+
+        return True

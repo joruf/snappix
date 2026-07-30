@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 from src.py_compat import dataclass
+from collections.abc import Callable
 from pathlib import Path
 from shutil import which
 
@@ -439,6 +440,7 @@ def build_export_command(
     output_path: Path,
     *,
     include_audio: bool = True,
+    report_progress: bool = False,
 ) -> list[str]:
     """
     Builds the ffmpeg command line that burns timed PNG overlays into a video.
@@ -449,12 +451,17 @@ def build_export_command(
         output_path: Destination MP4 file path.
         include_audio: When True, keep/re-encode the source audio track; when False,
             drop audio entirely (``-an``).
+        report_progress: When True, add ``-progress pipe:1 -nostats`` so callers can
+            stream encode progress from stdout (see :func:`run_ffmpeg_with_progress`).
 
     Returns:
         list[str]: Complete ffmpeg command line arguments (argv-style, no shell).
     """
 
-    command = [resolve_ffmpeg_path() or "ffmpeg", "-y", "-i", str(source_video)]
+    command = [resolve_ffmpeg_path() or "ffmpeg", "-y"]
+    if report_progress:
+        command += ["-progress", "pipe:1", "-nostats"]
+    command += ["-i", str(source_video)]
     for segment in overlay_segments:
         command += ["-i", str(segment.png_path)]
 
@@ -497,6 +504,183 @@ def build_export_command(
         command += ["-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-an"]
     command.append(str(output_path))
     return command
+
+
+def parse_ffmpeg_progress_ms(line: str) -> int | None:
+    """
+    Extracts the encoded-so-far position from one ``-progress`` output line.
+
+    Args:
+        line: A single ``key=value`` line from ffmpeg's progress stream.
+
+    Returns:
+        int | None: Encoded position in milliseconds, or None when the line
+        carries no usable position.
+    """
+
+    key, separator, value = line.strip().partition("=")
+    if not separator:
+        return None
+    key = key.strip()
+    value = value.strip()
+    if not value or value == "N/A":
+        return None
+
+    # ffmpeg reports out_time_us and out_time_ms both in MICROseconds -- the
+    # "_ms" suffix is a long-standing upstream misnomer, so both scale alike.
+    if key in ("out_time_us", "out_time_ms"):
+        try:
+            return max(0, int(value) // 1000)
+        except ValueError:
+            return None
+
+    if key == "out_time":
+        parts = value.split(":")
+        if len(parts) != 3:
+            return None
+        try:
+            hours = int(parts[0])
+            minutes = int(parts[1])
+            seconds = float(parts[2])
+        except ValueError:
+            return None
+        return max(0, int(((hours * 60 + minutes) * 60 + seconds) * 1000))
+
+    return None
+
+
+@dataclass(frozen=True, slots=True)
+class FfmpegRunResult:
+    """
+    Describes the outcome of one monitored ffmpeg run.
+
+    Attributes:
+        returncode: Process exit code (-1 when the run never completed).
+        stderr: Captured stderr text, used for error reporting.
+        cancelled: True when the caller aborted the run.
+        timed_out: True when the run exceeded its time budget and was killed.
+    """
+
+    returncode: int
+    stderr: str
+    cancelled: bool
+    timed_out: bool
+
+    @property
+    def succeeded(self) -> bool:
+        """
+        Returns whether ffmpeg finished normally.
+
+        Returns:
+            bool: True on a clean exit that was neither cancelled nor timed out.
+        """
+
+        return self.returncode == 0 and not self.cancelled and not self.timed_out
+
+
+def run_ffmpeg_with_progress(
+    command: list[str],
+    *,
+    on_progress: Callable[[int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+    poll_interval_s: float = 0.05,
+    timeout_s: float | None = None,
+) -> FfmpegRunResult:
+    """
+    Runs one ffmpeg command while streaming its progress and staying abortable.
+
+    stdout and stderr are drained on background threads so a full pipe can never
+    deadlock the run; the calling thread only polls, which lets a GUI caller keep
+    its event loop alive inside ``on_progress``.
+
+    Args:
+        command: Full ffmpeg argv, built with ``report_progress=True``.
+        on_progress: Called with the encoded position in milliseconds, roughly
+            every ``poll_interval_s``. Runs on the calling thread.
+        should_cancel: Polled between progress updates; returning True terminates
+            ffmpeg and reports the run as cancelled.
+        poll_interval_s: Delay between polls, in seconds.
+        timeout_s: Optional wall-clock budget. Exceeding it kills ffmpeg.
+
+    Returns:
+        FfmpegRunResult: Exit code, captured stderr, and cancel/timeout flags.
+    """
+
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            **_windows_subprocess_kwargs(),
+        )
+    except OSError as exc:
+        return FfmpegRunResult(returncode=-1, stderr=str(exc), cancelled=False, timed_out=False)
+
+    latest_ms = [0]
+    stderr_chunks: list[str] = []
+
+    def _drain_progress() -> None:
+        if process.stdout is None:
+            return
+        for line in process.stdout:
+            position_ms = parse_ffmpeg_progress_ms(line)
+            if position_ms is not None:
+                latest_ms[0] = position_ms
+
+    def _drain_stderr() -> None:
+        if process.stderr is None:
+            return
+        for line in process.stderr:
+            stderr_chunks.append(line)
+
+    readers = [
+        threading.Thread(target=_drain_progress, daemon=True, name="snappix-ffmpeg-progress"),
+        threading.Thread(target=_drain_stderr, daemon=True, name="snappix-ffmpeg-stderr"),
+    ]
+    for reader in readers:
+        reader.start()
+
+    cancelled = False
+    timed_out = False
+    started_at = time.monotonic()
+
+    while process.poll() is None:
+        if should_cancel is not None and should_cancel():
+            cancelled = True
+            break
+        if timeout_s is not None and (time.monotonic() - started_at) > timeout_s:
+            timed_out = True
+            break
+        if on_progress is not None:
+            on_progress(latest_ms[0])
+        time.sleep(poll_interval_s)
+
+    if cancelled or timed_out:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+    else:
+        process.wait()
+        if on_progress is not None:
+            on_progress(latest_ms[0])
+
+    for reader in readers:
+        reader.join(timeout=2)
+
+    return FfmpegRunResult(
+        returncode=process.returncode if process.returncode is not None else -1,
+        stderr="".join(stderr_chunks),
+        cancelled=cancelled,
+        timed_out=timed_out,
+    )
 
 
 class VideoRecorder(QObject):

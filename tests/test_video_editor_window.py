@@ -12,11 +12,23 @@ from unittest.mock import MagicMock, patch
 try:
     from src.video_editor_window import VideoEditorWindow
     from src.video_models import VideoAnnotationModel
+    from src.video_recorder import FfmpegRunResult
     from tests.qt_test_utils import ensure_qapp
 
     PYSIDE6_AVAILABLE = True
 except ModuleNotFoundError:
     PYSIDE6_AVAILABLE = False
+
+
+def _successful_ffmpeg_result() -> "FfmpegRunResult":
+    """
+    Builds a clean ffmpeg outcome for export tests that stub out encoding.
+
+    Returns:
+        FfmpegRunResult: Result reporting a successful run.
+    """
+
+    return FfmpegRunResult(returncode=0, stderr="", cancelled=False, timed_out=False)
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for video editor tests")
@@ -77,20 +89,21 @@ class TestVideoEditorExport(unittest.TestCase):
             editor._annotations.append(first)
             editor._annotations.append(second)
 
-            fake_result = MagicMock()
-            fake_result.returncode = 0
             output_path = tmp_root / "out.mp4"
 
             with patch(
                 "src.video_editor_window.build_export_command",
                 return_value=["ffmpeg", "-y"],
             ) as mock_build_command, patch(
-                "subprocess.run", return_value=fake_result
+                "src.video_recorder.run_ffmpeg_with_progress",
+                return_value=_successful_ffmpeg_result(),
             ) as mock_run:
-                editor._run_export(output_path, include_audio=True)
+                completed = editor._run_export(output_path, include_audio=True)
 
+            self.assertTrue(completed)
             self.assertEqual(mock_run.call_count, 1)
             self.assertTrue(mock_build_command.call_args.kwargs.get("include_audio", True))
+            self.assertTrue(mock_build_command.call_args.kwargs.get("report_progress"))
             segments = mock_build_command.call_args[0][1]
             self.assertEqual(len(segments), 2)
             self.assertEqual((segments[0].start_s, segments[0].end_s), (0.0, 2.0))
@@ -109,18 +122,80 @@ class TestVideoEditorExport(unittest.TestCase):
             editor = VideoEditorWindow(str(source_video), 320, 240)
             editor.canvas.duration_ms = MagicMock(return_value=1000)
 
-            fake_result = MagicMock()
-            fake_result.returncode = 0
-
             with patch(
                 "src.video_editor_window.build_export_command",
                 return_value=["ffmpeg", "-y"],
             ) as mock_build_command, patch(
-                "subprocess.run", return_value=fake_result
+                "src.video_recorder.run_ffmpeg_with_progress",
+                return_value=_successful_ffmpeg_result(),
             ):
                 editor._run_export(tmp_root / "out.mp4", include_audio=False)
 
             self.assertFalse(mock_build_command.call_args.kwargs.get("include_audio"))
+
+    def test_run_export_reports_cancellation(self) -> None:
+        """
+        Ensures a cancelled encode returns False and leaves no partial file.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            source_video = tmp_root / "source.mp4"
+            source_video.write_bytes(b"not-a-real-video")
+
+            editor = VideoEditorWindow(str(source_video), 320, 240)
+            editor.canvas.duration_ms = MagicMock(return_value=1000)
+            output_path = tmp_root / "out.mp4"
+            output_path.write_bytes(b"partial")
+
+            cancelled = FfmpegRunResult(
+                returncode=-1,
+                stderr="",
+                cancelled=True,
+                timed_out=False,
+            )
+            with patch(
+                "src.video_editor_window.build_export_command",
+                return_value=["ffmpeg", "-y"],
+            ), patch(
+                "src.video_recorder.run_ffmpeg_with_progress",
+                return_value=cancelled,
+            ):
+                completed = editor._run_export(output_path, include_audio=True)
+
+            self.assertFalse(completed)
+            self.assertFalse(output_path.exists())
+
+    def test_run_export_raises_on_ffmpeg_failure(self) -> None:
+        """
+        Ensures a failing encode surfaces ffmpeg's stderr to the caller.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_root = Path(tmp_dir)
+            source_video = tmp_root / "source.mp4"
+            source_video.write_bytes(b"not-a-real-video")
+
+            editor = VideoEditorWindow(str(source_video), 320, 240)
+            editor.canvas.duration_ms = MagicMock(return_value=1000)
+
+            failed = FfmpegRunResult(
+                returncode=1,
+                stderr="Invalid argument",
+                cancelled=False,
+                timed_out=False,
+            )
+            with patch(
+                "src.video_editor_window.build_export_command",
+                return_value=["ffmpeg", "-y"],
+            ), patch(
+                "src.video_recorder.run_ffmpeg_with_progress",
+                return_value=failed,
+            ):
+                with self.assertRaises(RuntimeError) as caught:
+                    editor._run_export(tmp_root / "out.mp4", include_audio=True)
+
+            self.assertIn("Invalid argument", str(caught.exception))
 
     def test_playback_sound_defaults_to_muted(self) -> None:
         """
