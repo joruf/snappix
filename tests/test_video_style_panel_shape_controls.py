@@ -116,6 +116,37 @@ class TestVideoStylePanelShapeControls(unittest.TestCase):
         self.assertFalse(toolbar._property_tabs.isTabVisible(0))  # pylint: disable=protected-access
         self.assertEqual(toolbar.style_thickness_slider.value(), 0)
 
+    def test_no_selection_collapses_the_panel_not_just_its_tab(self) -> None:
+        """
+        Ensures the empty Style panel gives its height back to the video.
+
+        Style is this tab widget's only tab, so hiding the tab header alone left
+        an empty framed block above the canvas in the editor's default state.
+        """
+
+        editor = self._make_editor()
+        toolbar = editor._vector_toolbar  # pylint: disable=protected-access
+        annotation = _rect_annotation()
+        editor.canvas.set_annotations([annotation])
+        self._select_only(editor, annotation)
+        editor.canvas._visible_items[annotation.annotation_id].setSelected(False)  # pylint: disable=protected-access
+        editor.canvas._refresh_selection_style()  # pylint: disable=protected-access
+
+        self.assertTrue(toolbar._property_tabs.isHidden())  # pylint: disable=protected-access
+
+    def test_selecting_a_shape_shows_the_panel_again(self) -> None:
+        """
+        Ensures the collapsed panel comes back when there is something to show.
+        """
+
+        editor = self._make_editor()
+        toolbar = editor._vector_toolbar  # pylint: disable=protected-access
+        annotation = _rect_annotation()
+        editor.canvas.set_annotations([annotation])
+        self._select_only(editor, annotation)
+
+        self.assertFalse(toolbar._property_tabs.isHidden())  # pylint: disable=protected-access
+
     def test_selecting_a_rect_shows_thickness_style_and_radius(self) -> None:
         """
         Ensures selecting a rectangle populates all three shape controls.

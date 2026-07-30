@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import math
 
-from PySide6.QtCore import QRect, Qt, Signal
+from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QContextMenuEvent,
@@ -15,12 +15,15 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
     QPen,
+    QPolygon,
     QResizeEvent,
     QWheelEvent,
 )
 from PySide6.QtWidgets import QMenu, QScrollBar, QSizePolicy, QWidget
 
 from src.annotation_items import list_to_color
+from src.color_contrast import ensure_min_contrast
+from src.theme import get_theme_colors
 from src.video_effects import track_effect_summary
 from src.video_models import VideoAnnotationModel
 
@@ -39,6 +42,16 @@ MAX_DEFAULT_PAGES = 12
 ZOOM_WHEEL_FACTOR = 1.15
 CTRL_NAV_THRESHOLD_PX = 48
 DRAG_AUTO_PAN_EDGE_PX = 24
+
+# Playhead is drawn twice: a wide halo, then a narrower core on top. Whichever
+# of the two opposes the bar underneath carries the separation.
+PLAYHEAD_HALO_WIDTH_PX = 4
+PLAYHEAD_CORE_WIDTH_PX = 2
+PLAYHEAD_HANDLE_PX = 6
+# Selected bars get a thicker accent outline instead of a white one.
+SELECTED_BAR_BORDER_PX = 3
+# Bars are a tint of the annotation's own color, not a solid block.
+BAR_FILL_ALPHA = 140
 
 DRAG_MODE_PLAYHEAD = "playhead"
 DRAG_MODE_MOVE = "move"
@@ -742,9 +755,13 @@ class TimelineWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
+        colors = get_theme_colors()
         content_width = self._content_width()
         track = self._track_area_rect()
-        painter.fillRect(0, 0, content_width, RULER_HEIGHT, QColor(40, 40, 40))
+        # Paint the track surface explicitly rather than inheriting whatever the
+        # global stylesheet happens to set, so the widget is themed on its own.
+        painter.fillRect(self.rect(), QColor(colors.window_bg))
+        painter.fillRect(0, 0, content_width, RULER_HEIGHT, QColor(colors.surface_alt))
         view_end_ms = self._view_start_ms + self._view_duration_ms
         tick_interval = self._grid_interval_ms()
         first_tick = (
@@ -752,7 +769,7 @@ class TimelineWidget(QWidget):
         )
 
         # Vertical snap grid across the track (ruler + rows).
-        painter.setPen(QPen(QColor(70, 70, 70)))
+        painter.setPen(QPen(QColor(colors.border)))
         tick_ms = first_tick
         while tick_ms <= view_end_ms:
             x = self._ms_to_x(tick_ms)
@@ -760,7 +777,7 @@ class TimelineWidget(QWidget):
                 painter.drawLine(x, 0, x, self.height())
             tick_ms += tick_interval
 
-        painter.setPen(QPen(QColor(150, 150, 150)))
+        painter.setPen(QPen(QColor(colors.text_muted)))
         tick_ms = first_tick
         while tick_ms <= view_end_ms:
             x = self._ms_to_x(tick_ms)
@@ -781,7 +798,7 @@ class TimelineWidget(QWidget):
             if row.bottom() < RULER_HEIGHT or row.top() > self.height():
                 continue
             painter.fillRect(
-                QRect(0, row.y(), LABEL_WIDTH, row.height()), QColor(45, 45, 45)
+                QRect(0, row.y(), LABEL_WIDTH, row.height()), QColor(colors.surface)
             )
             label = f"{annotation.annotation_type}"
             if annotation.text:
@@ -789,7 +806,7 @@ class TimelineWidget(QWidget):
             effects_summary = track_effect_summary(annotation)
             if effects_summary:
                 label += f" [{effects_summary}]"
-            painter.setPen(QPen(QColor(220, 220, 220)))
+            painter.setPen(QPen(QColor(colors.text)))
             painter.drawText(
                 QRect(6, row.y(), LABEL_WIDTH - 10, row.height()),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -797,18 +814,66 @@ class TimelineWidget(QWidget):
             )
 
             bar = self._bar_rect(index, annotation)
-            color = list_to_color(annotation.stroke_rgba)
-            fill_color = QColor(color)
-            fill_color.setAlpha(140)
+            # An annotation's own color can sit right on top of the track color
+            # -- a text object's dark navy vanishes on the dark themes and reads
+            # as disabled. Lift it just far enough to stay a distinct object.
+            # The tint alpha has to be applied *before* measuring, or the
+            # blend drags the guaranteed contrast back below the threshold.
+            track_bg = QColor(colors.window_bg)
+            raw_color = list_to_color(annotation.stroke_rgba)
+            fill_color = QColor(raw_color)
+            fill_color.setAlpha(BAR_FILL_ALPHA)
+            fill_color = ensure_min_contrast(fill_color, track_bg)
             painter.fillRect(bar, fill_color)
-            border_color = QColor(255, 255, 255) if annotation.annotation_id == self._selected_id else color
-            painter.setPen(QPen(border_color, 2))
+            color = ensure_min_contrast(QColor(raw_color), track_bg)
+            is_selected = annotation.annotation_id == self._selected_id
+            # Selection reads as the app's accent, not white: a white outline
+            # vanishes on the light and sepia themes.
+            border_color = QColor(colors.accent) if is_selected else color
+            painter.setPen(QPen(border_color, SELECTED_BAR_BORDER_PX if is_selected else 2))
             painter.drawRect(bar.adjusted(0, 0, -1, -1))
         painter.restore()
 
+        self._paint_playhead(painter, colors)
+
+    def _paint_playhead(self, painter: QPainter, colors) -> None:
+        """
+        Draws the playhead as a haloed line with a handle in the ruler.
+
+        The halo is what makes this readable: every hue in the drawing palette
+        belongs to user content, so a colored line would sooner or later sit on
+        a bar of its own color. A light core over a dark outline (inverted on
+        light themes) separates from any background without competing with the
+        annotations for saturation.
+
+        Args:
+            painter: Active painter on this widget.
+            colors: Resolved theme color tokens.
+
+        Returns:
+            None
+        """
+
         playhead_x = self._ms_to_x(self._position_ms)
-        painter.setPen(QPen(QColor(231, 76, 60), 2))
+        core = QColor(colors.timeline_playhead)
+        halo = QColor(colors.timeline_playhead_halo)
+
+        painter.setPen(QPen(halo, PLAYHEAD_HALO_WIDTH_PX))
         painter.drawLine(playhead_x, 0, playhead_x, self.height())
+        painter.setPen(QPen(core, PLAYHEAD_CORE_WIDTH_PX))
+        painter.drawLine(playhead_x, 0, playhead_x, self.height())
+
+        handle = QPolygon(
+            [
+                QPoint(playhead_x - PLAYHEAD_HANDLE_PX, 0),
+                QPoint(playhead_x + PLAYHEAD_HANDLE_PX, 0),
+                QPoint(playhead_x, PLAYHEAD_HANDLE_PX + 2),
+            ]
+        )
+        painter.setPen(QPen(halo, 1))
+        painter.setBrush(core)
+        painter.drawPolygon(handle)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
 
     def _hit_test(self, pos) -> tuple[int, VideoAnnotationModel, str] | None:
         """

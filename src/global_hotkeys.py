@@ -206,3 +206,84 @@ class GlobalHotkeyManager:
             self._bridge.triggered.emit(action)
 
         return callback
+
+
+class EscapeListener(QObject):
+    """
+    Listens for Escape globally while a capture overlay cannot hold focus.
+
+    The Linux window-capture overlay is ``WindowTransparentForInput`` so
+    ``xdotool`` can pick the window underneath. That also means no window of
+    the app can receive key events, which kills widget-level Escape handling,
+    keyboard grabs, and application shortcuts alike. A passive global listener
+    is the only thing that still sees the key in that state.
+
+    Signals:
+        escape_pressed: Emitted on the Qt main thread when Escape is pressed.
+    """
+
+    escape_pressed = Signal()
+
+    def __init__(self) -> None:
+        """
+        Initializes the listener without starting it.
+        """
+
+        super().__init__()
+        self._listener = None
+
+    @staticmethod
+    def is_supported() -> bool:
+        """
+        Indicates whether a global Escape listener can run.
+
+        Returns:
+            bool: True when pynput is importable.
+        """
+
+        return PYNPUT_AVAILABLE
+
+    def start(self) -> bool:
+        """
+        Starts listening for Escape.
+
+        Returns:
+            bool: True when the listener started, False when unsupported or the
+            platform refused the input hook.
+        """
+
+        if self._listener is not None:
+            return True
+        if not PYNPUT_AVAILABLE or keyboard is None:
+            return False
+
+        def on_press(key) -> None:
+            # Runs on pynput's thread; the signal hops to the Qt main thread.
+            if key == keyboard.Key.esc:
+                self.escape_pressed.emit()
+
+        try:
+            # Passive: Escape is never suppressed, other apps still receive it.
+            listener = keyboard.Listener(on_press=on_press)
+            listener.start()
+        except Exception:
+            self._listener = None
+            return False
+        self._listener = listener
+        return True
+
+    def stop(self) -> None:
+        """
+        Stops the listener if it is running.
+
+        Returns:
+            None
+        """
+
+        if self._listener is None:
+            return
+        try:
+            self._listener.stop()
+        except Exception:
+            pass
+        self._listener = None

@@ -884,7 +884,13 @@ class VideoVectorToolbar:
         if shape_gap is not None:
             shape_gap.setVisible(bool(shape_targets) and bool(targets))
 
-        self._property_tabs.setTabVisible(0, bool(targets) or bool(shape_targets))
+        # Style is this tab widget's only tab, so hiding just the tab header
+        # would leave an empty framed block above the video -- and that is the
+        # editor's default state (Select active, nothing selected). Hide the
+        # container itself so the space collapses back to the canvas.
+        has_style_content = bool(targets) or bool(shape_targets)
+        self._property_tabs.setTabVisible(0, has_style_content)
+        self._property_tabs.setVisible(has_style_content)
 
     def _configure_menu_tool_button(self, button: QToolButton) -> None:
         """

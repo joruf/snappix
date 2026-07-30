@@ -48,6 +48,9 @@ class ThemeColors:
         scrollbar_handle: Scrollbar handle color.
         editor_workspace: Gray pasteboard behind the drawable document.
         editor_document_border: Border around the document canvas.
+        timeline_playhead: Core color of the video timeline playhead.
+        timeline_playhead_halo: Outline drawn beneath the playhead so it stays
+            readable on top of any annotation bar color.
     """
 
     window_bg: str
@@ -71,6 +74,8 @@ class ThemeColors:
     scrollbar_handle: str
     editor_workspace: str
     editor_document_border: str
+    timeline_playhead: str
+    timeline_playhead_halo: str
 
 
 _DARK_COLORS = ThemeColors(
@@ -95,6 +100,11 @@ _DARK_COLORS = ThemeColors(
     scrollbar_handle="#434d63",
     editor_workspace="#4d525c",
     editor_document_border="#2f3541",
+    # Neutral, not chromatic: every hue in STYLE_PALETTE_COLORS belongs to user
+    # content, and custom colors can be anything. A light core over a dark halo
+    # separates from any bar underneath without competing for saturation.
+    timeline_playhead="#ffffff",
+    timeline_playhead_halo="#11151d",
 )
 
 _LIGHT_COLORS = ThemeColors(
@@ -119,6 +129,8 @@ _LIGHT_COLORS = ThemeColors(
     scrollbar_handle="#cbd5e1",
     editor_workspace="#b8bcc4",
     editor_document_border="#8b939e",
+    timeline_playhead="#0f172a",
+    timeline_playhead_halo="#ffffff",
 )
 
 _SLATE_COLORS = ThemeColors(
@@ -143,6 +155,8 @@ _SLATE_COLORS = ThemeColors(
     scrollbar_handle="#475569",
     editor_workspace="#556275",
     editor_document_border="#334155",
+    timeline_playhead="#ffffff",
+    timeline_playhead_halo="#0b1220",
 )
 
 _SEPIA_COLORS = ThemeColors(
@@ -167,6 +181,8 @@ _SEPIA_COLORS = ThemeColors(
     scrollbar_handle="#d4c4a8",
     editor_workspace="#c4b396",
     editor_document_border="#a89478",
+    timeline_playhead="#2b1d13",
+    timeline_playhead_halo="#fffdf7",
 )
 
 _THEME_COLORS: dict[str, ThemeColors] = {

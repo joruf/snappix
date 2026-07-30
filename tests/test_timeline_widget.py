@@ -8,7 +8,7 @@ import unittest
 
 try:
     from PySide6.QtCore import QPoint, QPointF, Qt
-    from PySide6.QtGui import QContextMenuEvent, QKeyEvent, QMouseEvent, QWheelEvent
+    from PySide6.QtGui import QColor, QContextMenuEvent, QKeyEvent, QMouseEvent, QWheelEvent
 
     from src.timeline_widget import (
         CTRL_NAV_THRESHOLD_PX,
@@ -1099,6 +1099,225 @@ class TestTimelineAnnotationJumps(unittest.TestCase):
         view_end = view_start + widget._view_duration_ms  # pylint: disable=protected-access
         self.assertLessEqual(view_start, 200_000)
         self.assertLessEqual(200_000, view_end)
+
+
+def _relative_luminance(color) -> float:
+    """
+    Computes WCAG relative luminance for one color.
+
+    Args:
+        color: QColor to measure.
+
+    Returns:
+        float: Relative luminance in the 0..1 range.
+    """
+
+    channels = []
+    for value in (color.redF(), color.greenF(), color.blueF()):
+        channels.append(
+            value / 12.92 if value <= 0.04045 else ((value + 0.055) / 1.055) ** 2.4
+        )
+    return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2]
+
+
+def _contrast_ratio(first, second) -> float:
+    """
+    Computes the WCAG contrast ratio between two colors.
+
+    Args:
+        first: First QColor.
+        second: Second QColor.
+
+    Returns:
+        float: Contrast ratio, 1.0 for identical colors.
+    """
+
+    lighter = max(_relative_luminance(first), _relative_luminance(second))
+    darker = min(_relative_luminance(first), _relative_luminance(second))
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for timeline widget tests")
+class TestTimelineTheming(unittest.TestCase):
+    """
+    Verifies the timeline paints itself from theme tokens and keeps the playhead
+    readable on top of any annotation bar color.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_qapp()
+
+    def setUp(self) -> None:
+        from src.theme import current_theme_name, set_current_theme
+
+        previous = current_theme_name()
+        self.addCleanup(set_current_theme, previous)
+
+    def _render(self, theme_name: str, annotations, position_ms: int = 3000):
+        """
+        Renders the timeline for one theme into an image.
+
+        Args:
+            theme_name: Theme to activate before painting.
+            annotations: Annotation rows to display.
+            position_ms: Playhead position.
+
+        Returns:
+            tuple: (QImage, TimelineWidget, ThemeColors)
+        """
+
+        from PySide6.QtGui import QImage
+
+        from src.theme import get_theme_colors, set_current_theme
+
+        set_current_theme(theme_name)
+        widget = TimelineWidget()
+        widget.resize(820, 120)
+        widget.set_duration(10_000)
+        widget.set_annotations(annotations)
+        _show_full_timeline(widget)
+        widget.set_position(position_ms)
+
+        image = QImage(820, 120, QImage.Format.Format_ARGB32)
+        widget.render(image)
+        return image, widget, get_theme_colors(theme_name)
+
+    def test_ruler_uses_theme_surface_instead_of_a_hardcoded_gray(self) -> None:
+        """
+        Ensures the ruler follows the active theme.
+
+        The timeline used to hardcode dark grays, which left it as a near-black
+        slab on the light and sepia themes.
+        """
+
+        from src.theme import THEME_LIGHT
+
+        image, _widget, colors = self._render(THEME_LIGHT, [])
+        # Sample the ruler well right of the label column, off any tick mark.
+        ruler_pixel = image.pixelColor(300, 4)
+
+        self.assertEqual(ruler_pixel.name(), colors.surface_alt)
+
+    def test_ruler_differs_between_light_and_dark_themes(self) -> None:
+        """
+        Ensures switching the theme actually repaints the timeline chrome.
+        """
+
+        from src.theme import THEME_DARK, THEME_LIGHT
+
+        light_image, _w1, _c1 = self._render(THEME_LIGHT, [])
+        dark_image, _w2, _c2 = self._render(THEME_DARK, [])
+
+        self.assertNotEqual(
+            light_image.pixelColor(300, 4).name(),
+            dark_image.pixelColor(300, 4).name(),
+        )
+
+    def test_playhead_stays_visible_on_a_bar_of_its_own_former_color(self) -> None:
+        """
+        Ensures the playhead reads against the default drawing red.
+
+        DEFAULT_STROKE_COLOR is #e74c3c, which used to be the playhead color
+        exactly -- so the playhead vanished inside the most common bar. The
+        threshold is WCAG 1.4.11 non-text contrast, the rule that applies to a
+        graphical element like this.
+        """
+
+        from src.color_contrast import MIN_UI_CONTRAST
+        from src.theme import THEME_DARK, THEME_LIGHT, THEME_SEPIA, THEME_SLATE
+
+        annotation = _make_annotation(start_ms=1000, end_ms=6000)
+        annotation.stroke_rgba = [231, 76, 60, 255]
+
+        for theme_name in (THEME_DARK, THEME_LIGHT, THEME_SLATE, THEME_SEPIA):
+            with self.subTest(theme=theme_name):
+                image, widget, _colors = self._render(theme_name, [annotation])
+                playhead_x = widget._ms_to_x(3000)  # pylint: disable=protected-access
+                row_y = RULER_HEIGHT + 10
+                bar_color = image.pixelColor(playhead_x + 20, row_y)
+
+                best = max(
+                    (
+                        _contrast_ratio(image.pixelColor(playhead_x + offset, row_y), bar_color)
+                        for offset in range(-4, 5)
+                    ),
+                )
+                self.assertGreaterEqual(
+                    best,
+                    MIN_UI_CONTRAST,
+                    f"{theme_name}: playhead lost in the bar",
+                )
+
+    def test_dark_annotation_bar_stays_visible_on_dark_themes(self) -> None:
+        """
+        Ensures a bar never sinks into the track and reads as disabled.
+
+        A text annotation's default navy (#2c3e50) at the bar's tint alpha sat
+        almost exactly on the dark themes' track color.
+        """
+
+        from src.theme import THEME_DARK, THEME_SLATE
+
+        annotation = _make_annotation(start_ms=1000, end_ms=6000)
+        annotation.stroke_rgba = [44, 62, 80, 255]
+
+        for theme_name in (THEME_DARK, THEME_SLATE):
+            with self.subTest(theme=theme_name):
+                image, widget, colors = self._render(theme_name, [annotation])
+                bar = widget._bar_rect(0, annotation)  # pylint: disable=protected-access
+                row_y = RULER_HEIGHT + 10
+                # Sample inside the bar, clear of its border and the playhead.
+                bar_pixel = image.pixelColor(bar.x() + bar.width() - 12, row_y)
+                track = QColor(colors.window_bg)
+
+                self.assertGreaterEqual(
+                    _contrast_ratio(bar_pixel, track),
+                    3.0,
+                    f"{theme_name}: bar sinks into the track",
+                )
+
+    def test_bar_keeps_its_own_color_when_already_readable(self) -> None:
+        """
+        Ensures a well-contrasting annotation color is not shifted needlessly.
+        """
+
+        from src.theme import THEME_DARK
+
+        annotation = _make_annotation(start_ms=1000, end_ms=6000)
+        annotation.stroke_rgba = [46, 204, 113, 255]
+
+        image, widget, _colors = self._render(THEME_DARK, [annotation])
+        bar = widget._bar_rect(0, annotation)  # pylint: disable=protected-access
+        bar_pixel = image.pixelColor(bar.x() + bar.width() - 12, RULER_HEIGHT + 10)
+
+        # Still recognisably the same green: hue survives, only alpha tints it.
+        self.assertGreater(bar_pixel.green(), bar_pixel.red())
+        self.assertGreater(bar_pixel.green(), bar_pixel.blue())
+
+    def test_selected_bar_border_is_not_white(self) -> None:
+        """
+        Ensures selection uses the accent color.
+
+        A white outline disappeared on the light and sepia themes.
+        """
+
+        from src.theme import THEME_LIGHT
+
+        annotation = _make_annotation(start_ms=1000, end_ms=6000)
+        image, widget, colors = self._render(THEME_LIGHT, [annotation])
+        widget._selected_id = annotation.annotation_id  # pylint: disable=protected-access
+
+        from PySide6.QtGui import QImage
+
+        image = QImage(820, 120, QImage.Format.Format_ARGB32)
+        widget.render(image)
+
+        bar = widget._bar_rect(0, annotation)  # pylint: disable=protected-access
+        border_pixel = image.pixelColor(bar.x() + bar.width() // 2, bar.y() + 1)
+
+        self.assertNotEqual(border_pixel.name(), "#ffffff")
+        self.assertLess(_contrast_ratio(border_pixel, QColor(colors.accent)), 2.0)
 
 
 if __name__ == "__main__":

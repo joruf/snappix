@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
 from src.constants import APP_NAME
 from src.auto_scroll_capture import MAX_SCROLL_FRAMES, perform_auto_scroll_capture
 from src.flow_layout import FlowLayoutWidget
+from src.global_hotkeys import EscapeListener
 from src.ocr import extract_text_from_png_bytes
 from src.scroll_capture import pixmap_to_png_bytes
 from src.platform import (
@@ -1346,17 +1347,28 @@ def execute_scroll_capture(
     )
     selection_state = {"cancelled": False}
 
+    # Same constraint as window capture: the overlay is input-transparent so
+    # xdotool can pick the window underneath, so no window of ours can receive
+    # Escape. A passive global listener is what makes cancelling work.
+    escape_listener = EscapeListener()
+
+    def finish_selection() -> None:
+        escape_listener.stop()
+        _untrack_overlay(overlay)
+        overlay.close()
+
     def cancel_selection() -> None:
         if selection_state["cancelled"]:
             return
         selection_state["cancelled"] = True
         if process.poll() is None:
             process.terminate()
-        _untrack_overlay(overlay)
-        overlay.close()
+        finish_selection()
         on_cancel()
 
     overlay.capture_cancelled.connect(cancel_selection)
+    escape_listener.escape_pressed.connect(cancel_selection)
+    escape_listener.start()
 
     def check_selection_process() -> None:
         if selection_state["cancelled"]:
@@ -1366,8 +1378,7 @@ def execute_scroll_capture(
             QTimer.singleShot(70, check_selection_process)
             return
 
-        _untrack_overlay(overlay)
-        overlay.close()
+        finish_selection()
 
         if return_code != 0:
             on_cancel()
@@ -2668,17 +2679,29 @@ def execute_capture_request(
         )
         selection_state = {"cancelled": False}
 
+        # The overlay is WindowTransparentForInput so xdotool can pick the
+        # window underneath, which also stops any window of ours from receiving
+        # key events -- the overlay's own Escape handling never fires here. A
+        # passive global listener is what makes Escape work during selection.
+        escape_listener = EscapeListener()
+
+        def finish_selection() -> None:
+            escape_listener.stop()
+            _untrack_overlay(overlay)
+            overlay.close()
+
         def cancel_selection() -> None:
             if selection_state["cancelled"]:
                 return
             selection_state["cancelled"] = True
             if process.poll() is None:
                 process.terminate()
-            _untrack_overlay(overlay)
-            overlay.close()
+            finish_selection()
             on_cancel()
 
         overlay.capture_cancelled.connect(cancel_selection)
+        escape_listener.escape_pressed.connect(cancel_selection)
+        escape_listener.start()
 
         def check_selection_process() -> None:
             if selection_state["cancelled"]:
@@ -2688,8 +2711,7 @@ def execute_capture_request(
                 QTimer.singleShot(70, check_selection_process)
                 return
 
-            _untrack_overlay(overlay)
-            overlay.close()
+            finish_selection()
 
             if return_code != 0:
                 on_cancel()

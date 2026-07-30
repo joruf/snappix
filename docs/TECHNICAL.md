@@ -64,6 +64,7 @@ Startup:
 | `src/video_vector_toolbar.py` | Video editor toolbar (parity with image editor UX) |
 | `src/timeline_widget.py` | Scrub ruler, annotation time bars, pan/zoom/page navigation |
 | `src/annotation_render.py` | Renders selected annotation items to a transparent image for the system clipboard |
+| `src/color_contrast.py` | WCAG luminance/contrast helpers so chrome stays readable over user-chosen colors |
 | `src/video_recorder.py` | ffmpeg region recording, pause/resume, segment relocate on drag |
 | `src/video_storage.py` | `.sfpv` ZIP save/load (embedded MP4 + manifest) |
 | `src/video_models.py` | `VideoAnnotationModel`, `VideoProjectModel` |
@@ -153,6 +154,19 @@ has no hard ceiling — the cap exists to keep timeline navigation and MP4 expor
 practical, so raising it is a one-constant change. A rejected recording is left
 on disk and its path is named in the warning dialog.
 
+### Cancelling a capture (Escape)
+
+Most overlays handle Escape themselves. The Linux **window** and **scroll**
+pickers cannot: their `WindowCaptureOverlay` is `WindowTransparentForInput` so
+`xdotool selectwindow` can pick the window underneath, which also leaves no
+window of the app able to receive key events — `keyPressEvent`, `grabKeyboard()`,
+and the application-wide Escape `QShortcut` are all dead in that state. Both
+paths therefore run an `EscapeListener` (`src/global_hotkeys.py`) for the
+duration of the pick: a passive pynput listener that never suppresses the key
+and marshals to the Qt thread via a signal. Without pynput the pick simply stays
+click-only. Any new capture path that hides the app from the keyboard needs the
+same listener.
+
 ### Post-capture actions
 
 | Config value | Behavior |
@@ -194,6 +208,9 @@ Accent styling: `build_editor_accent_stylesheet(theme)` on the host; capture pan
 `TimelineWidget`:
 
 - One row per annotation; draggable/resizable time-range bars (`ROW_HEIGHT` 20px)
+- Painted entirely from `get_theme_colors()` tokens — ruler `surface_alt`, label column `surface`, track `window_bg`, grid `border`, ticks `text_muted`, selection `accent`. It previously hardcoded dark grays, which left it a near-black slab on the light and sepia themes.
+- The playhead is deliberately achromatic (`timeline_playhead` over `timeline_playhead_halo`) with a handle in the ruler: every hue in `STYLE_PALETTE_COLORS` belongs to user content, and `DEFAULT_STROKE_COLOR` (`#e74c3c`) used to *be* the playhead color, so the playhead vanished inside the most common bar. Halo-over-core keeps it above WCAG 1.4.11's 3:1 against any bar underneath.
+- Bar fills and borders run through `ensure_min_contrast()` (`src/color_contrast.py`) against the track, so an annotation colored close to the surface — a text object's dark navy on the dark themes — cannot sink into it and read as disabled. The tint alpha is applied *before* measuring; lifting the opaque color first lets the blend drag contrast back under the threshold.
 - Selecting a bar and pressing `Del` emits `annotation_delete_requested`; `VideoEditorWindow` routes it to `VideoCanvas.delete_annotations_by_ids()` and pushes one history step, so row and canvas object are removed together. The widget uses `StrongFocus` so the key reaches it after a click.
 - Because the timeline takes click focus, `VideoEditorWindow.keyPressEvent()` re-offers `CANVAS_FALLBACK_KEYS` (`Esc`, `Return`/`Enter`, `Del`) to `VideoCanvas` when they bubble up unhandled. Without that, clicking the timeline would strand the canvas's cancel-draw / finalize-polygon / delete-selection keys until the canvas was clicked again.
 - Full-width track area; page-based pan (`◀` / `▶`, Ctrl+drag, Ctrl+wheel zoom)
