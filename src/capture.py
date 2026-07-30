@@ -77,6 +77,13 @@ _ACTIVE_OVERLAYS: list[QWidget] = []
 # before sampling the framebuffer. Too short and the panel still appears in shots.
 CAPTURE_UI_SETTLE_MS = 120
 
+# ---------------------------------------------------------------------------
+# Capture panel startup width (client area in pixels).
+# Change CAPTURE_PANEL_START_WIDTH to control how buttons wrap on startup.
+# Height is always the minimum that fits the content at that width.
+# ---------------------------------------------------------------------------
+CAPTURE_PANEL_START_WIDTH = 420
+
 
 def schedule_capture_after_ui_settle(callback: Callable[[], None]) -> None:
     """
@@ -364,19 +371,6 @@ class CapturePanel(QWidget):
         self.recognize_text_button.clicked.connect(self.text_recognition_requested.emit)
         button_widgets.append(self.recognize_text_button)
 
-        # Only the primary (accent-colored) capture-mode buttons define the
-        # startup row width -- the color picker, MeasureBox, OCR, and Open Editor
-        # controls are expected to wrap onto the row(s) below on first show.
-        self._primary_capture_buttons = [
-            self.capture_fullscreen_button,
-            self.capture_area_button,
-            self.capture_window_button,
-            self.capture_scroll_button,
-            self.capture_video_button,
-        ]
-        self._capture_buttons_row_width = self._measure_row_width(
-            self._primary_capture_buttons, buttons_flow.flow_layout.horizontalSpacing()
-        )
         self._buttons_flow = buttons_flow
 
         button_widgets.append(self.open_editor_button)
@@ -423,11 +417,6 @@ class CapturePanel(QWidget):
         ]
         visible_buttons = [button for button in candidates if not button.isHidden()]
         self._buttons_flow.set_flow_widgets(visible_buttons)
-        row_buttons = [button for button in self._primary_capture_buttons if not button.isHidden()]
-        self._capture_buttons_row_width = self._measure_row_width(
-            row_buttons,
-            self._buttons_flow.flow_layout.horizontalSpacing(),
-        )
 
     def set_video_capture_available(self, available: bool) -> None:
         """
@@ -615,33 +604,13 @@ class CapturePanel(QWidget):
             return
         QTimer.singleShot(0, self._apply_initial_window_geometry)
 
-    @staticmethod
-    def _measure_row_width(widgets: list[QWidget], spacing: int) -> int:
-        """
-        Measures the total width needed to place widgets side by side in one row.
-
-        Args:
-            widgets: Widgets that would be placed left to right.
-            spacing: Horizontal gap between adjacent widgets in pixels.
-
-        Returns:
-            int: Combined width in pixels, including in-between spacing.
-        """
-
-        total = 0
-        for index, widget in enumerate(widgets):
-            widget.adjustSize()
-            total += widget.sizeHint().width()
-            if index > 0:
-                total += spacing
-        return total
-
     def _apply_initial_window_geometry(self) -> None:
         """
-        Applies the initial size (wide enough for the primary capture-mode
-        buttons on one row, with the color picker, OCR, and Open Editor
-        controls wrapping onto the row(s) below, and no more height than
-        needed) and top-right position once per run.
+        Applies the Capture startup width with minimum content height and docks
+        the panel top-right.
+
+        Width comes from ``CAPTURE_PANEL_START_WIDTH`` at the top of this module.
+        Height is the smallest value that fits the layout at that width.
 
         Returns:
             None
@@ -649,16 +618,15 @@ class CapturePanel(QWidget):
 
         if self._initial_position_done:
             return
-        # Temporarily force the flow container's minimum width to fit the primary
-        # capture buttons on one row, so adjustSize()/minimumSizeHint() below
-        # compute the window's default size (and height-for-width row count)
-        # around that row width analytically, without depending on a live
-        # resize round-trip.
-        self._buttons_flow.setMinimumWidth(self._capture_buttons_row_width)
-        self.adjustSize()
-        target_size = self.minimumSizeHint()
-        self.resize(target_size)
-        self._buttons_flow.setMinimumWidth(0)
+        width = max(1, int(CAPTURE_PANEL_START_WIDTH))
+        self.resize(width, 1)
+        QApplication.processEvents()
+        layout = self.layout()
+        if layout is not None and layout.hasHeightForWidth():
+            height = max(1, int(layout.heightForWidth(max(1, self.contentsRect().width()))))
+        else:
+            height = max(1, int(self.minimumSizeHint().height()))
+        self.resize(width, height)
         screen = QGuiApplication.screenAt(QCursor.pos())
         if screen is None:
             screen = QGuiApplication.primaryScreen()

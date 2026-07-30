@@ -100,36 +100,38 @@ class TestCapturePanelLayout(unittest.TestCase):
 
     def test_default_window_width_fits_primary_capture_buttons_on_one_row(self) -> None:
         """
-        Ensures the panel's default size places the primary (accent-colored)
-        capture-mode buttons on one row, with the color picker, MeasureBox, OCR,
-        and Open Editor controls wrapping onto the row(s) below, and stays no
-        taller than needed to show that layout.
+        Ensures the panel's default size uses CAPTURE_PANEL_START_WIDTH and
+        wraps Scroll/Video/tools below Fullscreen/Area/Window.
         """
+
+        from src.capture import CAPTURE_PANEL_START_WIDTH
 
         panel = CapturePanel()
         panel.set_video_capture_available(True)
         panel.show()
         panel._apply_initial_window_geometry()
 
-        primary_buttons = [
+        self.assertEqual(panel.width(), CAPTURE_PANEL_START_WIDTH)
+
+        first_row_buttons = [
             button
             for button in (
                 panel.capture_fullscreen_button,
                 panel.capture_area_button,
                 panel.capture_window_button,
-                panel.capture_scroll_button,
-                panel.capture_video_button,
             )
             if not button.isHidden()
         ]
-        self.assertGreaterEqual(len(primary_buttons), 3)
-        reference = primary_buttons[0].geometry()
-        for button in primary_buttons[1:]:
+        self.assertGreaterEqual(len(first_row_buttons), 2)
+        reference = first_row_buttons[0].geometry()
+        for button in first_row_buttons[1:]:
             self.assertTrue(_vertical_ranges_overlap(reference, button.geometry()))
 
-        secondary_buttons = [
+        wrapped_buttons = [
             button
             for button in (
+                panel.capture_scroll_button,
+                panel.capture_video_button,
                 panel.pick_color_button,
                 panel.measure_box_button,
                 panel.recognize_text_button,
@@ -137,11 +139,14 @@ class TestCapturePanelLayout(unittest.TestCase):
             )
             if not button.isHidden()
         ]
-        for button in secondary_buttons:
+        for button in wrapped_buttons:
             self.assertFalse(_vertical_ranges_overlap(reference, button.geometry()))
             self.assertGreater(button.geometry().y(), reference.y())
 
-        self.assertEqual(panel.height(), panel.minimumSizeHint().height())
+        layout = panel.layout()
+        self.assertIsNotNone(layout)
+        expected_height = layout.heightForWidth(panel.contentsRect().width())
+        self.assertEqual(panel.height(), expected_height)
 
     def test_measure_box_button_is_between_color_picker_and_ocr(self) -> None:
         """

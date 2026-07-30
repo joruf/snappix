@@ -166,7 +166,7 @@ Flatpak modules too would be a much larger, slower build.
 
 ### Capture
 
-- Compact **Capture Panel** with delay (0–20 s); startup width fits the primary capture buttons on one row, with Color Picker/OCR/Open Editor wrapping below
+- Compact **Capture Panel** with delay (0–20 s); startup width fits Fullscreen / Area / Window on one row, with Scroll / Video / Color Picker / MeasureBox / OCR / Open Editor wrapping below
 - Modes: **Fullscreen**, **Area**, **Color Picker**, **OCR** (select a region, recognized text is copied to clipboard — the screenshot itself is discarded), **Capture Window**, **Scroll**; **Capture Video** when tools are present
 - On Windows: Scroll uses Win32 PageDown (best-effort); Capture Video appears when `ffmpeg` is available
 - **Auto scroll capture** for long pages on Linux (scrollbar detect + stitch)
