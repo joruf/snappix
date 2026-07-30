@@ -75,6 +75,7 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertEqual(config.hotkey_capture_region, "ctrl+shift+a")
         self.assertEqual(config.hotkey_capture_window, "ctrl+shift+w")
         self.assertEqual(config.hotkey_capture_fullscreen, "ctrl+shift+f1")
+        self.assertEqual(config.hotkey_measure_box, "ctrl+shift+m")
         self.assertEqual(config.post_capture_action, POST_CAPTURE_CLIPBOARD)
         self.assertEqual(config.capture_save_directory, "/home/user/Pictures")
         self.assertEqual(config.editor_last_tab_behavior, EDITOR_LAST_TAB_CLOSE_WINDOW)
@@ -97,3 +98,40 @@ class TestSettingsDialog(unittest.TestCase):
         config = dialog.build_config()
         self.assertTrue(config.autostart_enabled)
         self.assertEqual(config.theme, "light")
+
+    def test_measure_box_tab_persists_hotkey_and_appearance(self) -> None:
+        """
+        Ensures the MeasureBox tab updates hotkey and appearance settings.
+        """
+
+        from src.measurebox.settings import MeasureBoxSettings
+
+        dialog = SettingsDialog(
+            AppConfig(hotkey_measure_box="ctrl+shift+m"),
+            measure_box_settings=MeasureBoxSettings(
+                line_rgba=(1, 2, 3, 4),
+                fill_rgba=(5, 6, 7, 8),
+                ruler_enabled=False,
+                ruler_outside=False,
+                crosshair_enabled=True,
+            ),
+        )
+        dialog.hotkey_measure_box_edit.setText("Ctrl+Shift+B")
+        dialog.measure_ruler_checkbox.setChecked(True)
+        dialog.measure_ruler_outside_checkbox.setChecked(True)
+        dialog.measure_crosshair_checkbox.setChecked(False)
+        dialog._measure_line_rgba = (10, 20, 30, 40)  # pylint: disable=protected-access
+        dialog._measure_fill_rgba = (50, 60, 70, 80)  # pylint: disable=protected-access
+
+        config = dialog.build_config()
+        measure = dialog.build_measure_box_settings()
+        self.assertEqual(config.hotkey_measure_box, "ctrl+shift+b")
+        self.assertEqual(measure.line_rgba, (10, 20, 30, 40))
+        self.assertEqual(measure.fill_rgba, (50, 60, 70, 80))
+        self.assertTrue(measure.ruler_enabled)
+        self.assertTrue(measure.ruler_outside)
+        self.assertFalse(measure.crosshair_enabled)
+
+
+if __name__ == "__main__":
+    unittest.main()

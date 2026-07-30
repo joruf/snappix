@@ -16,6 +16,7 @@ English labeled screenshots of the Capture and Editor windows. Regenerate with:
 | Capture delay | Seconds to wait before capture starts (Esc cancels during countdown) |
 | Capture actions | Fullscreen, Area, Window, Scroll, and Video capture |
 | Screen color picker | Sample a screen color into the clipboard |
+| MeasureBox | Draw a persistent measurement rectangle (`Ctrl+Shift+M` by default, editable in Settings → MeasureBox). Esc exits. Right-click the button for appearance shortcuts. |
 | OCR | Select a region, recognize its text, and copy it to the clipboard (the screenshot itself is discarded) |
 | Open Editor | Open the image editor without capturing |
 

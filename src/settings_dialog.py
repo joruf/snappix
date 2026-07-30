@@ -5,9 +5,10 @@ Application settings dialog.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence
+from PySide6.QtGui import QColor, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.config import (
+    DEFAULT_HOTKEY_MEASURE_BOX,
     EDITOR_LAST_TAB_BEHAVIORS,
     POST_CAPTURE_ACTIONS,
     AppConfig,
@@ -46,6 +48,7 @@ from src.config import (
     sanitize_editor_shortcut_map,
 )
 from src.global_hotkeys import GlobalHotkeyManager, hotkey_spec_to_pynput
+from src.measurebox.settings import MeasureBoxSettings
 from src.shortcuts import (
     EDITOR_SHORTCUT_DEFINITIONS,
     find_shortcut_conflicts,
@@ -61,13 +64,19 @@ class SettingsDialog(QDialog):
     Edits persisted Snappix application settings.
     """
 
-    def __init__(self, config: AppConfig, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        parent: QWidget | None = None,
+        measure_box_settings: MeasureBoxSettings | None = None,
+    ) -> None:
         """
         Initializes the settings dialog with current values.
 
         Args:
             config: Current application configuration.
             parent: Optional parent widget.
+            measure_box_settings: Optional MeasureBox appearance settings.
         """
 
         super().__init__(parent)
@@ -75,11 +84,15 @@ class SettingsDialog(QDialog):
         self.setModal(True)
         self.resize(640, 520)
         self._config = config
+        self._measure_box_settings = measure_box_settings or MeasureBoxSettings()
         self._shortcut_edits: dict[str, QKeySequenceEdit] = {}
+        self._measure_line_rgba = self._measure_box_settings.line_rgba
+        self._measure_fill_rgba = self._measure_box_settings.fill_rgba
 
         root_layout = QVBoxLayout(self)
         tabs = QTabWidget(self)
         tabs.addTab(self._build_general_tab(config), "General")
+        tabs.addTab(self._build_measure_box_tab(config, self._measure_box_settings), "MeasureBox")
         tabs.addTab(self._build_shortcuts_tab(config), "Editor Shortcuts")
         root_layout.addWidget(tabs)
 
@@ -247,6 +260,130 @@ class SettingsDialog(QDialog):
         layout.addStretch(1)
         return page
 
+    def _build_measure_box_tab(
+        self,
+        config: AppConfig,
+        measure_box_settings: MeasureBoxSettings,
+    ) -> QWidget:
+        """
+        Builds the MeasureBox settings tab (hotkey + appearance).
+
+        Args:
+            config: Current application configuration.
+            measure_box_settings: Current MeasureBox appearance settings.
+
+        Returns:
+            QWidget: MeasureBox settings page.
+        """
+
+        page = QWidget(self)
+        layout = QVBoxLayout(page)
+        hint = QLabel(
+            "Start MeasureBox from Capture with the global hotkey below, or click "
+            "the MeasureBox button. Drag to draw a measurement, hold Left Shift to "
+            "edit, and press Esc to exit."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        form = QFormLayout()
+        hotkey_row = QHBoxLayout()
+        self.hotkey_measure_box_edit = QLineEdit(config.hotkey_measure_box)
+        self.hotkey_measure_box_edit.setPlaceholderText(DEFAULT_HOTKEY_MEASURE_BOX)
+        self.hotkey_measure_box_edit.setToolTip(
+            "Global shortcut to start MeasureBox. Example: ctrl+shift+m"
+        )
+        hotkey_row.addWidget(self.hotkey_measure_box_edit, 1)
+        reset_hotkey_button = QPushButton("Reset")
+        reset_hotkey_button.setToolTip(f"Restore default: {DEFAULT_HOTKEY_MEASURE_BOX}")
+        reset_hotkey_button.clicked.connect(
+            lambda: self.hotkey_measure_box_edit.setText(DEFAULT_HOTKEY_MEASURE_BOX)
+        )
+        hotkey_row.addWidget(reset_hotkey_button)
+        form.addRow("Start MeasureBox:", hotkey_row)
+
+        line_row = QHBoxLayout()
+        self.measure_line_color_button = QPushButton("Choose...")
+        self.measure_line_color_button.clicked.connect(self._choose_measure_line_color)
+        line_row.addWidget(self.measure_line_color_button)
+        line_row.addStretch(1)
+        form.addRow("Line color:", line_row)
+
+        fill_row = QHBoxLayout()
+        self.measure_fill_color_button = QPushButton("Choose...")
+        self.measure_fill_color_button.clicked.connect(self._choose_measure_fill_color)
+        fill_row.addWidget(self.measure_fill_color_button)
+        fill_row.addStretch(1)
+        form.addRow("Fill color:", fill_row)
+
+        self.measure_ruler_checkbox = QCheckBox("Show pixel ruler (px)")
+        self.measure_ruler_checkbox.setChecked(measure_box_settings.ruler_enabled)
+        self.measure_ruler_checkbox.toggled.connect(self._sync_measure_ruler_outside_enabled)
+        form.addRow("", self.measure_ruler_checkbox)
+
+        self.measure_ruler_outside_checkbox = QCheckBox("Ruler outside rectangle")
+        self.measure_ruler_outside_checkbox.setChecked(measure_box_settings.ruler_outside)
+        self.measure_ruler_outside_checkbox.setEnabled(measure_box_settings.ruler_enabled)
+        form.addRow("", self.measure_ruler_outside_checkbox)
+
+        self.measure_crosshair_checkbox = QCheckBox("Show Left Shift crosshair")
+        self.measure_crosshair_checkbox.setChecked(measure_box_settings.crosshair_enabled)
+        form.addRow("", self.measure_crosshair_checkbox)
+
+        layout.addLayout(form)
+        layout.addStretch(1)
+        self._refresh_measure_color_buttons()
+        return page
+
+    def _sync_measure_ruler_outside_enabled(self, checked: bool) -> None:
+        self.measure_ruler_outside_checkbox.setEnabled(checked)
+
+    def _choose_measure_line_color(self) -> None:
+        selected = QColorDialog.getColor(
+            QColor(*self._measure_line_rgba),
+            self,
+            "Select MeasureBox line color (with alpha)",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
+        if not selected.isValid():
+            return
+        self._measure_line_rgba = (
+            selected.red(),
+            selected.green(),
+            selected.blue(),
+            selected.alpha(),
+        )
+        self._refresh_measure_color_buttons()
+
+    def _choose_measure_fill_color(self) -> None:
+        selected = QColorDialog.getColor(
+            QColor(*self._measure_fill_rgba),
+            self,
+            "Select MeasureBox fill color (with alpha)",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
+        if not selected.isValid():
+            return
+        self._measure_fill_rgba = (
+            selected.red(),
+            selected.green(),
+            selected.blue(),
+            selected.alpha(),
+        )
+        self._refresh_measure_color_buttons()
+
+    def _refresh_measure_color_buttons(self) -> None:
+        line = QColor(*self._measure_line_rgba)
+        fill = QColor(*self._measure_fill_rgba)
+        self.measure_line_color_button.setText(line.name(QColor.NameFormat.HexArgb).upper())
+        self.measure_line_color_button.setStyleSheet(
+            f"background-color: {line.name(QColor.NameFormat.HexArgb)};"
+        )
+        self.measure_fill_color_button.setText(fill.name(QColor.NameFormat.HexArgb).upper())
+        self.measure_fill_color_button.setStyleSheet(
+            f"background-color: {fill.name(QColor.NameFormat.HexArgb)};"
+        )
+
     def _build_shortcuts_tab(self, config: AppConfig) -> QWidget:
         """
         Builds the editable editor shortcuts tab.
@@ -400,6 +537,7 @@ class SettingsDialog(QDialog):
             hotkey_recording_stop=normalize_hotkey_spec(
                 self.hotkey_recording_stop_edit.text()
             ),
+            hotkey_measure_box=normalize_hotkey_spec(self.hotkey_measure_box_edit.text()),
             post_capture_action=normalize_post_capture_action(
                 str(self.post_capture_combo.currentData())
             ),
@@ -427,6 +565,22 @@ class SettingsDialog(QDialog):
             tool_stroke_widths=normalize_tool_stroke_widths(self._config.tool_stroke_widths),
             tool_brush_hardness=normalize_tool_brush_hardness(self._config.tool_brush_hardness),
             tool_stroke_styles=normalize_tool_stroke_styles(self._config.tool_stroke_styles),
+        )
+
+    def build_measure_box_settings(self) -> MeasureBoxSettings:
+        """
+        Builds updated MeasureBox appearance settings from dialog fields.
+
+        Returns:
+            MeasureBoxSettings: Updated MeasureBox settings.
+        """
+
+        return MeasureBoxSettings(
+            line_rgba=self._measure_line_rgba,
+            fill_rgba=self._measure_fill_rgba,
+            ruler_enabled=self.measure_ruler_checkbox.isChecked(),
+            ruler_outside=self.measure_ruler_outside_checkbox.isChecked(),
+            crosshair_enabled=self.measure_crosshair_checkbox.isChecked(),
         )
 
     def _browse_save_directory(self) -> None:
@@ -549,6 +703,7 @@ class SettingsDialog(QDialog):
                 config.hotkey_recording_stop,
                 not self.hotkey_recording_stop_edit.isHidden(),
             ),
+            ("Start MeasureBox", config.hotkey_measure_box, True),
         ]
         for label, spec, enabled in checks:
             if not enabled:

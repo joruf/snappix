@@ -189,6 +189,7 @@ DEFAULT_HOTKEY_CAPTURE_FULLSCREEN = "ctrl+shift+f"
 DEFAULT_HOTKEY_CAPTURE_VIDEO = "ctrl+shift+v"
 DEFAULT_HOTKEY_RECORDING_PAUSE_RESUME = "ctrl+shift+p"
 DEFAULT_HOTKEY_RECORDING_STOP = "ctrl+shift+r"
+DEFAULT_HOTKEY_MEASURE_BOX = "ctrl+shift+m"
 
 
 def default_capture_save_directory() -> str:
@@ -560,6 +561,7 @@ class AppConfig:
         hotkey_capture_video: Hotkey for starting a video recording.
         hotkey_recording_pause_resume: Hotkey to pause/resume an active recording.
         hotkey_recording_stop: Hotkey to stop an active recording.
+        hotkey_measure_box: Hotkey for starting MeasureBox from Capture.
         post_capture_action: Action after a successful capture.
         capture_save_directory: Optional folder for automatic capture saves.
         workspace_directory: Folder for unsaved editor tabs and session recovery data.
@@ -589,6 +591,7 @@ class AppConfig:
     hotkey_capture_video: str = DEFAULT_HOTKEY_CAPTURE_VIDEO
     hotkey_recording_pause_resume: str = DEFAULT_HOTKEY_RECORDING_PAUSE_RESUME
     hotkey_recording_stop: str = DEFAULT_HOTKEY_RECORDING_STOP
+    hotkey_measure_box: str = DEFAULT_HOTKEY_MEASURE_BOX
     post_capture_action: str = DEFAULT_POST_CAPTURE_ACTION
     capture_save_directory: str = ""
     workspace_directory: str = ""
@@ -701,6 +704,9 @@ class ConfigManager:
             hotkey_recording_stop=normalize_hotkey_spec(
                 str(payload.get("hotkey_recording_stop", DEFAULT_HOTKEY_RECORDING_STOP))
             ),
+            hotkey_measure_box=normalize_hotkey_spec(
+                str(payload.get("hotkey_measure_box", DEFAULT_HOTKEY_MEASURE_BOX))
+            ),
             post_capture_action=normalize_post_capture_action(
                 str(payload.get("post_capture_action", DEFAULT_POST_CAPTURE_ACTION))
             ),
@@ -791,6 +797,7 @@ class ConfigManager:
                 config.hotkey_recording_pause_resume
             ),
             "hotkey_recording_stop": normalize_hotkey_spec(config.hotkey_recording_stop),
+            "hotkey_measure_box": normalize_hotkey_spec(config.hotkey_measure_box),
             "post_capture_action": normalize_post_capture_action(config.post_capture_action),
             "capture_save_directory": config.capture_save_directory.strip(),
             "workspace_directory": config.workspace_directory.strip(),

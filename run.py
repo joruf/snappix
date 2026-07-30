@@ -721,6 +721,8 @@ class AppController:
         self.capture_panel.setWindowIcon(self._capture_icon)
         self.capture_panel.capture_requested.connect(self.start_capture)
         self.capture_panel.color_pick_requested.connect(self.start_color_pick)
+        self.capture_panel.measure_box_requested.connect(self.start_measure_box)
+        self.capture_panel.measure_box_settings_requested.connect(self.show_measure_box_settings)
         self.capture_panel.text_recognition_requested.connect(self.start_text_recognition)
         self.capture_panel.autostart_toggled.connect(self.toggle_autostart)
         self.capture_panel.close_requested.connect(self._on_capture_panel_close)
@@ -732,11 +734,17 @@ class AppController:
         self.video_editors: list = []
 
         from src.paths import default_autostart_path, user_config_dir
+        from src.measurebox import MeasureBoxSession
 
         config_dir = user_config_dir()
         self.config_manager = ConfigManager(config_dir / "config.json")
         self.autostart_manager = AutostartManager(default_autostart_path())
         self.config: AppConfig = self.config_manager.load()
+        self._measure_box_session = MeasureBoxSession(
+            settings_path=config_dir / "measurebox.json",
+            on_finished=self._on_measure_box_finished,
+        )
+        self.capture_panel.set_measure_box_hotkey(self.config.hotkey_measure_box)
         self._apply_workspace_directory()
         if self.autostart_manager.is_enabled():
             self.config.autostart_enabled = True
@@ -989,6 +997,10 @@ class AppController:
             return
 
         if self._capture_in_progress:
+            return
+
+        if action == "measure_box":
+            self.start_measure_box()
             return
 
         mode_by_action = {
@@ -1383,12 +1395,18 @@ class AppController:
 
         from src.settings_dialog import SettingsDialog
 
-        dialog = SettingsDialog(self.config, self.capture_panel)
+        dialog = SettingsDialog(
+            self.config,
+            self.capture_panel,
+            self._measure_box_session.settings,
+        )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
 
         self.config = dialog.build_config()
         self.config_manager.save(self.config)
+        self._measure_box_session.apply_settings(dialog.build_measure_box_settings())
+        self.capture_panel.set_measure_box_hotkey(self.config.hotkey_measure_box)
         self._apply_workspace_directory()
         self._apply_hotkeys()
         self._install_host_editor_shortcuts()
@@ -2443,6 +2461,51 @@ class AppController:
             )
         )
 
+    def start_measure_box(self) -> None:
+        """
+        Starts a one-shot MeasureBox overlay session from Capture.
+
+        Draw a measurement rectangle that stays on screen; press Esc to exit.
+
+        Returns:
+            None
+        """
+
+        if self._measure_box_session.is_active():
+            return
+
+        self._hide_windows_for_capture()
+        from src.capture import schedule_capture_after_ui_settle
+
+        schedule_capture_after_ui_settle(self._measure_box_session.start)
+
+    def show_measure_box_settings(self, global_pos) -> None:
+        """
+        Shows the MeasureBox settings context menu at a global position.
+
+        Args:
+            global_pos: Screen position for the menu (typically from right-click).
+
+        Returns:
+            None
+        """
+
+        menu = self._measure_box_session.build_settings_menu(self.capture_panel)
+        menu.exec(global_pos)
+
+    def _on_measure_box_finished(self) -> None:
+        """
+        Restores the Capture panel after MeasureBox ends.
+
+        Returns:
+            None
+        """
+
+        if self._is_quitting:
+            return
+        self.capture_panel.show()
+        self.capture_panel.raise_()
+
     def start_text_recognition(self) -> None:
         """
         Starts capture overlay mode for recognizing text in a selected region.
@@ -2953,6 +3016,8 @@ class AppController:
         """
 
         self._is_quitting = True
+        if hasattr(self, "_measure_box_session"):
+            self._measure_box_session.stop()
         self._save_editor_session()
         self._hotkey_manager.stop()
         self.capture_panel.set_minimize_to_tray_on_close(False)

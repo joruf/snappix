@@ -206,6 +206,8 @@ class CapturePanel(QWidget):
     capture_requested = Signal(CaptureRequest)
     video_capture_requested = Signal()
     color_pick_requested = Signal()
+    measure_box_requested = Signal()
+    measure_box_settings_requested = Signal(object)
     text_recognition_requested = Signal()
     autostart_toggled = Signal(bool)
     close_requested = Signal()
@@ -278,7 +280,8 @@ class CapturePanel(QWidget):
         buttons_frame = QFrame()
         buttons_frame.setFrameShape(QFrame.Shape.StyledPanel)
         buttons_frame.setToolTip(
-            "Capture actions: fullscreen, area, window, scroll, video, color picker, and editor."
+            "Capture actions: fullscreen, area, window, scroll, video, color picker, "
+            "MeasureBox, OCR, and editor."
         )
         root_layout.addWidget(buttons_frame)
         buttons_frame_layout = QVBoxLayout(buttons_frame)
@@ -340,6 +343,18 @@ class CapturePanel(QWidget):
         self.pick_color_button.clicked.connect(self.color_pick_requested.emit)
         button_widgets.append(self.pick_color_button)
 
+        self.measure_box_button = QPushButton("")
+        self.measure_box_button.setIcon(_build_measure_box_icon())
+        self.measure_box_button.setFixedSize(32, 32)
+        self._measure_box_hotkey = ""
+        self.set_measure_box_hotkey("")
+        self.measure_box_button.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.measure_box_button.clicked.connect(self.measure_box_requested.emit)
+        self.measure_box_button.customContextMenuRequested.connect(
+            self._emit_measure_box_settings_menu
+        )
+        button_widgets.append(self.measure_box_button)
+
         self.recognize_text_button = QPushButton("")
         self.recognize_text_button.setIcon(_build_text_recognition_icon())
         self.recognize_text_button.setFixedSize(32, 32)
@@ -350,8 +365,8 @@ class CapturePanel(QWidget):
         button_widgets.append(self.recognize_text_button)
 
         # Only the primary (accent-colored) capture-mode buttons define the
-        # startup row width -- the color picker, OCR, and Open Editor controls
-        # are expected to wrap onto the row(s) below on first show.
+        # startup row width -- the color picker, MeasureBox, OCR, and Open Editor
+        # controls are expected to wrap onto the row(s) below on first show.
         self._primary_capture_buttons = [
             self.capture_fullscreen_button,
             self.capture_area_button,
@@ -402,6 +417,7 @@ class CapturePanel(QWidget):
             self.capture_scroll_button,
             self.capture_video_button,
             self.pick_color_button,
+            self.measure_box_button,
             self.recognize_text_button,
             self.open_editor_button,
         ]
@@ -458,6 +474,34 @@ class CapturePanel(QWidget):
                 "Text recognition requires tesseract-ocr. Please install tesseract-ocr to enable this feature."
             )
         self._refresh_capture_button_flow()
+
+    def set_measure_box_hotkey(self, hotkey_spec: str) -> None:
+        """
+        Updates the MeasureBox button tooltip with the current start hotkey.
+
+        Args:
+            hotkey_spec: Normalized hotkey string (e.g. ``ctrl+shift+m``).
+
+        Returns:
+            None
+        """
+
+        self._measure_box_hotkey = str(hotkey_spec or "").strip()
+        self.measure_box_button.setToolTip(measure_box_button_tooltip(self._measure_box_hotkey))
+
+    def _emit_measure_box_settings_menu(self, pos) -> None:
+        """
+        Emits a request to show the MeasureBox settings context menu.
+
+        Args:
+            pos: Local position inside the MeasureBox button.
+
+        Returns:
+            None
+        """
+
+        global_pos = self.measure_box_button.mapToGlobal(pos)
+        self.measure_box_settings_requested.emit(global_pos)
 
     def _emit_request_for_mode(self, mode: str) -> None:
         """
@@ -2838,6 +2882,69 @@ def select_video_region(
     schedule_capture_after_ui_settle(begin_selection)
 
 
+def format_hotkey_for_display(spec: str) -> str:
+    """
+    Formats a normalized hotkey spec for tooltip display.
+
+    Args:
+        spec: Normalized hotkey text such as ``ctrl+shift+m``.
+
+    Returns:
+        Human-readable hotkey label such as ``Ctrl+Shift+M``.
+    """
+
+    normalized = str(spec or "").strip().lower()
+    if not normalized:
+        return ""
+    labels = {
+        "ctrl": "Ctrl",
+        "control": "Ctrl",
+        "shift": "Shift",
+        "alt": "Alt",
+        "super": "Super",
+        "meta": "Super",
+        "win": "Super",
+        "cmd": "Super",
+    }
+    parts: list[str] = []
+    for part in normalized.split("+"):
+        token = part.strip()
+        if not token:
+            continue
+        if token in labels:
+            parts.append(labels[token])
+        elif len(token) == 1:
+            parts.append(token.upper())
+        else:
+            parts.append(token.upper() if token.startswith("f") and token[1:].isdigit() else token)
+    return "+".join(parts)
+
+
+def measure_box_button_tooltip(hotkey_spec: str = "") -> str:
+    """
+    Builds the MeasureBox Capture-button tooltip.
+
+    Args:
+        hotkey_spec: Optional start hotkey to include in the tip.
+
+    Returns:
+        Short usage tooltip including the current hotkey when set.
+    """
+
+    hotkey = format_hotkey_for_display(hotkey_spec)
+    start_line = (
+        f"Start: {hotkey} or click"
+        if hotkey
+        else "Start: click the button"
+    )
+    return (
+        "Measure screen size (x/y/w/h).\n"
+        f"{start_line} · drag to draw\n"
+        "Left Shift: edit · Esc: exit\n"
+        "Right-click: appearance settings"
+    )
+
+
 def _build_color_picker_icon() -> QIcon:
     """
     Renders a compact eyedropper icon for capture panel action.
@@ -2857,6 +2964,31 @@ def _build_color_picker_icon() -> QIcon:
     path.addEllipse(11.5, 2.5, 4, 4)
     painter.drawPath(path)
     painter.drawLine(3, 14, 2, 16)
+    painter.end()
+    return QIcon(icon)
+
+
+def _build_measure_box_icon() -> QIcon:
+    """
+    Renders a compact ruler/rectangle icon for the MeasureBox action.
+
+    Returns:
+        QIcon: Icon image.
+    """
+
+    icon = QPixmap(18, 18)
+    icon.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(icon)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    pen = QPen(QColor(46, 204, 113), 1.6)
+    painter.setPen(pen)
+    painter.setBrush(QColor(46, 204, 113, 40))
+    painter.drawRect(3, 4, 12, 10)
+    painter.drawLine(3, 4, 3, 2)
+    painter.drawLine(9, 4, 9, 2)
+    painter.drawLine(15, 4, 15, 2)
+    painter.drawLine(3, 14, 1, 14)
+    painter.drawLine(3, 9, 1, 9)
     painter.end()
     return QIcon(icon)
 

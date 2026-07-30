@@ -101,9 +101,9 @@ class TestCapturePanelLayout(unittest.TestCase):
     def test_default_window_width_fits_primary_capture_buttons_on_one_row(self) -> None:
         """
         Ensures the panel's default size places the primary (accent-colored)
-        capture-mode buttons on one row, with the color picker, OCR, and Open
-        Editor controls wrapping onto the row(s) below, and stays no taller
-        than needed to show that layout.
+        capture-mode buttons on one row, with the color picker, MeasureBox, OCR,
+        and Open Editor controls wrapping onto the row(s) below, and stays no
+        taller than needed to show that layout.
         """
 
         panel = CapturePanel()
@@ -131,6 +131,7 @@ class TestCapturePanelLayout(unittest.TestCase):
             button
             for button in (
                 panel.pick_color_button,
+                panel.measure_box_button,
                 panel.recognize_text_button,
                 panel.open_editor_button,
             )
@@ -141,6 +142,39 @@ class TestCapturePanelLayout(unittest.TestCase):
             self.assertGreater(button.geometry().y(), reference.y())
 
         self.assertEqual(panel.height(), panel.minimumSizeHint().height())
+
+    def test_measure_box_button_is_between_color_picker_and_ocr(self) -> None:
+        """
+        Ensures MeasureBox sits between the color picker and OCR in the flow.
+        """
+
+        panel = CapturePanel()
+        panel.set_text_recognition_available(True)
+        buttons_flow = panel.capture_fullscreen_button.parentWidget()
+        widgets = [
+            buttons_flow.flow_layout.itemAt(index).widget()
+            for index in range(buttons_flow.flow_layout.count())
+        ]
+        color_index = widgets.index(panel.pick_color_button)
+        measure_index = widgets.index(panel.measure_box_button)
+        ocr_index = widgets.index(panel.recognize_text_button)
+        self.assertEqual(measure_index, color_index + 1)
+        self.assertEqual(ocr_index, measure_index + 1)
+
+    def test_measure_box_tooltip_includes_hotkey_and_usage(self) -> None:
+        """
+        Ensures the MeasureBox tooltip mentions the hotkey and short usage.
+        """
+
+        from src.capture import measure_box_button_tooltip
+
+        panel = CapturePanel()
+        panel.set_measure_box_hotkey("ctrl+shift+m")
+        tip = panel.measure_box_button.toolTip()
+        self.assertIn("Ctrl+Shift+M", tip)
+        self.assertIn("drag to draw", tip)
+        self.assertIn("Esc", tip)
+        self.assertEqual(tip, measure_box_button_tooltip("ctrl+shift+m"))
 
     def test_unsupported_modes_are_hidden_not_just_disabled(self) -> None:
         """
