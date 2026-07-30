@@ -13,6 +13,11 @@ VIDEO_PROJECT_FILE_EXTENSION = ".sfpv"
 VIDEO_PROJECT_FORMAT_NAME = "snappix-video-project"
 VIDEO_PROJECT_FORMAT_VERSION = 1
 
+# Longest video the video editor accepts, for recordings as well as for imports
+# and projects. Playback itself streams through QMediaPlayer and has no hard
+# ceiling; this cap keeps timeline navigation and MP4 export practical.
+MAX_VIDEO_DURATION_MS = 30 * 60 * 1000
+
 ABOUT_AUTHOR = "Joachim Ruf"
 ABOUT_WEBSITE = "loresoft.de"
 ABOUT_GITHUB = "https://github.com/joruf/snappix"

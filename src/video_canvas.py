@@ -1924,13 +1924,29 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             for item in selected
             if not bool(item.data(ITEM_ROLE_LOCKED) or False)
         }
-        if not ids_to_remove:
+        return self.delete_annotations_by_ids(ids_to_remove)
+
+    def delete_annotations_by_ids(self, annotation_ids: set[str]) -> bool:
+        """
+        Removes annotation models by id, independent of the canvas selection.
+
+        Used by the timeline so deleting a track bar also drops the drawn
+        object from the canvas.
+
+        Args:
+            annotation_ids: Ids of the annotations to remove.
+
+        Returns:
+            bool: True when at least one annotation was deleted.
+        """
+
+        if not annotation_ids:
             return False
 
         remaining = [
             annotation
             for annotation in self._annotations
-            if annotation.annotation_id not in ids_to_remove
+            if annotation.annotation_id not in annotation_ids
         ]
         if len(remaining) == len(self._annotations):
             return False

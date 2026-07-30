@@ -141,6 +141,17 @@ Windows scroll is best-effort for normal (non-elevated) desktop apps; custom/Ele
 
 Requires `ffmpeg`. X11 only for now.
 
+### Maximum video length
+
+`MAX_VIDEO_DURATION_MS` (`src/constants.py`, 30 minutes) is the single limit for
+every video entering the editor. `validate_video_duration()` and the shared
+`video_too_long_message()` live in `src/media_import.py` and gate three paths in
+`run.py`: finished recordings (`_recording_fits_editor_limit()`), video import,
+and opening a `.sfpv` project. Playback itself streams through `QMediaPlayer` and
+has no hard ceiling — the cap exists to keep timeline navigation and MP4 export
+practical, so raising it is a one-constant change. A rejected recording is left
+on disk and its path is named in the warning dialog.
+
 ### Post-capture actions
 
 | Config value | Behavior |
@@ -177,10 +188,12 @@ Accent styling: `build_editor_accent_stylesheet(theme)` on the host; capture pan
 - `QMediaPlayer` + `QGraphicsVideoItem` for playback
 - Vector annotations visible only when playhead is inside `[start_ms, end_ms]`
 - Cached duration for reliable session flush when the player shuts down
+- `delete_annotations_by_ids()` removes models by id regardless of canvas selection; `delete_selected_annotations()` delegates to it after filtering out locked items
 
 `TimelineWidget`:
 
-- One row per annotation; draggable/resizable time-range bars
+- One row per annotation; draggable/resizable time-range bars (`ROW_HEIGHT` 20px)
+- Selecting a bar and pressing `Del` emits `annotation_delete_requested`; `VideoEditorWindow` routes it to `VideoCanvas.delete_annotations_by_ids()` and pushes one history step, so row and canvas object are removed together. The widget uses `StrongFocus` so the key reaches it after a click.
 - Full-width track area; page-based pan (`◀` / `▶`, Ctrl+drag, Ctrl+wheel zoom)
 - Initial view: full width for clips ≤20s; fixed 20s pages for longer clips (100s → five pages). Zoom/pan adjust afterward.
 - A plain click anywhere on the timeline (ruler or empty track space) scrubs the playhead; double-click and hold, then drag, stretches/compresses the visible time range around the double-click point (`SizeHorCursor` while held)

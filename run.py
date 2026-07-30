@@ -1177,6 +1177,9 @@ class AppController:
         rect = self._recording_rect
         self._recording_rect = None
 
+        if not self._recording_fits_editor_limit(output_path):
+            return
+
         if self._tray_available and self.tray_icon.isVisible():
             self.tray_icon.showMessage(
                 APP_NAME,
@@ -1188,6 +1191,42 @@ class AppController:
         width = rect.width() if rect is not None else 0
         height = rect.height() if rect is not None else 0
         self._create_video_editor_tab(output_path, width, height, "Recording")
+
+    def _recording_fits_editor_limit(self, output_path: str) -> bool:
+        """
+        Warns when a finished recording is too long for the video editor.
+
+        The recording file itself is kept either way, so the dialog names its
+        location instead of discarding the capture.
+
+        Args:
+            output_path: Path to the finalized MP4 recording.
+
+        Returns:
+            bool: True when the recording may be opened in the video editor.
+        """
+
+        from src.media_import import (
+            probe_video_file,
+            validate_video_duration,
+            video_too_long_message,
+        )
+
+        probe = probe_video_file(output_path)
+        if probe is None or probe.duration_ms <= 0:
+            # Unprobeable recordings still open; the editor reads the duration
+            # from the player once the media is loaded.
+            return True
+        if validate_video_duration(probe.duration_ms):
+            return True
+
+        self._QMessageBox.warning(
+            self.capture_panel,
+            "Video Recording",
+            f"{video_too_long_message(probe.duration_ms)}\n\n"
+            f"The recording was saved to:\n{output_path}",
+        )
+        return False
 
     def _create_video_editor_tab(
         self,
@@ -2215,10 +2254,10 @@ class AppController:
 
         from src.constants import VIDEO_PROJECT_FILE_EXTENSION
         from src.media_import import (
-            MAX_IMPORTED_VIDEO_DURATION_MS,
             VIDEO_FILE_FILTER,
             probe_video_file,
-            validate_import_video_duration,
+            validate_video_duration,
+            video_too_long_message,
         )
         from src.video_recorder import has_ffmpeg
 
@@ -2253,12 +2292,11 @@ class AppController:
             )
             return
 
-        if probe.duration_ms > 0 and not validate_import_video_duration(probe.duration_ms):
-            max_minutes = MAX_IMPORTED_VIDEO_DURATION_MS // 60_000
+        if probe.duration_ms > 0 and not validate_video_duration(probe.duration_ms):
             self._QMessageBox.warning(
                 parent or self.editor_host,
                 "Import Video",
-                f"Imported videos must be at most {max_minutes} minutes long.",
+                video_too_long_message(probe.duration_ms),
             )
             return
 
@@ -2287,10 +2325,7 @@ class AppController:
             None
         """
 
-        from src.media_import import (
-            MAX_IMPORTED_VIDEO_DURATION_MS,
-            validate_import_video_duration,
-        )
+        from src.media_import import validate_video_duration, video_too_long_message
         from src.session_recovery import video_assets_dir
         from src.video_storage import load_video_project
 
@@ -2305,14 +2340,13 @@ class AppController:
             )
             return
 
-        if project_model.duration_ms > 0 and not validate_import_video_duration(
+        if project_model.duration_ms > 0 and not validate_video_duration(
             project_model.duration_ms
         ):
-            max_minutes = MAX_IMPORTED_VIDEO_DURATION_MS // 60_000
             self._QMessageBox.warning(
                 parent or self.editor_host,
                 "Import Video",
-                f"Imported videos must be at most {max_minutes} minutes long.",
+                video_too_long_message(project_model.duration_ms),
             )
             return
 

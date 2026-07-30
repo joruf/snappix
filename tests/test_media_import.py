@@ -13,13 +13,14 @@ from unittest.mock import patch
 try:
     from PySide6.QtGui import QColor, QImage, QPixmap
 
+    from src.constants import MAX_VIDEO_DURATION_MS
     from src.media_import import (
-        MAX_IMPORTED_VIDEO_DURATION_MS,
         VideoFileProbe,
         build_import_canvas_background,
         load_image_pixmap,
         probe_video_file,
-        validate_import_video_duration,
+        validate_video_duration,
+        video_too_long_message,
     )
     from tests.qt_test_utils import ensure_qapp
 
@@ -81,15 +82,40 @@ class TestMediaImportHelpers(unittest.TestCase):
             self.assertFalse(loaded.isNull())
             self.assertEqual(loaded.width(), 12)
 
-    def test_validate_import_video_duration_enforces_five_minute_limit(self) -> None:
+    def test_validate_video_duration_enforces_editor_limit(self) -> None:
         """
-        Ensures only positive durations up to five minutes are accepted.
+        Ensures only positive durations up to the editor limit are accepted.
         """
 
-        self.assertTrue(validate_import_video_duration(1))
-        self.assertTrue(validate_import_video_duration(MAX_IMPORTED_VIDEO_DURATION_MS))
-        self.assertFalse(validate_import_video_duration(0))
-        self.assertFalse(validate_import_video_duration(MAX_IMPORTED_VIDEO_DURATION_MS + 1))
+        self.assertTrue(validate_video_duration(1))
+        self.assertTrue(validate_video_duration(MAX_VIDEO_DURATION_MS))
+        self.assertFalse(validate_video_duration(0))
+        self.assertFalse(validate_video_duration(MAX_VIDEO_DURATION_MS + 1))
+
+    def test_max_video_duration_is_thirty_minutes(self) -> None:
+        """
+        Pins the program-wide maximum video length to 30 minutes.
+        """
+
+        self.assertEqual(MAX_VIDEO_DURATION_MS, 30 * 60 * 1000)
+
+    def test_video_too_long_message_names_limit_and_actual_length(self) -> None:
+        """
+        Ensures the shared warning states the limit and the rejected length.
+        """
+
+        message = video_too_long_message(31 * 60 * 1000)
+        self.assertIn("30 minutes", message)
+        self.assertIn("31.0 minutes", message)
+
+    def test_video_too_long_message_omits_length_when_unknown(self) -> None:
+        """
+        Ensures the warning stays clean when no duration is available.
+        """
+
+        message = video_too_long_message()
+        self.assertIn("30 minutes", message)
+        self.assertNotIn("This video is", message)
 
     @patch("src.media_import.has_ffmpeg", return_value=True)
     @patch("src.media_import.subprocess.run")

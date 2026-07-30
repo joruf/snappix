@@ -154,6 +154,48 @@ class TestVideoEditorHistory(unittest.TestCase):
             self.assertEqual(editor._history_labels[-1], "Change annotation timing")  # pylint: disable=protected-access
             editor.close()
 
+    def test_timeline_delete_removes_track_and_canvas_object(self) -> None:
+        """
+        Ensures Delete on a selected track bar removes both the timeline row and
+        the drawn canvas object, and records one undoable step.
+        """
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            source = Path(tmp_dir) / "source.mp4"
+            source.write_bytes(b"not-a-real-video")
+            editor = VideoEditorWindow(str(source), 320, 240)
+            annotation = VideoAnnotationModel(
+                annotation_type="rect",
+                start_ms=0,
+                end_ms=1000,
+                x=12.0,
+                y=12.0,
+                width=24.0,
+                height=18.0,
+                stroke_rgba=[255, 0, 0, 255],
+                fill_rgba=[255, 0, 0, 80],
+                stroke_width=2.0,
+            )
+            editor._annotations.append(annotation)  # pylint: disable=protected-access
+            editor.canvas.set_annotations(editor._annotations)  # pylint: disable=protected-access
+            editor.timeline.set_annotations(editor._annotations)  # pylint: disable=protected-access
+            editor._reset_history()  # pylint: disable=protected-access
+            before = len(editor._history)  # pylint: disable=protected-access
+
+            editor.timeline.annotation_delete_requested.emit(annotation.annotation_id)
+
+            self.assertEqual(editor._annotations, [])  # pylint: disable=protected-access
+            self.assertNotIn(
+                annotation.annotation_id,
+                editor.canvas._visible_items,  # pylint: disable=protected-access
+            )
+            self.assertGreater(len(editor._history), before)  # pylint: disable=protected-access
+            self.assertEqual(editor._history_labels[-1], "Delete selection")  # pylint: disable=protected-access
+
+            editor.undo()
+            self.assertEqual(len(editor._annotations), 1)  # pylint: disable=protected-access
+            editor.close()
+
 
 if __name__ == "__main__":
     unittest.main()

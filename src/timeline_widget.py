@@ -8,7 +8,16 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QContextMenuEvent, QMouseEvent, QPainter, QPen, QResizeEvent, QWheelEvent
+from PySide6.QtGui import (
+    QColor,
+    QContextMenuEvent,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QResizeEvent,
+    QWheelEvent,
+)
 from PySide6.QtWidgets import QMenu, QScrollBar, QSizePolicy, QWidget
 
 from src.annotation_items import list_to_color
@@ -17,7 +26,7 @@ from src.video_models import VideoAnnotationModel
 
 LABEL_WIDTH = 160
 RULER_HEIGHT = 28
-ROW_HEIGHT = 22
+ROW_HEIGHT = 20
 ROW_SPACING = 4
 SCROLLBAR_WIDTH = 14
 EDGE_HIT_PX = 6
@@ -50,6 +59,7 @@ class TimelineWidget(QWidget):
     annotation_time_changed = Signal(str, int, int)
     annotation_time_change_committed = Signal(str, int, int)
     annotation_selected = Signal(str)
+    annotation_delete_requested = Signal(str)
     effect_edit_requested = Signal(str)
 
     def __init__(self) -> None:
@@ -61,6 +71,8 @@ class TimelineWidget(QWidget):
         self.setMinimumHeight(RULER_HEIGHT + ROW_HEIGHT + ROW_SPACING)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setMouseTracking(True)
+        # Click focus lets Delete reach this widget after a track bar was picked.
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._duration_ms = 0
         self._position_ms = 0
         self._annotations: list[VideoAnnotationModel] = []
@@ -209,6 +221,19 @@ class TimelineWidget(QWidget):
         """
 
         return self._selected_id
+
+    def clear_selection(self) -> None:
+        """
+        Drops the current track bar selection and repaints.
+
+        Returns:
+            None
+        """
+
+        if not self._selected_id:
+            return
+        self._selected_id = ""
+        self.update()
 
     def _default_page_duration_ms(self) -> int:
         """
@@ -907,6 +932,25 @@ class TimelineWidget(QWidget):
         if self.mouseGrabber() == self:
             self.releaseMouse()
         self.unsetCursor()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """
+        Deletes the selected track bar and its canvas object on Delete.
+
+        Args:
+            event: Key press event.
+
+        Returns:
+            None
+        """
+
+        if event.key() == Qt.Key.Key_Delete and self._selected_id:
+            annotation_id = self._selected_id
+            self._selected_id = ""
+            self.annotation_delete_requested.emit(annotation_id)
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         """

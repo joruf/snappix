@@ -284,6 +284,47 @@ class TestVideoCanvasSelection(unittest.TestCase):
         self.assertFalse(deleted)
         self.assertEqual(len(canvas.annotations()), 1)
 
+    def test_delete_annotations_by_ids_removes_unselected_annotation(self) -> None:
+        """
+        Ensures the timeline's delete path drops the canvas object even though
+        it was never selected on the canvas itself.
+        """
+
+        canvas = VideoCanvas()
+        canvas.resize(640, 480)
+        canvas.set_video_size(640, 480)
+        canvas.show()
+        self._app.processEvents()
+        annotation = self._sample_rect_annotation()
+        canvas.set_annotations([annotation])
+        canvas.set_tool(Tool.SELECT)
+
+        deleted = canvas.delete_annotations_by_ids({annotation.annotation_id})
+
+        self.assertTrue(deleted)
+        self.assertEqual(canvas.annotations(), [])
+        self.assertNotIn(
+            annotation.annotation_id,
+            canvas._visible_items,  # pylint: disable=protected-access
+        )
+
+    def test_delete_annotations_by_ids_ignores_unknown_and_empty_ids(self) -> None:
+        """
+        Ensures unknown or empty id sets leave the annotation list untouched.
+        """
+
+        canvas = VideoCanvas()
+        canvas.resize(640, 480)
+        canvas.set_video_size(640, 480)
+        canvas.show()
+        self._app.processEvents()
+        annotation = self._sample_rect_annotation()
+        canvas.set_annotations([annotation])
+
+        self.assertFalse(canvas.delete_annotations_by_ids(set()))
+        self.assertFalse(canvas.delete_annotations_by_ids({"does-not-exist"}))
+        self.assertEqual(len(canvas.annotations()), 1)
+
     def _sample_ellipse_annotation(self) -> VideoAnnotationModel:
         """
         Builds one visible ellipse annotation at the current playhead.

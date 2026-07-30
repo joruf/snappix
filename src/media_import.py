@@ -12,7 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QImage, QPixmap
 
-from src.constants import VIDEO_PROJECT_FILE_EXTENSION
+from src.constants import MAX_VIDEO_DURATION_MS, VIDEO_PROJECT_FILE_EXTENSION
 from src.video_recorder import has_ffmpeg
 
 SUPPORTED_IMAGE_SUFFIXES = frozenset(
@@ -25,7 +25,6 @@ VIDEO_FILE_FILTER = (
     "Video Files (*.mp4 *.mkv *.webm *.mov *.avi *.m4v);;"
     f"Snappix Video Project (*{VIDEO_PROJECT_FILE_EXTENSION});;All Files (*)"
 )
-MAX_IMPORTED_VIDEO_DURATION_MS = 5 * 60 * 1000
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,18 +107,42 @@ def load_image_pixmap(path: str | Path) -> QPixmap | None:
     return pixmap
 
 
-def validate_import_video_duration(duration_ms: int) -> bool:
+def validate_video_duration(duration_ms: int) -> bool:
     """
-    Returns whether one imported video duration is within the allowed limit.
+    Returns whether one video duration is within the editor's allowed limit.
+
+    Applies to every video entering the video editor: recordings, imported
+    files, and opened projects.
 
     Args:
         duration_ms: Video duration in milliseconds.
 
     Returns:
-        bool: True when duration is positive and at most five minutes.
+        bool: True when the duration is positive and at most
+        :data:`~src.constants.MAX_VIDEO_DURATION_MS`.
     """
 
-    return 0 < duration_ms <= MAX_IMPORTED_VIDEO_DURATION_MS
+    return 0 < duration_ms <= MAX_VIDEO_DURATION_MS
+
+
+def video_too_long_message(duration_ms: int = 0) -> str:
+    """
+    Builds the shared "video is too long" warning text.
+
+    Args:
+        duration_ms: Rejected duration in milliseconds. Mentioned in the text
+            when greater than zero.
+
+    Returns:
+        str: Human-readable warning for a QMessageBox.
+    """
+
+    max_minutes = MAX_VIDEO_DURATION_MS // 60_000
+    message = f"The video editor supports videos up to {max_minutes} minutes."
+    if duration_ms > 0:
+        actual_minutes = duration_ms / 60_000
+        message += f"\n\nThis video is {actual_minutes:.1f} minutes long."
+    return message
 
 
 def probe_video_file(path: str | Path) -> VideoFileProbe | None:

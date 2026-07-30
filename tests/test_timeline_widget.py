@@ -8,13 +8,14 @@ import unittest
 
 try:
     from PySide6.QtCore import QPoint, QPointF, Qt
-    from PySide6.QtGui import QContextMenuEvent, QMouseEvent, QWheelEvent
+    from PySide6.QtGui import QContextMenuEvent, QKeyEvent, QMouseEvent, QWheelEvent
 
     from src.timeline_widget import (
         CTRL_NAV_THRESHOLD_PX,
         DEFAULT_PAGE_DURATION_MS,
         EDGE_HIT_PX,
         LABEL_WIDTH,
+        ROW_HEIGHT,
         RULER_HEIGHT,
         ZOOM_DRAG_SENSITIVITY_PX,
         TimelineWidget,
@@ -831,6 +832,138 @@ class TestTimelineWidgetEffectContextMenu(unittest.TestCase):
 
         widget.repaint()
         self.assertEqual(track_effect_summary(annotation), "Fade In")
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for timeline widget tests")
+class TestTimelineWidgetDeleteKey(unittest.TestCase):
+    """
+    Verifies that selecting a track bar and pressing Delete requests removal of
+    that annotation, and that the bar height stays compact.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_qapp()
+
+    def _make_widget(self, annotation) -> TimelineWidget:
+        """
+        Builds a sized TimelineWidget showing one annotation row.
+
+        Args:
+            annotation: Annotation to display as the single timeline row.
+
+        Returns:
+            TimelineWidget: Configured widget.
+        """
+
+        widget = TimelineWidget()
+        widget.resize(660, RULER_HEIGHT + 60)
+        widget.set_duration(10000)
+        widget.set_annotations([annotation])
+        _show_full_timeline(widget)
+        return widget
+
+    def _press_delete(self, widget: TimelineWidget) -> None:
+        """
+        Sends a synthetic Delete key press to the timeline.
+
+        Args:
+            widget: Timeline under test.
+
+        Returns:
+            None
+        """
+
+        widget.keyPressEvent(
+            QKeyEvent(
+                QKeyEvent.Type.KeyPress,
+                Qt.Key.Key_Delete,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+
+    def test_delete_after_bar_click_requests_annotation_removal(self) -> None:
+        """
+        Ensures clicking a track bar and pressing Delete emits
+        annotation_delete_requested with that annotation's id.
+        """
+
+        annotation = _make_annotation()
+        widget = self._make_widget(annotation)
+        deleted: list[str] = []
+        widget.annotation_delete_requested.connect(deleted.append)
+        bar_mid_x = float(widget._ms_to_x(3000))  # pylint: disable=protected-access
+
+        widget.mousePressEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonPress, bar_mid_x, RULER_HEIGHT + 15.0)
+        )
+        widget.mouseReleaseEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonRelease, bar_mid_x, RULER_HEIGHT + 15.0)
+        )
+        self.assertEqual(widget.selected_annotation_id(), annotation.annotation_id)
+
+        self._press_delete(widget)
+
+        self.assertEqual(deleted, [annotation.annotation_id])
+        self.assertEqual(widget.selected_annotation_id(), "")
+
+    def test_delete_without_selection_emits_nothing(self) -> None:
+        """
+        Ensures Delete is ignored while no track bar is selected.
+        """
+
+        widget = self._make_widget(_make_annotation())
+        deleted: list[str] = []
+        widget.annotation_delete_requested.connect(deleted.append)
+
+        self._press_delete(widget)
+
+        self.assertEqual(deleted, [])
+
+    def test_delete_is_not_repeated_after_the_bar_was_removed(self) -> None:
+        """
+        Ensures a second Delete does not re-request the already deleted bar.
+        """
+
+        annotation = _make_annotation()
+        widget = self._make_widget(annotation)
+        deleted: list[str] = []
+        widget.annotation_delete_requested.connect(deleted.append)
+        bar_mid_x = float(widget._ms_to_x(3000))  # pylint: disable=protected-access
+
+        widget.mousePressEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonPress, bar_mid_x, RULER_HEIGHT + 15.0)
+        )
+        widget.mouseReleaseEvent(
+            _mouse_event(QMouseEvent.Type.MouseButtonRelease, bar_mid_x, RULER_HEIGHT + 15.0)
+        )
+        self._press_delete(widget)
+        self._press_delete(widget)
+
+        self.assertEqual(deleted, [annotation.annotation_id])
+
+    def test_track_bar_height_is_twenty_pixels(self) -> None:
+        """
+        Pins the slimmer (2px shorter) annotation track bar height.
+        """
+
+        annotation = _make_annotation()
+        widget = self._make_widget(annotation)
+        bar = widget._bar_rect(0, annotation)  # pylint: disable=protected-access
+
+        self.assertEqual(ROW_HEIGHT, 20)
+        self.assertEqual(bar.height(), 20)
+
+    def test_timeline_accepts_keyboard_focus_on_click(self) -> None:
+        """
+        Ensures the timeline can take focus, so Delete reaches it after a click.
+        """
+
+        widget = self._make_widget(_make_annotation())
+
+        self.assertTrue(
+            widget.focusPolicy() & Qt.FocusPolicy.ClickFocus == Qt.FocusPolicy.ClickFocus
+        )
 
 
 if __name__ == "__main__":

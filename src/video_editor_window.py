@@ -131,6 +131,9 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             self._on_annotation_time_committed
         )
         self.timeline.effect_edit_requested.connect(self._on_effect_edit_requested)
+        self.timeline.annotation_delete_requested.connect(
+            self._on_timeline_annotation_delete_requested
+        )
 
         self.timeline_pan_left = QToolButton()
         self.timeline_pan_left.setText("◀")
@@ -1285,6 +1288,29 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         """
 
         self.timeline.refresh()
+        self._mark_dirty()
+
+    def _on_timeline_annotation_delete_requested(self, annotation_id: str) -> None:
+        """
+        Deletes one annotation after Delete was pressed on its timeline track bar.
+
+        Removes both the track row and the drawn object on the canvas, and
+        records a single undo step.
+
+        Args:
+            annotation_id: Id of the annotation whose track bar was selected.
+
+        Returns:
+            None
+        """
+
+        if not self.canvas.delete_annotations_by_ids({annotation_id}):
+            return
+
+        self.timeline.clear_selection()
+        self.timeline.refresh()
+        self._set_next_history_label("Delete selection")
+        self._push_history_state()
         self._mark_dirty()
 
     def _on_annotation_time_changed(self, _annotation_id: str, _start_ms: int, _end_ms: int) -> None:
