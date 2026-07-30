@@ -238,6 +238,69 @@ class TestVideoEditorWindowClipboard(unittest.TestCase):
         mime = QGuiApplication.clipboard().mimeData()
         self.assertFalse(mime is not None and mime.hasFormat(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME))
 
+    def test_copy_also_publishes_a_picture_for_other_applications(self) -> None:
+        """
+        Ensures copying a drawn object puts a real image on the clipboard too,
+        so it can be pasted into any other program on the machine.
+        """
+
+        editor = self._make_editor()
+        annotation = _sample_annotation(10.0, 10.0, 0, 1000)
+        editor.canvas.set_annotations([annotation])
+        editor.canvas._visible_items[annotation.annotation_id].setSelected(  # pylint: disable=protected-access
+            True
+        )
+
+        editor.copy_selected_annotations_to_clipboard()
+
+        mime = QGuiApplication.clipboard().mimeData()
+        self.assertTrue(mime.hasImage())
+        image = mime.imageData()
+        self.assertIsNotNone(image)
+        self.assertGreater(image.width(), 0)
+        self.assertGreater(image.height(), 0)
+        # The in-app payload must still be present so internal paste keeps its
+        # full fidelity instead of degrading to a flat picture.
+        self.assertTrue(mime.hasFormat(_VIDEO_ANNOTATIONS_CLIPBOARD_MIME))
+
+    def test_copied_picture_is_not_blank(self) -> None:
+        """
+        Ensures the published picture actually contains the drawn object.
+        """
+
+        editor = self._make_editor()
+        annotation = _sample_annotation(10.0, 10.0, 0, 1000)
+        editor.canvas.set_annotations([annotation])
+        editor.canvas._visible_items[annotation.annotation_id].setSelected(  # pylint: disable=protected-access
+            True
+        )
+
+        editor.copy_selected_annotations_to_clipboard()
+
+        image = QGuiApplication.clipboard().mimeData().imageData()
+        opaque = sum(
+            1
+            for y in range(image.height())
+            for x in range(image.width())
+            if image.pixelColor(x, y).alpha() > 0
+        )
+        self.assertGreater(opaque, 0)
+
+    def test_copy_drawing_area_also_publishes_a_picture(self) -> None:
+        """
+        Ensures "Copy Drawing Area" carries a picture too, matching the image
+        editor's equivalent action.
+        """
+
+        editor = self._make_editor()
+        editor.canvas.set_annotations(
+            [_sample_annotation(10.0, 10.0, 0, 1000), _sample_annotation(60.0, 10.0, 0, 1000)]
+        )
+
+        editor.copy_drawing_area_to_clipboard()
+
+        self.assertTrue(QGuiApplication.clipboard().mimeData().hasImage())
+
 
 if __name__ == "__main__":
     unittest.main()

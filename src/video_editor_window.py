@@ -466,6 +466,12 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         }
         mime_data = QMimeData()
         set_json_clipboard_data(mime_data, _VIDEO_ANNOTATIONS_CLIPBOARD_MIME, payload)
+        # Also publish a plain picture so the copied object can be pasted into
+        # any other application. Snappix's own paste reads the JSON format
+        # first, so in-app fidelity is unaffected.
+        selection_image = self.canvas.render_selection_image()
+        if selection_image is not None and not selection_image.isNull():
+            mime_data.setImageData(selection_image)
         QGuiApplication.clipboard().setMimeData(mime_data)
 
         count = len(annotations)
@@ -492,6 +498,10 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         }
         mime_data = QMimeData()
         set_json_clipboard_data(mime_data, _VIDEO_ANNOTATIONS_CLIPBOARD_MIME, payload)
+        # Match the image editor, whose drawing-area copy also carries a picture.
+        area_image = self.canvas.render_all_annotations_image()
+        if area_image is not None and not area_image.isNull():
+            mime_data.setImageData(area_image)
         QGuiApplication.clipboard().setMimeData(mime_data)
 
         count = len(annotations)

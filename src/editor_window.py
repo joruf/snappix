@@ -6305,6 +6305,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                 "annotations": payload["annotations"],
             },
         )
+        # Also publish a plain picture so the copied object can be pasted into
+        # any other application. Snappix's own paste reads the JSON formats
+        # first, so in-app fidelity is unaffected.
+        selection_image = self.canvas.render_selection_image()
+        if selection_image is not None and not selection_image.isNull():
+            mime_data.setImageData(selection_image)
         QGuiApplication.clipboard().setMimeData(mime_data)
 
         bounds = self.canvas.selected_annotations_bounds()

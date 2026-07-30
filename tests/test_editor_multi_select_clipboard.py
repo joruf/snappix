@@ -207,6 +207,37 @@ class TestEditorMultiSelectClipboard(unittest.TestCase):
         self.assertEqual(payload.get("kind"), "annotations")
         self.assertEqual(len(payload.get("annotations") or []), 1)
 
+    def test_copy_selection_also_publishes_a_picture(self) -> None:
+        """
+        Ensures a copied object is usable in other applications: the clipboard
+        carries a real, non-blank picture alongside Snappix's JSON payload.
+        """
+
+        from PySide6.QtGui import QGuiApplication
+
+        window = EditorWindow(_solid_pixmap(320, 240))
+        first = _add_rect(window.canvas, 30.0, 30.0)
+        _add_rect(window.canvas, 140.0, 60.0)
+        window.canvas.scene().clearSelection()
+        first.setSelected(True)
+
+        self.assertTrue(window.copy_selected_annotations_to_clipboard())
+
+        mime = QGuiApplication.clipboard().mimeData()
+        self.assertTrue(mime.hasImage())
+        image = mime.imageData()
+        self.assertGreater(image.width(), 0)
+        self.assertGreater(image.height(), 0)
+        opaque = sum(
+            1
+            for y in range(image.height())
+            for x in range(image.width())
+            if image.pixelColor(x, y).alpha() > 0
+        )
+        self.assertGreater(opaque, 0)
+        # In-app paste must keep using the richer JSON payload.
+        self.assertTrue(mime.hasFormat(WINDOW_ANNOTATIONS_MIME))
+
     def test_copy_without_selection_keeps_full_drawing_area(self) -> None:
         """
         Ensures Ctrl+C without selection still copies the full drawing area.

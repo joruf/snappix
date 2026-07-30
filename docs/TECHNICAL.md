@@ -63,6 +63,7 @@ Startup:
 | `src/video_canvas.py` | Video playback canvas, vector tools, time-aware annotation visibility |
 | `src/video_vector_toolbar.py` | Video editor toolbar (parity with image editor UX) |
 | `src/timeline_widget.py` | Scrub ruler, annotation time bars, pan/zoom/page navigation |
+| `src/annotation_render.py` | Renders selected annotation items to a transparent image for the system clipboard |
 | `src/video_recorder.py` | ffmpeg region recording, pause/resume, segment relocate on drag |
 | `src/video_storage.py` | `.sfpv` ZIP save/load (embedded MP4 + manifest) |
 | `src/video_models.py` | `VideoAnnotationModel`, `VideoProjectModel` |

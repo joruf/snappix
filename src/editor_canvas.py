@@ -3103,6 +3103,19 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         return union_rect(self._item_scene_rect(item) for item in self._selected_annotation_items())
 
+    def render_selection_image(self):
+        """
+        Renders the current selection onto a transparent, tightly cropped image.
+
+        Returns:
+            QImage | None: Picture of the selected objects, or None when nothing
+            is selected or the selection has no drawable bounds.
+        """
+
+        from src.annotation_render import render_items_to_image
+
+        return render_items_to_image(self._selected_annotation_items())
+
     def load_annotations(self, models: list[AnnotationModel]) -> None:
         """
         Clears and rebuilds annotation items from models.

@@ -1818,6 +1818,32 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         return bool(self._selected_annotation_items())
 
+    def render_selection_image(self):
+        """
+        Renders the current selection onto a transparent, tightly cropped image.
+
+        Returns:
+            QImage | None: Picture of the selected objects, or None when nothing
+            is selected or the selection has no drawable bounds.
+        """
+
+        from src.annotation_render import render_items_to_image
+
+        return render_items_to_image(self._selected_annotation_items())
+
+    def render_all_annotations_image(self):
+        """
+        Renders every currently built annotation item onto a transparent image.
+
+        Returns:
+            QImage | None: Picture of the drawing area's objects, or None when
+            there is nothing drawable.
+        """
+
+        from src.annotation_render import render_items_to_image
+
+        return render_items_to_image(list(self._visible_items.values()))
+
     def collect_selected_annotations(self) -> list[VideoAnnotationModel]:
         """
         Serializes currently selected annotations for copy-to-clipboard.
