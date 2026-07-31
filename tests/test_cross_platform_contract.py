@@ -53,9 +53,9 @@ class TestCrossPlatformContract(unittest.TestCase):
         """
 
         with patch("src.paths.sys.platform", "linux"):
-            self.assertTrue(str(user_config_dir()).endswith(".config/snappix"))
-            self.assertTrue(str(user_data_dir()).endswith(".snappix"))
-            self.assertTrue(str(default_autostart_path()).endswith("snappix.desktop"))
+            self.assertEqual(user_config_dir().parts[-2:], (".config", "snappix"))
+            self.assertEqual(user_data_dir().name, ".snappix")
+            self.assertEqual(default_autostart_path().name, "snappix.desktop")
             self.assertEqual(
                 venv_python_path(Path("/project")),
                 Path("/project/.venv/bin/python"),

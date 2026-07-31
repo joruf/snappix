@@ -83,6 +83,11 @@ class TestUninstallDependencies(unittest.TestCase):
                 "can_safely_remove_system_package",
                 return_value=False,
             ) as safe_mock,
+            patch.object(
+                uninstaller,
+                "is_system_package_installed",
+                return_value=True,
+            ),
             patch.object(uninstaller, "remove_user_files", return_value=[]),
             patch.object(uninstaller, "remove_virtual_environment", return_value=None),
             patch.object(uninstaller, "remove_initialized_marker", return_value=None),

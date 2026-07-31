@@ -33,10 +33,10 @@ class TestPaths(unittest.TestCase):
 
         with patch("src.paths.sys.platform", "linux"):
             self.assertEqual(os_family(), "linux")
-            self.assertTrue(str(user_config_dir()).endswith(".config/snappix"))
-            self.assertTrue(str(user_data_dir()).endswith(".snappix"))
-            self.assertTrue(str(user_cache_dir()).endswith(".cache/snappix"))
-            self.assertTrue(str(default_autostart_path()).endswith("snappix.desktop"))
+            self.assertEqual(user_config_dir().parts[-2:], (".config", "snappix"))
+            self.assertEqual(user_data_dir().name, ".snappix")
+            self.assertEqual(user_cache_dir().parts[-2:], (".cache", "snappix"))
+            self.assertEqual(default_autostart_path().name, "snappix.desktop")
             self.assertTrue(supports_window_capture())
             self.assertTrue(supports_scroll_capture())
             self.assertTrue(supports_native_video_capture())

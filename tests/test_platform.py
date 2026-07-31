@@ -212,10 +212,12 @@ class TestLinuxWindowIdentity(unittest.TestCase):
     Verifies Linux taskbar identity helpers.
     """
 
+    @patch("src.platform.has_xdotool", return_value=True)
     @patch("src.platform.subprocess.run")
     def test_get_x11_focused_window_id_returns_active_window(
         self,
         mock_run: MagicMock,
+        _mock_has_xdotool: MagicMock,
     ) -> None:
         """
         Ensures focused window id is parsed from xdotool output.

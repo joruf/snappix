@@ -37,6 +37,7 @@ jobs:
             libegl1 \
             libgl1 \
             libglib2.0-0 \
+            libpulse0 \
             libxcb-cursor0 \
             libxkbcommon-x11-0
 
