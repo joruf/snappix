@@ -34,6 +34,12 @@ SHAPE_RECT_TYPES = frozenset(
     }
 )
 
+# Shape kinds whose corners can be rounded via the Edit panel's radius slider.
+# Kept in one place because the radius has to be honoured consistently along the
+# whole chain -- applying to a selection, serializing, and restoring -- and a
+# kind missing from any one of those looks like "the slider does nothing".
+SHAPE_RADIUS_TYPES = frozenset({"rect", "triangle"})
+
 # Line-like annotation types that store start + delta (width/height as dx/dy).
 SHAPE_LINE_TYPES = frozenset({"line", "arrow", "double_arrow"})
 
@@ -62,12 +68,171 @@ PATH_SHAPE_KINDS = frozenset(
 STAMP_MARK_TYPES = frozenset({"cross", "checkmark"})
 
 
-def build_triangle_path(rect: QRectF) -> QPainterPath:
+def build_rounded_polygon_path(points: list[QPointF], radius: float) -> QPainterPath:
+    """
+    Builds a closed polygon path with circular arcs at each vertex.
+
+    Rounds a corner by walking back along both adjacent edges to the arc's
+    tangent points and joining them with a true circular arc, matching the arcs
+    ``addRoundedRect`` produces so a rectangle and a triangle look consistent at
+    the same radius.
+
+    The pull-back distance grows as a corner gets sharper (``r / tan(angle/2)``),
+    so the radius is reduced per corner when the neighbouring edges are too short
+    to host it. A triangle's tip therefore rounds less than its base corners at
+    the same requested radius, which is geometrically unavoidable.
+
+    Args:
+        points: Polygon vertices in drawing order.
+        radius: Requested corner radius in pixels; values <= 0 give sharp corners.
+
+    Returns:
+        QPainterPath: Closed polygon path.
+    """
+
+    path = QPainterPath()
+    count = len(points)
+    if count < 3:
+        return path
+
+    if radius <= 0.01:
+        path.moveTo(points[0])
+        for point in points[1:]:
+            path.lineTo(point)
+        path.closeSubpath()
+        return path
+
+    # First pass: how far each corner would like to pull back along its edges.
+    # A sharper corner needs a longer run-up for the same radius.
+    corners: list[dict[str, float] | None] = []
+    for index in range(count):
+        previous = points[index - 1]
+        current = points[index]
+        following = points[(index + 1) % count]
+
+        to_previous = previous - current
+        to_next = following - current
+        length_previous = math.hypot(to_previous.x(), to_previous.y())
+        length_next = math.hypot(to_next.x(), to_next.y())
+        if length_previous < 0.001 or length_next < 0.001:
+            corners.append(None)
+            continue
+
+        unit_previous = to_previous / length_previous
+        unit_next = to_next / length_next
+        dot = unit_previous.x() * unit_next.x() + unit_previous.y() * unit_next.y()
+        angle = math.acos(max(-1.0, min(1.0, dot)))
+        # A straight or fully folded corner has no arc to draw.
+        if angle < 0.01 or angle > math.pi - 0.01:
+            corners.append(None)
+            continue
+
+        half_tangent = math.tan(angle / 2.0)
+        corners.append(
+            {
+                "angle": angle,
+                "half_tangent": half_tangent,
+                "distance": float(radius) / half_tangent,
+                "edge_next": length_next,
+            }
+        )
+
+    # Second pass: an edge is shared by two corners, so their combined run-ups
+    # must fit inside it. Shrinking by the sum -- rather than capping each at
+    # half the edge -- lets a sharp corner borrow the room its blunt neighbour
+    # does not need, which is the common case on a triangle.
+    scales = [1.0] * count
+    for index in range(count):
+        current_corner = corners[index]
+        next_corner = corners[(index + 1) % count]
+        if current_corner is None or next_corner is None:
+            continue
+        edge_length = current_corner["edge_next"]
+        needed = current_corner["distance"] + next_corner["distance"]
+        if needed > edge_length and needed > 0.0:
+            factor = edge_length / needed
+            scales[index] = min(scales[index], factor)
+            scales[(index + 1) % count] = min(scales[(index + 1) % count], factor)
+
+    started = False
+    for index in range(count):
+        current = points[index]
+        corner = corners[index]
+        if corner is None:
+            if started:
+                path.lineTo(current)
+            else:
+                path.moveTo(current)
+                started = True
+            continue
+
+        previous = points[index - 1]
+        following = points[(index + 1) % count]
+        to_previous = previous - current
+        to_next = following - current
+        unit_previous = to_previous / math.hypot(to_previous.x(), to_previous.y())
+        unit_next = to_next / math.hypot(to_next.x(), to_next.y())
+
+        angle = corner["angle"]
+        distance = corner["distance"] * scales[index]
+        effective_radius = distance * corner["half_tangent"]
+        if effective_radius < 0.01:
+            if started:
+                path.lineTo(current)
+            else:
+                path.moveTo(current)
+                started = True
+            continue
+
+        tangent_in = current + unit_previous * distance
+        tangent_out = current + unit_next * distance
+
+        bisector = unit_previous + unit_next
+        bisector_length = math.hypot(bisector.x(), bisector.y())
+        if bisector_length < 0.001:
+            continue
+        bisector = bisector / bisector_length
+        center = current + bisector * (effective_radius / math.sin(angle / 2.0))
+
+        start_angle = math.degrees(
+            math.atan2(-(tangent_in.y() - center.y()), tangent_in.x() - center.x())
+        )
+        end_angle = math.degrees(
+            math.atan2(-(tangent_out.y() - center.y()), tangent_out.x() - center.x())
+        )
+        sweep = end_angle - start_angle
+        # Take the short way round so the arc hugs the corner instead of
+        # sweeping the long way about the circle.
+        while sweep <= -180.0:
+            sweep += 360.0
+        while sweep > 180.0:
+            sweep -= 360.0
+
+        arc_rect = QRectF(
+            center.x() - effective_radius,
+            center.y() - effective_radius,
+            effective_radius * 2.0,
+            effective_radius * 2.0,
+        )
+        if started:
+            path.lineTo(tangent_in)
+        else:
+            path.moveTo(tangent_in)
+            started = True
+        path.arcTo(arc_rect, start_angle, sweep)
+
+    if started:
+        path.closeSubpath()
+    return path
+
+
+def build_triangle_path(rect: QRectF, *, corner_radius: float = 0.0) -> QPainterPath:
     """
     Builds an isosceles triangle path inscribed in ``rect``.
 
     Args:
         rect: Bounding rectangle.
+        corner_radius: Corner radius in pixels (0 = sharp corners).
 
     Returns:
         QPainterPath: Closed triangle path.
@@ -79,11 +244,13 @@ def build_triangle_path(rect: QRectF) -> QPainterPath:
     top = QPointF(rect.center().x(), rect.top())
     bottom_left = QPointF(rect.left(), rect.bottom())
     bottom_right = QPointF(rect.right(), rect.bottom())
-    path.moveTo(top)
-    path.lineTo(bottom_right)
-    path.lineTo(bottom_left)
-    path.closeSubpath()
-    return path
+    if corner_radius <= 0.01:
+        path.moveTo(top)
+        path.lineTo(bottom_right)
+        path.lineTo(bottom_left)
+        path.closeSubpath()
+        return path
+    return build_rounded_polygon_path([top, bottom_right, bottom_left], float(corner_radius))
 
 
 def build_rect_path(rect: QRectF, *, corner_radius: float = 0.0) -> QPainterPath:
@@ -326,7 +493,7 @@ def path_for_shape_kind(
     if resolved == "rect":
         return build_rect_path(rect, corner_radius=corner_radius)
     if resolved == "triangle":
-        return build_triangle_path(rect)
+        return build_triangle_path(rect, corner_radius=corner_radius)
     if resolved == "round_rect":
         return build_round_rect_path(rect)
     if resolved == "star":

@@ -207,9 +207,13 @@ Flatpak modules too would be a much larger, slower build.
 - **Style panel**: selecting one drawn object shows its Thickness, Style, Radius (rectangles), and colors together, editable in place; hidden again on deselect or when multiple objects are selected (since they may have different settings)
 - Text tool menu: font, size, plain / box / bubble, spacing, padding
 - One-shot tools → return to Select; **double-click** locks a tool; **Esc** unlocks it again
+- Corner radius (0-90) for rectangles **and triangles**, in both editors
 - Layers, geometry inspector (`X/Y/W/H`), document footer when nothing is selected
 - History with labeled undo list; zoom, grid, snap, smart guides
 - Export PNG / JPEG / PDF / SVG, batch export profiles, print
+- **Presentation frame** for exports (`Frame` in the Export tab): padding, rounded corners, drop
+  shadow, solid/gradient/transparent backdrop, and optional 16:9 / 4:3 / 3:2 / 1:1 letterboxing.
+  `Frame...` opens a live preview of the actual screenshot being exported.
 
 ### Session workspace
 

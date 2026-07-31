@@ -400,6 +400,66 @@ ZIP:
 
 `save_video_project` reuses the existing embedded MP4 when the source file on disk is missing (recovery update path).
 
+## Corner Radius
+
+`build_rounded_polygon_path` in `src/shape_items.py` rounds any closed polygon with true circular
+arcs -- the same arcs `addRoundedRect` produces, so a rectangle and a triangle look identical at the
+same radius (pinned by a test comparing enclosed areas). `build_triangle_path` uses it; polygon and
+star can adopt it unchanged.
+
+Rounding a corner means walking back along both edges by `r / tan(angle/2)` and joining the tangent
+points with an arc. Two consequences follow from that formula:
+
+- **A sharper corner pushes its arc further from the vertex.** A 20px radius on an 11-degree triangle
+  tip sits ~180px below the tip. This is correct circular geometry and matches vector editors; it is
+  not a clamping bug.
+- **Clamping is per edge, not per corner.** An edge is shared by two corners, so the constraint is
+  `d(A) + d(B) <= edge length`. Capping each corner at half the edge instead would clamp a sharp apex
+  even when its blunt neighbours leave most of the edge unused.
+
+The slider's 0-90 value is passed through as a **pixel** radius, not an angle, and `build_rect_path`
+clamps it to half the shorter edge. The usable range is therefore size-dependent: a 60x40 rectangle
+saturates at 20, a 200x150 one at 75.
+
+`SHAPE_RADIUS_TYPES` in `src/shape_items.py` lists the kinds whose corners can be rounded. Adding a
+kind means honouring it along the *whole* chain -- applying to a selection (`set_rect_corner_radius`
+in both canvases), serializing, and restoring. A kind present in the Edit panel's visibility set but
+missing from the apply path shows the slider and silently ignores it.
+
+Note the restore branch for `rect` hardcodes `configure_graphics_item(item, "rect")`, so other radius
+kinds must go through the generic `PATH_SHAPE_KINDS` branch, which passes the annotation type
+through correctly.
+
+## Presentation Frame
+
+`src/presentation_frame.py` composites the export frame; `src/presentation_frame_dialog.py` is its
+editor. It runs last in the export pipeline, on the already-flattened pixmap, and never inspects the
+screenshot's own pixels -- it only places that pixmap on a larger canvas.
+
+Every export path (PNG, JPEG, PDF, SVG, batch, clipboard) funnels through
+`EditorWindow._export_output_pixmap`, so wiring the frame in there covers all of them at once.
+
+| Setting | Unit | Why |
+|---------|------|-----|
+| `padding_percent` | % of the source's longer edge | One value looks the same on a 400px crop and a 4K capture |
+| `corner_radius` | px at @1x, multiplied by export scale | Keeps roundness visually identical at @2x/@3x |
+| shadow blur / offset | 3% / 1.5% of longer edge | Scales with the image; deliberately subtle so annotations stay the loudest elements |
+| `shadow_opacity` | 0..1, painted as pure black | Gray shadows turn muddy over a colored backdrop; black-with-alpha stays correct on any color |
+| `aspect_ratio` | preset or `auto` | Letterboxes only -- the frame grows, so a preset can never crop the screenshot |
+
+The second gradient stop is derived from the first (hue +18 degrees, lightness -20) rather than being
+picked separately: two stops far apart read as a poster, a narrow shift reads as a lit surface.
+
+The shadow uses `QGraphicsDropShadowEffect` through a throwaway `QGraphicsScene` so the blur runs in
+Qt rather than pixel-by-pixel in Python, which matters for @3x full-screen exports.
+
+JPEG cannot store alpha, so `_export_output_pixmap` swaps a transparent backdrop for a white matte
+before encoding -- otherwise the encoder flattens it to black.
+
+Frame settings live for the session only, matching the existing export scale and transparency
+preferences. `PresentationFrame.to_payload` / `from_payload` exist and sanitize their input, so
+persisting them later is a wiring change, not a rewrite.
+
 ## Configuration
 
 Path: `~/.config/snappix/config.json`

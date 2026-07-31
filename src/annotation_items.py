@@ -493,12 +493,12 @@ class DoubleArrowItem(StrokeLineItem):
                 painter.drawPath(head)
 
 
-MAX_CORNER_RADIUS_DEGREES = 180
+MAX_CORNER_RADIUS_DEGREES = 90
 
 
 def clamp_corner_radius_degrees(value: float | int) -> int:
     """
-    Clamps a corner radius onto the 0-180 range the Edit panel slider exposes.
+    Clamps a corner radius onto the 0-90 range the Edit panel slider exposes.
 
     Args:
         value: Requested corner radius.
@@ -701,6 +701,7 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
     from src.shape_items import (
         PATH_SHAPE_KINDS,
         SHAPE_POLY_TYPES,
+        SHAPE_RADIUS_TYPES,
         PathShapeItem,
         PolyPathItem,
         SpotlightItem,
@@ -722,7 +723,7 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
         return model
 
     if annotation_type in {"rect", "ellipse"}:
-        if annotation_type == "rect" and isinstance(item, PathShapeItem):
+        if annotation_type in SHAPE_RADIUS_TYPES and isinstance(item, PathShapeItem):
             rect = item.rect().translated(item.pos())
             pen = item.pen()
             brush = item.brush()
@@ -794,6 +795,8 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
             "stroke_style": _stroke_style_from_pen(pen),
             "z_index": item.zValue(),
         }
+        if annotation_type in SHAPE_RADIUS_TYPES:
+            payload["corner_radius"] = item.corner_radius()
         merge_transform_into_payload(item, payload)
         return AnnotationModel(
             annotation_type=annotation_type,
@@ -1012,6 +1015,7 @@ def add_annotation_to_scene(
     from src.shape_items import (
         PATH_SHAPE_KINDS,
         SHAPE_POLY_TYPES,
+        SHAPE_RADIUS_TYPES,
         PathShapeItem,
         PolyPathItem,
         SpotlightItem,
@@ -1019,7 +1023,11 @@ def add_annotation_to_scene(
     )
 
     if annotation.annotation_type in PATH_SHAPE_KINDS:
-        item = PathShapeItem(annotation.annotation_type, rect)
+        item = PathShapeItem(
+            annotation.annotation_type,
+            rect,
+            corner_radius=float(annotation.payload.get("corner_radius", 0.0)),
+        )
         item.setPen(apply_stored_pen_style(pen, annotation.payload))
         item.setBrush(fill)
         configure_graphics_item(item, annotation.annotation_type)

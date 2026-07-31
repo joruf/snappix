@@ -99,6 +99,7 @@ from src.shape_items import (
     PATH_SHAPE_KINDS,
     SHAPE_LINE_TYPES,
     SHAPE_POLY_TYPES,
+    SHAPE_RADIUS_TYPES,
     SHAPE_RECT_TYPES,
     STAMP_MARK_TYPES,
     PathShapeItem,
@@ -811,7 +812,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             payload["fill_rgba"] = color_to_list(item.brush().color())
             payload["stroke_width"] = pen_stroke_width(item.pen())
             payload["stroke_style"] = stroke_style_from_pen(item.pen())
-            if annotation_type == "rect" and isinstance(item, PathShapeItem):
+            if annotation_type in SHAPE_RADIUS_TYPES and isinstance(item, PathShapeItem):
                 payload["corner_radius"] = item.corner_radius()
         elif annotation_type in SHAPE_LINE_TYPES:
             payload["stroke_rgba"] = color_to_list(item.pen().color())
@@ -1147,7 +1148,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         for item in self._selected_annotation_items():
             if bool(item.data(ITEM_ROLE_LOCKED) or False):
                 continue
-            if str(item.data(ITEM_ROLE_TYPE) or "") != "rect":
+            if str(item.data(ITEM_ROLE_TYPE) or "") not in SHAPE_RADIUS_TYPES:
                 continue
             if isinstance(item, PathShapeItem):
                 item.set_corner_radius(radius)

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import tempfile
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -124,6 +125,12 @@ from src.storage import (
 from src.tool_categories import SHARED_SHAPE_TOOL_CATEGORIES, build_tool_category_strip
 from src.selection_info import format_pixel_pair, format_vertex_list
 from src.tool_icons import apply_zoom_step_button_style, build_tool_icon, build_zoom_reset_icon
+from src.presentation_frame import (
+    BACKGROUND_SOLID,
+    BACKGROUND_TRANSPARENT,
+    PresentationFrame,
+    apply_presentation_frame,
+)
 from src.theme import (
     THEME_DARK,
     THEME_LIGHT,
@@ -260,7 +267,7 @@ _SHAPE_THICKNESS_SELECTION_TYPES = frozenset(
     }
 )
 _SHAPE_STYLE_SELECTION_TYPES = frozenset(STYLE_AWARE_TOOLS)
-_SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect"})
+_SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect", "triangle"})
 # Tools that edit existing content: Style colors follow the selection, not the tool.
 _COLOR_SELECTION_CONTEXT_TOOLS = frozenset(
     {
@@ -550,6 +557,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._eyedropper_color_target = "stroke"
         self._export_scale = 1.0
         self._export_keep_transparency = True
+        self._presentation_frame = PresentationFrame()
         self._text_bold_enabled = False
         self._text_italic_enabled = False
         self._text_underline_enabled = False
@@ -907,7 +915,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.style_radius_slider = QSlider(Qt.Orientation.Horizontal)
         self.style_radius_slider.setRange(0, MAX_CORNER_RADIUS_DEGREES)
         self.style_radius_slider.setFixedWidth(72)
-        self.style_radius_slider.setToolTip("Corner radius of the selected rectangle, 0-180°.")
+        self.style_radius_slider.setToolTip("Corner radius of the selected rectangle or triangle, 0-90°.")
         self.style_radius_slider.valueChanged.connect(self._style_corner_radius_changed)
         self._configure_compact_toolbar_height(self.style_radius_slider, 22)
         shape_widgets.append(self.style_radius_slider)
@@ -1134,6 +1142,15 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         )
         self._configure_compact_toolbar_height(self.export_keep_transparency_check, 22)
         export_widgets.append(self.export_keep_transparency_check)
+        self.presentation_frame_check = QCheckBox("Frame")
+        self.presentation_frame_check.setChecked(self._presentation_frame.enabled)
+        self.presentation_frame_check.toggled.connect(self._on_presentation_frame_toggled)
+        self._configure_compact_toolbar_height(self.presentation_frame_check, 22)
+        export_widgets.append(self.presentation_frame_check)
+        self.presentation_frame_button = QPushButton("Frame...")
+        self.presentation_frame_button.clicked.connect(self.edit_presentation_frame)
+        self._configure_compact_toolbar_height(self.presentation_frame_button)
+        export_widgets.append(self.presentation_frame_button)
         export_widgets.append(self._create_toolbar_label("Batch"))
         self.batch_profile_combo = QComboBox()
         self.batch_profile_combo.currentIndexChanged.connect(
@@ -2518,7 +2535,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         Applies a corner-radius change from the Edit panel to the selected rectangle.
 
         Args:
-            value: New corner radius in degrees (0-180).
+            value: New corner radius in degrees (0-90).
 
         Returns:
             None
@@ -4916,10 +4933,79 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         keep_alpha = bool(self._export_keep_transparency) and not for_jpeg
         background = None if keep_alpha else QColor(255, 255, 255, 255)
-        return self.canvas.export_composited_pixmap(
+        pixmap = self.canvas.export_composited_pixmap(
             scale=float(self._export_scale),
             background=background,
         )
+        frame = self._presentation_frame
+        if for_jpeg and frame.background_mode == BACKGROUND_TRANSPARENT:
+            # JPEG cannot store alpha, so a transparent backdrop would be
+            # flattened to black by the encoder. Fall back to the matte the rest
+            # of the export path already uses for this case.
+            frame = replace(frame, background_mode=BACKGROUND_SOLID, background_color="#FFFFFF")
+        return apply_presentation_frame(pixmap, frame, scale=float(self._export_scale))
+
+    def _on_presentation_frame_toggled(self, checked: bool) -> None:
+        """
+        Turns the export presentation frame on or off.
+
+        Args:
+            checked: True when exports should be framed.
+
+        Returns:
+            None
+        """
+
+        self._presentation_frame = replace(self._presentation_frame, enabled=bool(checked))
+
+    def edit_presentation_frame(self) -> None:
+        """
+        Opens the presentation frame dialog and applies the chosen settings.
+
+        Returns:
+            None
+        """
+
+        from src.presentation_frame_dialog import PresentationFrameDialog
+
+        dialog = PresentationFrameDialog(
+            self._presentation_frame,
+            source=self.canvas.export_composited_pixmap(scale=1.0),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.Accepted:
+            return
+        self._presentation_frame = dialog.selected_frame()
+        self.presentation_frame_check.blockSignals(True)
+        self.presentation_frame_check.setChecked(self._presentation_frame.enabled)
+        self.presentation_frame_check.blockSignals(False)
+
+    def presentation_frame(self) -> PresentationFrame:
+        """
+        Returns the frame currently applied to exports.
+
+        Returns:
+            PresentationFrame: Active frame settings.
+        """
+
+        return self._presentation_frame
+
+    def set_presentation_frame(self, frame: PresentationFrame) -> None:
+        """
+        Applies one frame to this window and syncs the Export tab checkbox.
+
+        Args:
+            frame: Frame settings to apply.
+
+        Returns:
+            None
+        """
+
+        self._presentation_frame = frame
+        if hasattr(self, "presentation_frame_check"):
+            self.presentation_frame_check.blockSignals(True)
+            self.presentation_frame_check.setChecked(frame.enabled)
+            self.presentation_frame_check.blockSignals(False)
 
     def _on_crop_state_changed(self, is_active: bool) -> None:
         """

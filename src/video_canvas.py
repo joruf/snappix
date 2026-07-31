@@ -51,6 +51,7 @@ from src.editor_canvas import (
 from src.shape_items import (
     PATH_SHAPE_KINDS,
     SHAPE_LINE_TYPES,
+    SHAPE_RADIUS_TYPES,
     SHAPE_RECT_TYPES,
     STAMP_MARK_TYPES,
     PathShapeItem,
@@ -547,7 +548,7 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         for item in self._selected_annotation_items():
             if bool(item.data(ITEM_ROLE_LOCKED) or False):
                 continue
-            if str(item.data(ITEM_ROLE_TYPE) or "") != "rect":
+            if str(item.data(ITEM_ROLE_TYPE) or "") not in SHAPE_RADIUS_TYPES:
                 continue
             if isinstance(item, PathShapeItem):
                 item.set_corner_radius(resolved)

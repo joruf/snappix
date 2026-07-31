@@ -192,7 +192,7 @@ class TestCornerRadiusDegrees(unittest.TestCase):
         self.assertEqual(clamp_corner_radius_degrees(999), MAX_CORNER_RADIUS_DEGREES)
         self.assertEqual(clamp_corner_radius_degrees("nope"), 0)
 
-    def test_video_editor_radius_slider_spans_zero_to_180(self) -> None:
+    def test_video_editor_radius_slider_spans_the_documented_range(self) -> None:
         """
         Ensures the video editor exposes the documented degree range.
         """

@@ -122,7 +122,7 @@ _SHAPE_THICKNESS_SELECTION_TYPES = frozenset(
     }
 )
 _SHAPE_STYLE_SELECTION_TYPES = frozenset(STYLE_AWARE_TOOLS)
-_SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect"})
+_SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect", "triangle"})
 
 _LOCKABLE_TOOLS = frozenset(
     {
@@ -364,7 +364,7 @@ class VideoVectorToolbar:
         self.style_radius_slider = QSlider(Qt.Orientation.Horizontal)
         self.style_radius_slider.setRange(0, MAX_CORNER_RADIUS_DEGREES)
         self.style_radius_slider.setFixedWidth(72)
-        self.style_radius_slider.setToolTip("Corner radius of the selected rectangle, 0-180°.")
+        self.style_radius_slider.setToolTip("Corner radius of the selected rectangle or triangle, 0-90°.")
         self.style_radius_slider.valueChanged.connect(self._style_corner_radius_changed)
         shape_widgets.append(self.style_radius_slider)
         self.style_radius_label = QLabel("0°")
@@ -585,7 +585,7 @@ class VideoVectorToolbar:
         Applies a corner-radius change from the Edit panel to the selected rectangle.
 
         Args:
-            value: New corner radius in degrees (0-180).
+            value: New corner radius in degrees (0-90).
 
         Returns:
             None
