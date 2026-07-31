@@ -471,6 +471,26 @@ scripts\check_cross_platform.bat
 
 CI runs the same contract tests and full suite on Ubuntu 22.04/24.04 and `windows-latest` (Python 3.11 and 3.12).
 
+### Multi-OS matrix (local Linux host)
+
+From the development machine (Linux Mint), the companion suite in `~/os-test-matrix` can run Snappix contract tests on several Linux distros via Docker and on real Windows via GitHub Actions (`windows-latest`). With `~/bin/test-project` linked, from the home directory:
+
+```bash
+# Windows only (GitHub Actions runner)
+./bin/test-project /home/joruf/Dokumente/GitHub/snappix --only windows-gha
+
+# Full enabled matrix (Linux Docker targets + Windows)
+./bin/test-project /home/joruf/Dokumente/GitHub/snappix
+```
+
+Or call the suite directly:
+
+```bash
+/home/joruf/os-test-matrix/bin/test-project /home/joruf/Dokumente/GitHub/snappix --only windows-gha
+```
+
+On-demand Windows/Linux runs use the [`OS Matrix`](.github/workflows/os-matrix.yml) workflow (`workflow_dispatch`). Results are written under `~/os-test-matrix/results/`.
+
 Platform compatibility (X11 vs Wayland, optional tools present/missing) is covered by mocked matrix tests in `tests/test_os_compatibility_matrix.py`. The dual-OS API contract lives in `tests/test_cross_platform_contract.py`.
 
 ---
