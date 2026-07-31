@@ -261,6 +261,13 @@ class FlowLayout(QLayout):
         for item in self._items:
             widget = item.widget()
             if widget is not None:
+                # Explicitly hidden widgets must not reserve space, the way
+                # Qt's own layouts skip empty items. The style groups hide the
+                # color controls that do not apply to the current selection,
+                # and counting them left a wide blank band between the visible
+                # groups -- most visibly between Fill and Thickness.
+                if widget.isHidden():
+                    continue
                 policy = widget.sizePolicy()
                 horizontal_policy = policy.horizontalPolicy()
                 if horizontal_policy in {

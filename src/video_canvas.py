@@ -1046,16 +1046,34 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         if serialized is None:
             self.selection_style_changed.emit({"type": "document"})
             return
-        self.selection_style_changed.emit(
-            {
-                "type": serialized.annotation_type,
-                "stroke_rgba": serialized.stroke_rgba,
-                "fill_rgba": serialized.fill_rgba,
-                "stroke_width": serialized.stroke_width,
-                "stroke_style": serialized.payload.get("stroke_style"),
-                "corner_radius": serialized.payload.get("corner_radius"),
-            }
-        )
+        payload = {
+            "type": serialized.annotation_type,
+            "stroke_rgba": serialized.stroke_rgba,
+            "fill_rgba": serialized.fill_rgba,
+            "stroke_width": serialized.stroke_width,
+            "stroke_style": serialized.payload.get("stroke_style"),
+            "corner_radius": serialized.payload.get("corner_radius"),
+            # Geometry so the footer can report size/position exactly like the
+            # image editor's does.
+            "x": round(serialized.x, 1),
+            "y": round(serialized.y, 1),
+            "width": round(serialized.width, 1),
+            "height": round(serialized.height, 1),
+        }
+        if serialized.text:
+            payload["text_preview"] = serialized.text
+
+        item = selected[0]
+        if hasattr(item, "points"):
+            try:
+                payload["points"] = [
+                    (point.x() + item.pos().x(), point.y() + item.pos().y())
+                    for point in item.points()
+                ]
+            except (AttributeError, TypeError):
+                pass
+
+        self.selection_style_changed.emit(payload)
 
     def _update_style_color_context(self) -> None:
         """

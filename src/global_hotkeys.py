@@ -14,7 +14,12 @@ try:
     from pynput import keyboard
 
     PYNPUT_AVAILABLE = True
-except ModuleNotFoundError:
+except ImportError:
+    # Not just ModuleNotFoundError: on a headless Linux session pynput picks a
+    # backend at import time and raises a plain ImportError ("failed to acquire
+    # X connection"). Catching only the narrower error made importing this
+    # module -- and everything importing it -- explode on CI and on any
+    # display-less run.
     keyboard = None
     PYNPUT_AVAILABLE = False
 

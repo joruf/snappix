@@ -5,6 +5,7 @@ Unit tests for the application settings dialog.
 from __future__ import annotations
 
 import unittest
+from unittest.mock import patch
 
 try:
     from src.config import (
@@ -33,6 +34,23 @@ class TestSettingsDialog(unittest.TestCase):
         """
 
         cls._app = ensure_qapp()
+
+    def setUp(self) -> None:
+        """
+        Pretends global hotkeys are supported for the duration of each test.
+
+        The dialog deliberately disables and unchecks the hotkey box when no
+        pynput backend exists, which is the case on a headless machine and in
+        CI. These tests are about field mapping, not backend detection, so the
+        host's input backend must not decide their outcome.
+        """
+
+        patcher = patch(
+            "src.settings_dialog.GlobalHotkeyManager.is_supported",
+            return_value=True,
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_build_config_normalizes_hotkeys_and_post_capture(self) -> None:
         """
@@ -131,6 +149,35 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertTrue(measure.ruler_enabled)
         self.assertTrue(measure.ruler_outside)
         self.assertFalse(measure.crosshair_enabled)
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for settings dialog tests")
+class TestSettingsDialogWithoutHotkeySupport(unittest.TestCase):
+    """
+    Verifies the dialog degrades when no global-hotkey backend is available.
+
+    pynput picks its backend at import time and fails on a display-less
+    session, so this is the real state on headless machines and in CI.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._app = ensure_qapp()
+
+    def test_unsupported_hotkeys_disable_and_uncheck_the_box(self) -> None:
+        """
+        Ensures the dialog cannot offer hotkeys the platform cannot deliver.
+        """
+
+        with patch(
+            "src.settings_dialog.GlobalHotkeyManager.is_supported",
+            return_value=False,
+        ):
+            dialog = SettingsDialog(AppConfig(hotkeys_enabled=True))
+
+            self.assertFalse(dialog.hotkeys_enabled_checkbox.isChecked())
+            self.assertFalse(dialog.hotkeys_enabled_checkbox.isEnabled())
+            self.assertFalse(dialog.build_config().hotkeys_enabled)
 
 
 if __name__ == "__main__":

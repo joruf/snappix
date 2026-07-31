@@ -52,6 +52,10 @@ PLAYHEAD_HANDLE_PX = 6
 SELECTED_BAR_BORDER_PX = 3
 # Bars are a tint of the annotation's own color, not a solid block.
 BAR_FILL_ALPHA = 140
+# Effect summaries are written inside the bar, which is far wider than the
+# fixed label column on the left.
+EFFECT_LABEL_PADDING_PX = 6
+EFFECT_LABEL_MIN_WIDTH_PX = 24
 
 DRAG_MODE_PLAYHEAD = "playhead"
 DRAG_MODE_MOVE = "move"
@@ -803,9 +807,6 @@ class TimelineWidget(QWidget):
             label = f"{annotation.annotation_type}"
             if annotation.text:
                 label += f": {annotation.text[:16]}"
-            effects_summary = track_effect_summary(annotation)
-            if effects_summary:
-                label += f" [{effects_summary}]"
             painter.setPen(QPen(QColor(colors.text)))
             painter.drawText(
                 QRect(6, row.y(), LABEL_WIDTH - 10, row.height()),
@@ -832,9 +833,56 @@ class TimelineWidget(QWidget):
             border_color = QColor(colors.accent) if is_selected else color
             painter.setPen(QPen(border_color, SELECTED_BAR_BORDER_PX if is_selected else 2))
             painter.drawRect(bar.adjusted(0, 0, -1, -1))
+            self._paint_bar_effect_summary(painter, bar, annotation, colors)
         painter.restore()
 
         self._paint_playhead(painter, colors)
+
+    def _paint_bar_effect_summary(
+        self,
+        painter: QPainter,
+        bar: QRect,
+        annotation: VideoAnnotationModel,
+        colors,
+    ) -> None:
+        """
+        Writes the effect summary right-aligned inside the annotation's bar.
+
+        The bar is far wider than the fixed label column, so "Fade In, Zoom Out"
+        fits there without truncating the annotation's own name.
+
+        Args:
+            painter: Active painter, already clipped to the row area.
+            bar: The annotation's bar rectangle.
+            annotation: Annotation being drawn.
+            colors: Resolved theme color tokens.
+
+        Returns:
+            None
+        """
+
+        summary = track_effect_summary(annotation)
+        if not summary:
+            return
+
+        text_rect = bar.adjusted(EFFECT_LABEL_PADDING_PX, 0, -EFFECT_LABEL_PADDING_PX, 0)
+        if text_rect.width() < EFFECT_LABEL_MIN_WIDTH_PX:
+            return
+
+        metrics = painter.fontMetrics()
+        elided = metrics.elidedText(
+            summary,
+            Qt.TextElideMode.ElideRight,
+            text_rect.width(),
+        )
+        painter.save()
+        painter.setPen(QPen(ensure_min_contrast(QColor(colors.text), QColor(colors.window_bg))))
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+            elided,
+        )
+        painter.restore()
 
     def _paint_playhead(self, painter: QPainter, colors) -> None:
         """
@@ -1093,11 +1141,114 @@ class TimelineWidget(QWidget):
 
         if event.key() == Qt.Key.Key_Delete and self._selected_id:
             annotation_id = self._selected_id
-            self._selected_id = ""
+            # Hand the selection to the preceding row so repeated Delete walks
+            # up the track list instead of stranding the keyboard.
+            self._selected_id = self._neighbour_annotation_id(annotation_id, -1)
             self.annotation_delete_requested.emit(annotation_id)
             event.accept()
             return
+
+        if event.key() in (Qt.Key.Key_Up, Qt.Key.Key_Down) and self._annotations:
+            step = -1 if event.key() == Qt.Key.Key_Up else 1
+            if self.select_relative_row(step):
+                event.accept()
+                return
+
         super().keyPressEvent(event)
+
+    def _row_index_of(self, annotation_id: str) -> int:
+        """
+        Returns the row index of one annotation id.
+
+        Args:
+            annotation_id: Annotation to locate.
+
+        Returns:
+            int: Row index, or -1 when the id is not present.
+        """
+
+        for index, annotation in enumerate(self._annotations):
+            if annotation.annotation_id == annotation_id:
+                return index
+        return -1
+
+    def _neighbour_annotation_id(self, annotation_id: str, step: int) -> str:
+        """
+        Returns the id of the row next to one annotation.
+
+        Args:
+            annotation_id: Reference annotation.
+            step: -1 for the previous row, 1 for the next.
+
+        Returns:
+            str: Neighbouring annotation id, or empty when there is none.
+        """
+
+        index = self._row_index_of(annotation_id)
+        if index < 0:
+            return ""
+        neighbour = index + step
+        if 0 <= neighbour < len(self._annotations):
+            return self._annotations[neighbour].annotation_id
+        # Deleting the first row hands selection to what becomes the new first.
+        if step < 0 and len(self._annotations) > 1:
+            return self._annotations[1].annotation_id
+        return ""
+
+    def select_relative_row(self, step: int) -> bool:
+        """
+        Moves the track selection up or down by one row.
+
+        With nothing selected yet, the first row is selected so the keyboard
+        has somewhere to start.
+
+        Args:
+            step: -1 for the previous row, 1 for the next.
+
+        Returns:
+            bool: True when the selection changed.
+        """
+
+        if not self._annotations:
+            return False
+
+        current = self._row_index_of(self._selected_id)
+        if current < 0:
+            target = 0 if step > 0 else len(self._annotations) - 1
+        else:
+            target = current + step
+            if not 0 <= target < len(self._annotations):
+                return False
+
+        annotation = self._annotations[target]
+        if annotation.annotation_id == self._selected_id:
+            return False
+        self._selected_id = annotation.annotation_id
+        self._scroll_row_into_view(target)
+        self.annotation_selected.emit(self._selected_id)
+        self.update()
+        return True
+
+    def _scroll_row_into_view(self, index: int) -> None:
+        """
+        Scrolls the row list so one row is fully visible.
+
+        Args:
+            index: Row index to reveal.
+
+        Returns:
+            None
+        """
+
+        row_stride = ROW_HEIGHT + ROW_SPACING
+        row_top = index * row_stride + ROW_SPACING
+        row_bottom = row_top + ROW_HEIGHT
+        viewport = self._rows_viewport_height()
+        if row_top < self._scroll_y:
+            self._scroll_y = max(0, row_top - ROW_SPACING)
+        elif row_bottom > self._scroll_y + viewport:
+            self._scroll_y = max(0, row_bottom - viewport)
+        self._sync_vertical_scroll()
 
     def contextMenuEvent(self, event: QContextMenuEvent) -> None:
         """

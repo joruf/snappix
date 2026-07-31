@@ -493,6 +493,27 @@ class DoubleArrowItem(StrokeLineItem):
                 painter.drawPath(head)
 
 
+MAX_CORNER_RADIUS_DEGREES = 180
+
+
+def clamp_corner_radius_degrees(value: float | int) -> int:
+    """
+    Clamps a corner radius onto the 0-180 range the Edit panel slider exposes.
+
+    Args:
+        value: Requested corner radius.
+
+    Returns:
+        int: Whole-degree radius within ``[0, MAX_CORNER_RADIUS_DEGREES]``.
+    """
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(0, min(MAX_CORNER_RADIUS_DEGREES, int(round(numeric))))
+
+
 def color_to_list(color: QColor) -> list[int]:
     """
     Converts QColor into RGBA integer components.

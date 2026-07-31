@@ -40,6 +40,11 @@ SHAPE_LINE_TYPES = frozenset({"line", "arrow", "double_arrow"})
 # Multi-point path annotation types (points stored in payload).
 SHAPE_POLY_TYPES = frozenset({"polyline", "polygon", "bent_arrow"})
 
+# Vertex handles shown on a selected multi-point shape. The grab padding is
+# what makes them practical to hit with a mouse at 100% zoom.
+VERTEX_HANDLE_PX = 7.0
+VERTEX_GRAB_PADDING_PX = 3.0
+
 # Types that use PathShapeItem for paint/geometry (includes legacy round_rect/highlight).
 PATH_SHAPE_KINDS = frozenset(
     {
@@ -730,6 +735,8 @@ class PolyPathItem(QGraphicsPathItem):
         kind = str(shape_kind or "polyline").strip().lower()
         self._shape_kind = kind if kind in SHAPE_POLY_TYPES else "polyline"
         self._points: list[QPointF] = [QPointF(point) for point in (points or [])]
+        self._active_vertex: int | None = None
+        self._vertex_drag_origin: QPointF | None = None
         self._rebuild_path()
 
     def shape_kind(self) -> str:
@@ -802,6 +809,170 @@ class PolyPathItem(QGraphicsPathItem):
         stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
         stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         return stroker.createStroke(base)
+
+    def boundingRect(self) -> QRectF:
+        """
+        Returns the path bounds widened so vertex handles are not clipped.
+
+        Returns:
+            QRectF: Bounds including handle overhang.
+        """
+
+        margin = VERTEX_HANDLE_PX
+        return super().boundingRect().adjusted(-margin, -margin, margin, margin)
+
+    def vertex_at(self, local_pos: QPointF) -> int | None:
+        """
+        Returns the vertex index under one item-local position.
+
+        Args:
+            local_pos: Position in item coordinates.
+
+        Returns:
+            int | None: Vertex index, or None when no handle was hit.
+        """
+
+        reach = VERTEX_HANDLE_PX + VERTEX_GRAB_PADDING_PX
+        for index, point in enumerate(self._points):
+            if abs(point.x() - local_pos.x()) <= reach and abs(point.y() - local_pos.y()) <= reach:
+                return index
+        return None
+
+    def move_vertex(self, index: int, local_pos: QPointF) -> bool:
+        """
+        Moves one vertex to a new item-local position.
+
+        Args:
+            index: Vertex index.
+            local_pos: New position in item coordinates.
+
+        Returns:
+            bool: True when the vertex actually moved.
+        """
+
+        if not 0 <= index < len(self._points):
+            return False
+        if self._points[index] == local_pos:
+            return False
+        points = list(self._points)
+        points[index] = QPointF(local_pos)
+        self.set_points(points)
+        return True
+
+    def lock_vertex_target(self, origin: QPointF, target: QPointF) -> QPointF:
+        """
+        Constrains a vertex drag to its dominant axis.
+
+        Args:
+            origin: Where the vertex sat when the drag started.
+            target: Unconstrained drag target.
+
+        Returns:
+            QPointF: Target with the smaller-travel axis pinned to the origin.
+        """
+
+        locked = QPointF(target)
+        if abs(target.x() - origin.x()) >= abs(target.y() - origin.y()):
+            locked.setY(origin.y())
+        else:
+            locked.setX(origin.x())
+        return locked
+
+    def paint(self, painter: QPainter, option, widget=None) -> None:  # type: ignore[override]
+        """
+        Draws the path and, while selected, its draggable vertex handles.
+
+        Args:
+            painter: Active painter.
+            option: Style option.
+            widget: Owning widget.
+
+        Returns:
+            None
+        """
+
+        super().paint(painter, option, widget)
+        if not self.isSelected() or not self._points:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(QColor(255, 255, 255), 1.0))
+        painter.setBrush(QBrush(self.pen().color()))
+        half = VERTEX_HANDLE_PX / 2.0
+        for point in self._points:
+            painter.drawRect(
+                QRectF(point.x() - half, point.y() - half, VERTEX_HANDLE_PX, VERTEX_HANDLE_PX)
+            )
+        painter.restore()
+
+    def mousePressEvent(self, event) -> None:  # type: ignore[override]
+        """
+        Starts a vertex drag when a handle was pressed.
+
+        Anything else falls through, so the shape as a whole stays movable.
+
+        Args:
+            event: Mouse press event.
+
+        Returns:
+            None
+        """
+
+        if event.button() == Qt.MouseButton.LeftButton and self.isSelected():
+            index = self.vertex_at(event.pos())
+            if index is not None:
+                self._active_vertex = index
+                self._vertex_drag_origin = QPointF(self._points[index])
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
+        """
+        Drags the active vertex, optionally locked to one axis.
+
+        Holding Shift constrains the move to whichever axis has travelled
+        farther, matching how the surrounding drawing tools behave.
+
+        Args:
+            event: Mouse move event.
+
+        Returns:
+            None
+        """
+
+        if self._active_vertex is None:
+            super().mouseMoveEvent(event)
+            return
+
+        target = QPointF(event.pos())
+        if (
+            event.modifiers() & Qt.KeyboardModifier.ShiftModifier
+            and self._vertex_drag_origin is not None
+        ):
+            target = self.lock_vertex_target(self._vertex_drag_origin, target)
+
+        self.move_vertex(self._active_vertex, target)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
+        """
+        Ends an active vertex drag.
+
+        Args:
+            event: Mouse release event.
+
+        Returns:
+            None
+        """
+
+        if self._active_vertex is not None:
+            self._active_vertex = None
+            self._vertex_drag_origin = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def setPen(self, pen: QPen) -> None:
         """

@@ -33,10 +33,12 @@ from src.config import (
     normalize_tool_stroke_widths,
 )
 from src.annotation_items import (
+    MAX_CORNER_RADIUS_DEGREES,
     STROKE_STYLE_DASH,
     STROKE_STYLE_DASH_DOT,
     STROKE_STYLE_DOT,
     STROKE_STYLE_SOLID,
+    clamp_corner_radius_degrees,
 )
 from src.editor_canvas import Tool
 from src.flow_layout import FlowLayoutWidget
@@ -359,20 +361,21 @@ class VideoVectorToolbar:
 
         radius_caption = QLabel("Radius")
         shape_widgets.append(radius_caption)
-        self.style_radius_spin = QDoubleSpinBox()
-        self.style_radius_spin.setDecimals(1)
-        self.style_radius_spin.setSingleStep(1.0)
-        self.style_radius_spin.setRange(0.0, 200.0)
-        self.style_radius_spin.setFixedWidth(64)
-        self.style_radius_spin.setToolTip("Corner radius of the selected rectangle.")
-        self.style_radius_spin.valueChanged.connect(self._style_corner_radius_changed)
-        shape_widgets.append(self.style_radius_spin)
+        self.style_radius_slider = QSlider(Qt.Orientation.Horizontal)
+        self.style_radius_slider.setRange(0, MAX_CORNER_RADIUS_DEGREES)
+        self.style_radius_slider.setFixedWidth(72)
+        self.style_radius_slider.setToolTip("Corner radius of the selected rectangle, 0-180°.")
+        self.style_radius_slider.valueChanged.connect(self._style_corner_radius_changed)
+        shape_widgets.append(self.style_radius_slider)
+        self.style_radius_label = QLabel("0°")
+        self.style_radius_label.setMinimumWidth(32)
+        shape_widgets.append(self.style_radius_label)
 
         style_widgets.extend(shape_widgets)
         self._shape_group_widgets = {
             "thickness": [thickness_caption, self.style_thickness_slider, self.style_thickness_label],
             "style": [style_caption, self.style_stroke_style_combo],
-            "radius": [radius_caption, self.style_radius_spin],
+            "radius": [radius_caption, self.style_radius_slider, self.style_radius_label],
         }
 
         self._color_target_widgets = {
@@ -381,7 +384,7 @@ class VideoVectorToolbar:
             "text": text_widgets,
         }
         style_tab.set_flow_widgets(style_widgets)
-        self._property_tabs.addTab(style_tab, "Style")
+        self._property_tabs.addTab(style_tab, "Edit")
         root_layout.addWidget(self._property_tabs)
 
         self._sync_style_buttons()
@@ -515,9 +518,10 @@ class VideoVectorToolbar:
 
         corner_radius = payload.get("corner_radius")
         if isinstance(corner_radius, (int, float)) and self._selection_type in _SHAPE_RADIUS_SELECTION_TYPES:
-            self.style_radius_spin.blockSignals(True)
-            self.style_radius_spin.setValue(float(corner_radius))
-            self.style_radius_spin.blockSignals(False)
+            self.style_radius_slider.blockSignals(True)
+            self.style_radius_slider.setValue(clamp_corner_radius_degrees(corner_radius))
+            self.style_radius_slider.blockSignals(False)
+            self.style_radius_label.setText(f"{self.style_radius_slider.value()}°")
 
     def _restore_style_shape_controls(self) -> None:
         """
@@ -535,9 +539,10 @@ class VideoVectorToolbar:
         self.style_stroke_style_combo.blockSignals(True)
         self.style_stroke_style_combo.setCurrentIndex(0)
         self.style_stroke_style_combo.blockSignals(False)
-        self.style_radius_spin.blockSignals(True)
-        self.style_radius_spin.setValue(0.0)
-        self.style_radius_spin.blockSignals(False)
+        self.style_radius_slider.blockSignals(True)
+        self.style_radius_slider.setValue(0)
+        self.style_radius_slider.blockSignals(False)
+        self.style_radius_label.setText("0°")
 
     def _style_thickness_changed(self, value: int) -> None:
         """
@@ -575,19 +580,20 @@ class VideoVectorToolbar:
             update_active_style=False,
         )
 
-    def _style_corner_radius_changed(self, value: float) -> None:
+    def _style_corner_radius_changed(self, value: int) -> None:
         """
-        Applies a corner-radius change from the Style panel to the selected rectangle.
+        Applies a corner-radius change from the Edit panel to the selected rectangle.
 
         Args:
-            value: New corner radius in pixels.
+            value: New corner radius in degrees (0-180).
 
         Returns:
             None
         """
 
+        self.style_radius_label.setText(f"{int(value)}°")
         self._canvas.set_rect_corner_radius(
-            max(0.0, float(value)),
+            float(clamp_corner_radius_degrees(value)),
             apply_to_selection=True,
             update_default=False,
         )

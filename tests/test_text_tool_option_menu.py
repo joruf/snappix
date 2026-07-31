@@ -79,7 +79,8 @@ class TestTextToolOptionMenu(unittest.TestCase):
         assert tabs is not None
         titles = [tabs.tabText(index) for index in range(tabs.count())]
         self.assertNotIn("Text", titles)
-        self.assertIn("Style", titles)
+        # The former "Style" tab is now called "Edit".
+        self.assertIn("Edit", titles)
         self.assertIn("Arrange", titles)
         self.assertIn("Export", titles)
         window.close()

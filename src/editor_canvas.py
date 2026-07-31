@@ -796,6 +796,16 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             "z_index": round(item.zValue(), 1),
         }
 
+        # Vertex-based shapes report every corner so the footer can list them.
+        if hasattr(item, "points"):
+            try:
+                payload["points"] = [
+                    (point.x() + item.pos().x(), point.y() + item.pos().y())
+                    for point in item.points()
+                ]
+            except (AttributeError, TypeError):
+                pass
+
         if annotation_type in SHAPE_RECT_TYPES:
             payload["stroke_rgba"] = color_to_list(item.pen().color())
             payload["fill_rgba"] = color_to_list(item.brush().color())

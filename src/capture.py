@@ -45,7 +45,6 @@ from PySide6.QtWidgets import (
 from src.constants import APP_NAME
 from src.auto_scroll_capture import MAX_SCROLL_FRAMES, perform_auto_scroll_capture
 from src.flow_layout import FlowLayoutWidget
-from src.global_hotkeys import EscapeListener
 from src.ocr import extract_text_from_png_bytes
 from src.scroll_capture import pixmap_to_png_bytes
 from src.platform import (
@@ -244,10 +243,8 @@ class CapturePanel(QWidget):
         root_layout.setContentsMargins(8, 8, 8, 8)
         root_layout.setSpacing(6)
 
-        title = QLabel(APP_NAME)
-        title.setObjectName("titleLabel")
-        title.setToolTip("Snappix Capture panel — start screenshots, scroll captures, and recordings.")
-        root_layout.addWidget(title)
+        # No title label here: the window title bar already reads
+        # "Snappix Capture", so repeating it only costs vertical space.
 
         frame = QFrame()
         frame.setFrameShape(QFrame.Shape.StyledPanel)
@@ -544,6 +541,52 @@ class CapturePanel(QWidget):
             wm_instance="snappix",
             wm_class="snappix",
         )
+
+    def resizeEvent(self, event) -> None:
+        """
+        Collapses the panel's height whenever its width changes.
+
+        The action buttons sit in a flow layout, so a wider panel needs fewer
+        rows. Without this the window keeps the taller geometry and leaves an
+        empty band below the buttons.
+
+        Args:
+            event: Qt resize event.
+
+        Returns:
+            None
+        """
+
+        super().resizeEvent(event)
+        if event.oldSize().width() == event.size().width():
+            return
+        # Defer: the flow layout has to re-wrap for the new width before its
+        # preferred height means anything.
+        QTimer.singleShot(0, self.shrink_height_to_content)
+
+    def shrink_height_to_content(self) -> None:
+        """
+        Resizes the panel to the smallest height its content needs.
+
+        Returns:
+            None
+        """
+
+        layout = self.layout()
+        target_height = -1
+        if layout is not None:
+            # Children need current geometry before their height-for-width
+            # means anything for the new width.
+            layout.activate()
+        if layout is not None and layout.hasHeightForWidth():
+            # sizeHint() ignores height-for-width, so it cannot see that the
+            # flow-wrapped buttons need fewer rows at this width.
+            target_height = layout.heightForWidth(self.width())
+        if target_height <= 0:
+            target_height = self.sizeHint().height()
+        if target_height <= 0 or self.height() == target_height:
+            return
+        self.resize(self.width(), target_height)
 
     def set_autostart_checked(self, enabled: bool) -> None:
         """
@@ -1362,6 +1405,10 @@ def execute_scroll_capture(
     # Same constraint as window capture: the overlay is input-transparent so
     # xdotool can pick the window underneath, so no window of ours can receive
     # Escape. A passive global listener is what makes cancelling work.
+    # Imported lazily: pynput chooses a backend at import time and fails on a
+    # display-less session, which must not break importing this module.
+    from src.global_hotkeys import EscapeListener
+
     escape_listener = EscapeListener()
 
     def finish_selection() -> None:
@@ -2695,6 +2742,10 @@ def execute_capture_request(
         # window underneath, which also stops any window of ours from receiving
         # key events -- the overlay's own Escape handling never fires here. A
         # passive global listener is what makes Escape work during selection.
+        # Imported lazily: pynput chooses a backend at import time and fails on
+        # a display-less session, which must not break importing this module.
+        from src.global_hotkeys import EscapeListener
+
         escape_listener = EscapeListener()
 
         def finish_selection() -> None:

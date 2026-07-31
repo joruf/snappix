@@ -42,7 +42,7 @@ from src.flow_layout import FlowLayoutWidget
 from src.shortcuts import build_shortcuts_reference_text
 from src.theme import THEME_DARK, THEME_LIGHT, THEME_SEPIA, THEME_SLATE, get_theme_colors
 from src.timeline_widget import TimelineWidget
-from src.tool_icons import build_playback_icon
+from src.tool_icons import apply_zoom_step_button_style, build_playback_icon, build_zoom_reset_icon
 from src.video_canvas import VideoCanvas
 from src.video_models import VideoAnnotationModel, VideoProjectModel
 from src.video_effects import normalize_effect_duration_ms
@@ -138,6 +138,7 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.canvas.tool_changed.connect(self._on_canvas_tool_changed)
         self.canvas.content_changed.connect(self._on_canvas_content_changed)
         self.canvas.selection_style_changed.connect(self._vector_toolbar.on_selection_style_changed)
+        self.canvas.selection_style_changed.connect(self._on_selection_info_changed)
         self.canvas.zoom_changed.connect(self._on_zoom_changed)
         self.canvas.playback_finished.connect(self._on_playback_finished)
         self.canvas.tool_lock_escape_requested.connect(self._vector_toolbar.clear_tool_lock_via_escape)
@@ -199,6 +200,11 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.setCentralWidget(central)
 
         self.setStatusBar(QStatusBar(self))
+        # Same selection footer as the image editor, fed by the same formatter.
+        self._selection_info_label = QLabel("")
+        self._selection_info_label.setObjectName("editorSelectionInfo")
+        self._selection_info_label.setMinimumWidth(360)
+        self.statusBar().addPermanentWidget(self._selection_info_label)
         self.statusBar().showMessage("Ready")
         self._toolbar_widget.setToolTip(
             "Video editor toolbar: drawing tools, history, playback, zoom, and style."
@@ -758,6 +764,7 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.zoom_out_button = QPushButton("-", zoom_box)
         self.zoom_out_button.setToolTip("Zoom out. Shortcut: Shift+Mouse Wheel.")
         self.zoom_out_button.clicked.connect(self.canvas.zoom_out)
+        apply_zoom_step_button_style(self.zoom_out_button)
         zoom_layout.addWidget(self.zoom_out_button)
 
         self.zoom_label = QLabel("100%", zoom_box)
@@ -776,10 +783,13 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.zoom_in_button = QPushButton("+", zoom_box)
         self.zoom_in_button.setToolTip("Zoom in. Shortcut: Shift+Mouse Wheel.")
         self.zoom_in_button.clicked.connect(self.canvas.zoom_in)
+        apply_zoom_step_button_style(self.zoom_in_button)
         zoom_layout.addWidget(self.zoom_in_button)
 
-        self.zoom_reset_button = QPushButton("Reset", zoom_box)
+        self.zoom_reset_button = QPushButton("", zoom_box)
+        self.zoom_reset_button.setIcon(build_zoom_reset_icon(QColor(get_theme_colors().text)))
         self.zoom_reset_button.setToolTip("Reset zoom to fit the video frame.")
+        self.zoom_reset_button.setFixedWidth(30)
         self.zoom_reset_button.clicked.connect(self.canvas.reset_zoom)
         zoom_layout.addWidget(self.zoom_reset_button)
         strip_widgets.append(zoom_box)
@@ -1356,6 +1366,21 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         self.timeline.refresh()
         self._mark_dirty()
+
+    def _on_selection_info_changed(self, payload: dict[str, Any]) -> None:
+        """
+        Mirrors the image editor's selection footer for the video editor.
+
+        Args:
+            payload: Selection detail payload from the canvas.
+
+        Returns:
+            None
+        """
+
+        from src.editor_window import format_selection_info
+
+        self._selection_info_label.setText(format_selection_info(payload))
 
     def _on_timeline_annotation_delete_requested(self, annotation_id: str) -> None:
         """

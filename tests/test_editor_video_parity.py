@@ -83,7 +83,8 @@ class TestStyleShapeTargetParity(unittest.TestCase):
             "style_thickness_slider",
             "style_thickness_label",
             "style_stroke_style_combo",
-            "style_radius_spin",
+            "style_radius_slider",
+            "style_radius_label",
         ):
             self.assertTrue(hasattr(image_window, attr), f"EditorWindow missing {attr}")
             self.assertTrue(hasattr(video_toolbar, attr), f"VideoVectorToolbar missing {attr}")
@@ -186,3 +187,158 @@ class TestDefaultsOnlyPopupParity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for parity tests")
+class TestEditPanelParity(unittest.TestCase):
+    """
+    Verifies the reworked Edit panel and selection footer behave identically in
+    both editors, so a change in one cannot silently drift from the other.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_qapp()
+
+    def _image_editor(self):
+        from PySide6.QtGui import QColor, QPixmap
+
+        from src.editor_window import EditorWindow
+
+        pixmap = QPixmap(320, 240)
+        pixmap.fill(QColor(255, 255, 255))
+        window = EditorWindow(pixmap)
+        self.addCleanup(window.close)
+        return window
+
+    def _video_editor(self):
+        import tempfile
+        from pathlib import Path
+
+        from src.video_editor_window import VideoEditorWindow
+
+        tmp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp_dir.cleanup)
+        source = Path(tmp_dir.name) / "source.mp4"
+        source.write_bytes(b"not-a-real-video")
+        editor = VideoEditorWindow(str(source), 320, 240)
+        self.addCleanup(editor.close)
+        return editor
+
+    def test_both_name_the_panel_edit(self) -> None:
+        """
+        Ensures the tab rename reached both editors.
+        """
+
+        image_tabs = self._image_editor()._property_tabs  # pylint: disable=protected-access
+        video_tabs = self._video_editor()._vector_toolbar._property_tabs  # pylint: disable=protected-access
+
+        self.assertEqual(image_tabs.tabText(0), "Edit")
+        self.assertEqual(video_tabs.tabText(0), "Edit")
+
+    def test_both_expose_the_same_radius_range(self) -> None:
+        """
+        Ensures the corner radius is a 0-180 degree slider on both sides.
+        """
+
+        image = self._image_editor()
+        video = self._video_editor()._vector_toolbar  # pylint: disable=protected-access
+
+        self.assertEqual(
+            (image.style_radius_slider.minimum(), image.style_radius_slider.maximum()),
+            (video.style_radius_slider.minimum(), video.style_radius_slider.maximum()),
+        )
+
+    def test_both_render_the_same_footer_text(self) -> None:
+        """
+        Ensures one formatter drives both footers.
+        """
+
+        from src.editor_window import format_selection_info
+
+        payload = {"type": "rect", "x": 30.0, "y": 20.4, "width": 10.0, "height": 10.0}
+        expected = format_selection_info(payload)
+
+        video = self._video_editor()
+        video._on_selection_info_changed(payload)  # pylint: disable=protected-access
+
+        self.assertEqual(video._selection_info_label.text(), expected)  # pylint: disable=protected-access
+        self.assertIn("size(x/y):10x10px", expected)
+
+    def test_video_editor_has_a_selection_footer(self) -> None:
+        """
+        Ensures the video editor gained the footer the image editor always had.
+        """
+
+        image = self._image_editor()
+        video = self._video_editor()
+
+        self.assertIsNotNone(image._selection_info_label)  # pylint: disable=protected-access
+        self.assertIsNotNone(video._selection_info_label)  # pylint: disable=protected-access
+        self.assertEqual(
+            video._selection_info_label.objectName(),  # pylint: disable=protected-access
+            image._selection_info_label.objectName(),  # pylint: disable=protected-access
+        )
+
+    def test_video_selection_payload_carries_geometry(self) -> None:
+        """
+        Ensures the video canvas reports the geometry the footer needs.
+
+        Without it the video footer would silently render an empty summary.
+        """
+
+        from src.editor_canvas import Tool
+        from src.video_models import VideoAnnotationModel
+
+        editor = self._video_editor()
+        annotation = VideoAnnotationModel(
+            annotation_type=Tool.RECT,
+            start_ms=0,
+            end_ms=5000,
+            x=30.0,
+            y=20.0,
+            width=10.0,
+            height=10.0,
+            stroke_rgba=[231, 76, 60, 255],
+            fill_rgba=[231, 76, 60, 80],
+            stroke_width=3.0,
+        )
+        editor.canvas.set_annotations([annotation])
+        editor.canvas._visible_items[annotation.annotation_id].setSelected(True)  # pylint: disable=protected-access
+        editor.canvas._refresh_selection_style()  # pylint: disable=protected-access
+
+        text = editor._selection_info_label.text()  # pylint: disable=protected-access
+        self.assertIn("size(x/y):10x10px", text)
+        self.assertIn("pos(x/y):30x20px", text)
+
+    def test_vertex_editing_is_shared_by_both_editors(self) -> None:
+        """
+        Ensures both editors build the same vertex-editable item class.
+
+        Polyline/polygon/bent arrow come from one shared PolyPathItem, so
+        vertex dragging cannot exist in one editor and not the other.
+        """
+
+        from PySide6.QtCore import QPointF
+
+        from src.shape_items import PolyPathItem
+        from src.video_canvas import build_annotation_item
+        from src.video_models import VideoAnnotationModel
+
+        annotation = VideoAnnotationModel(
+            annotation_type="polyline",
+            start_ms=0,
+            end_ms=1000,
+            x=0.0,
+            y=0.0,
+            width=50.0,
+            height=20.0,
+            stroke_rgba=[255, 0, 0, 255],
+            fill_rgba=[0, 0, 0, 0],
+            stroke_width=2.0,
+            payload={"points": [[0.0, 0.0], [50.0, 20.0]]},
+        )
+        item = build_annotation_item(annotation)
+
+        self.assertIsInstance(item, PolyPathItem)
+        self.assertEqual(item.vertex_at(QPointF(0.0, 0.0)), 0)

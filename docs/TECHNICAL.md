@@ -65,6 +65,7 @@ Startup:
 | `src/timeline_widget.py` | Scrub ruler, annotation time bars, pan/zoom/page navigation |
 | `src/annotation_render.py` | Renders selected annotation items to a transparent image for the system clipboard |
 | `src/color_contrast.py` | WCAG luminance/contrast helpers so chrome stays readable over user-chosen colors |
+| `src/selection_info.py` | Shared selection-footer formatting for both editors (whole pixels, vertex lists) |
 | `src/video_recorder.py` | ffmpeg region recording, pause/resume, segment relocate on drag |
 | `src/video_storage.py` | `.sfpv` ZIP save/load (embedded MP4 + manifest) |
 | `src/video_models.py` | `VideoAnnotationModel`, `VideoProjectModel` |
@@ -217,6 +218,33 @@ Accent styling: `build_editor_accent_stylesheet(theme)` on the host; capture pan
 - Initial view: full width for clips ≤20s; fixed 20s pages for longer clips (100s → five pages). Zoom/pan adjust afterward.
 - A plain click anywhere on the timeline (ruler or empty track space) scrubs the playhead; double-click and hold, then drag, stretches/compresses the visible time range around the double-click point (`SizeHorCursor` while held)
 - Right-click a bar → *Add Effect...* opens `EffectsDialog` (`src/effects_dialog.py`) to add/edit/remove Fade/Zoom/Slide entry/exit effects, stored per-annotation in `payload["effects"]` (see `src/video_effects.py`); the bar label shows a short summary (e.g. `[Fade In, Zoom Out]`). Effects render live via `apply_effect_render_state()` during playback/scrubbing, and are baked into MP4 export: `VideoEditorWindow.export_cut_points()` slices each effect window into at most `EXPORT_EFFECT_SLICES` steps (never below `EXPORT_MIN_SLICE_MS`), and `_paint_annotation_for_export()` applies the same opacity/scale/offset per slice
+
+### Vertex editing (both editors)
+
+`PolyPathItem` (`src/shape_items.py`) backs polyline, polygon, and bent arrow in
+*both* editors, so vertex editing exists in both by construction. A selected
+shape paints a handle per vertex; pressing one starts a vertex drag, pressing
+anywhere else falls through to Qt's `ItemIsMovable` so the shape still moves as
+a whole. Holding **Shift** during a vertex drag pins the axis that has travelled
+less (`lock_vertex_target()`). `boundingRect()` is widened by `VERTEX_HANDLE_PX`
+so handles at the outline are not clipped.
+
+Triangle is *not* vertex-editable: it is a `PathShapeItem` inscribed in a
+bounding rect (`build_triangle_path()`), so its corners are derived from
+`x/y/width/height` and it has no per-vertex data to store. Making it freely
+editable means giving it a points payload plus load/save/export handling — a
+data-model change, not a UI tweak.
+
+### Selection footer
+
+`format_selection_info()` (`src/editor_window.py`) renders both editors' status
+bars via `src/selection_info.py`. Geometry is reported as whole pixels —
+`size(x/y):10x10px pos(x/y):30x20px` — because fractional values were scene-math
+noise, not something a user can act on. Vertex shapes additionally list their
+corners, truncated past `MAX_LISTED_VERTICES` so a traced polyline cannot push
+the rest of the bar out of view. `VideoCanvas._refresh_selection_style()` emits
+the same geometry keys as `EditorCanvas._build_selection_payload()`; without
+them the video footer would render an empty summary.
 
 ### Tool identifiers (image editor)
 

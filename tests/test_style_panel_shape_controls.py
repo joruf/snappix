@@ -129,10 +129,10 @@ class TestStylePanelShapeControlVisibility(unittest.TestCase):
         self.assertTrue(window._property_tabs.isTabVisible(window._PROPERTY_TAB_STYLE))  # pylint: disable=protected-access
         self.assertFalse(window.style_thickness_slider.isHidden())
         self.assertFalse(window.style_stroke_style_combo.isHidden())
-        self.assertFalse(window.style_radius_spin.isHidden())
+        self.assertFalse(window.style_radius_slider.isHidden())
         self.assertEqual(window.style_thickness_slider.value(), 6)
         self.assertEqual(window.style_stroke_style_combo.currentData(), STROKE_STYLE_DASH)
-        self.assertAlmostEqual(window.style_radius_spin.value(), 8.0)
+        self.assertEqual(window.style_radius_slider.value(), 8)
         window.close()
 
     def test_selecting_a_line_hides_radius_but_shows_thickness_and_style(self) -> None:
@@ -149,7 +149,7 @@ class TestStylePanelShapeControlVisibility(unittest.TestCase):
 
         self.assertFalse(window.style_thickness_slider.isHidden())
         self.assertFalse(window.style_stroke_style_combo.isHidden())
-        self.assertTrue(window.style_radius_spin.isHidden())
+        self.assertTrue(window.style_radius_slider.isHidden())
         window.close()
 
     def test_multi_selection_hides_the_entire_style_tab(self) -> None:
@@ -198,7 +198,7 @@ class TestStylePanelShapeControlVisibility(unittest.TestCase):
 
         self.assertTrue(window.style_thickness_slider.isHidden())
         self.assertTrue(window.style_stroke_style_combo.isHidden())
-        self.assertTrue(window.style_radius_spin.isHidden())
+        self.assertTrue(window.style_radius_slider.isHidden())
         window.close()
 
 

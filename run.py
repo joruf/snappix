@@ -2130,6 +2130,7 @@ class AppController:
             return
 
         restored_count = 0
+        recovery_errors: list[str] = []
         for tab_entry in session_tabs:
             if tab_entry.kind == "video":
                 try:
@@ -2141,11 +2142,7 @@ class AppController:
                         extract_root,
                     )
                 except Exception as exc:
-                    self._QMessageBox.warning(
-                        self.capture_panel,
-                        "Recovery",
-                        f"Video recovery snapshot could not be loaded:\n{exc}",
-                    )
+                    recovery_errors.append(f"{tab_entry.title}: {exc}")
                     continue
 
                 editor = self._create_video_editor_tab(
@@ -2165,11 +2162,7 @@ class AppController:
             try:
                 recovered_model = load_project(tab_entry.recovery_path)
             except Exception as exc:
-                self._QMessageBox.warning(
-                    self.capture_panel,
-                    "Recovery",
-                    f"Recovery snapshot could not be loaded:\n{exc}",
-                )
+                recovery_errors.append(f"{tab_entry.title}: {exc}")
                 continue
 
             screenshot = base64_png_to_pixmap(recovered_model.screenshot_png_base64)
@@ -2184,11 +2177,45 @@ class AppController:
             editor.flush_initial_recovery_snapshot()
             restored_count += 1
 
+        self._report_recovery_errors(recovery_errors)
+
         if restored_count == 0:
             return
 
         self._show_editor_host()
         self._save_editor_session()
+
+    def _report_recovery_errors(self, errors: list[str]) -> None:
+        """
+        Reports failed session-restore tabs once, after the UI is up.
+
+        Never modal during startup: one blocking dialog per failed tab, raised
+        before the capture panel is even mapped, leaves the app alive in its
+        event loop with no visible window -- indistinguishable from a hang. A
+        full disk fails every embedded video extraction at once, which is
+        exactly when that used to happen.
+
+        Args:
+            errors: One message per tab that could not be restored.
+
+        Returns:
+            None
+        """
+
+        if not errors:
+            return
+
+        shown = "\n".join(errors[:5])
+        if len(errors) > 5:
+            shown += f"\n… and {len(errors) - 5} more"
+        message = f"{len(errors)} tab(s) could not be restored:\n{shown}"
+
+        from PySide6.QtCore import QTimer
+
+        def _show_later() -> None:
+            self._QMessageBox.warning(self.capture_panel, "Recovery", message)
+
+        QTimer.singleShot(0, _show_later)
 
     def _open_project_in_editor(self, project_path: str) -> None:
         """

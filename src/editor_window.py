@@ -95,6 +95,8 @@ from src.config import (
     normalize_tool_stroke_widths,
 )
 from src.annotation_items import (
+    MAX_CORNER_RADIUS_DEGREES,
+    clamp_corner_radius_degrees,
     ITEM_ROLE_LOCKED,
     STROKE_STYLE_DASH,
     STROKE_STYLE_DASH_DOT,
@@ -120,7 +122,8 @@ from src.storage import (
     save_project,
 )
 from src.tool_categories import SHARED_SHAPE_TOOL_CATEGORIES, build_tool_category_strip
-from src.tool_icons import build_tool_icon
+from src.selection_info import format_pixel_pair, format_vertex_list
+from src.tool_icons import apply_zoom_step_button_style, build_tool_icon, build_zoom_reset_icon
 from src.theme import (
     THEME_DARK,
     THEME_LIGHT,
@@ -322,12 +325,16 @@ def format_selection_info(payload: dict[str, Any]) -> str:
     width = payload.get("width")
     height = payload.get("height")
     if isinstance(width, (int, float)) and isinstance(height, (int, float)):
-        parts.append(f"{width:g}×{height:g}")
+        parts.append(f"size(x/y):{format_pixel_pair(width, height)}")
 
     x_pos = payload.get("x")
     y_pos = payload.get("y")
     if isinstance(x_pos, (int, float)) and isinstance(y_pos, (int, float)):
-        parts.append(f"@ {x_pos:g}, {y_pos:g}")
+        parts.append(f"pos(x/y):{format_pixel_pair(x_pos, y_pos)}")
+
+    vertices = format_vertex_list(payload.get("points"))
+    if vertices:
+        parts.append(vertices)
 
     step_number = payload.get("step_number")
     if isinstance(step_number, int):
@@ -739,6 +746,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.zoom_out_button.clicked.connect(self.canvas.zoom_out)
         self._configure_compact_action_button(self.zoom_out_button)
         self._configure_compact_toolbar_height(self.zoom_out_button)
+        apply_zoom_step_button_style(self.zoom_out_button)
         zoom_layout.addWidget(self.zoom_out_button)
 
         self.zoom_label = QLabel("100%")
@@ -760,12 +768,15 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.zoom_in_button.clicked.connect(self.canvas.zoom_in)
         self._configure_compact_action_button(self.zoom_in_button)
         self._configure_compact_toolbar_height(self.zoom_in_button)
+        apply_zoom_step_button_style(self.zoom_in_button)
         zoom_layout.addWidget(self.zoom_in_button)
 
-        self.zoom_reset_button = QPushButton("Reset")
+        self.zoom_reset_button = QPushButton("")
+        self.zoom_reset_button.setIcon(build_zoom_reset_icon(QColor(get_theme_colors().text)))
         self.zoom_reset_button.clicked.connect(self.canvas.reset_zoom)
         self._configure_compact_action_button(self.zoom_reset_button)
         self._configure_compact_toolbar_height(self.zoom_reset_button)
+        self.zoom_reset_button.setFixedWidth(30)
         zoom_layout.addWidget(self.zoom_reset_button)
         strip_widgets.append(zoom_box)
 
@@ -893,21 +904,23 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         radius_caption = self._create_toolbar_label("Radius")
         shape_widgets.append(radius_caption)
-        self.style_radius_spin = QDoubleSpinBox()
-        self.style_radius_spin.setDecimals(1)
-        self.style_radius_spin.setSingleStep(1.0)
-        self.style_radius_spin.setRange(0.0, 200.0)
-        self.style_radius_spin.setFixedWidth(64)
-        self.style_radius_spin.setToolTip("Corner radius of the selected rectangle.")
-        self.style_radius_spin.valueChanged.connect(self._style_corner_radius_changed)
-        self._configure_compact_toolbar_height(self.style_radius_spin)
-        shape_widgets.append(self.style_radius_spin)
+        self.style_radius_slider = QSlider(Qt.Orientation.Horizontal)
+        self.style_radius_slider.setRange(0, MAX_CORNER_RADIUS_DEGREES)
+        self.style_radius_slider.setFixedWidth(72)
+        self.style_radius_slider.setToolTip("Corner radius of the selected rectangle, 0-180°.")
+        self.style_radius_slider.valueChanged.connect(self._style_corner_radius_changed)
+        self._configure_compact_toolbar_height(self.style_radius_slider, 22)
+        shape_widgets.append(self.style_radius_slider)
+        self.style_radius_label = QLabel("0°")
+        self.style_radius_label.setMinimumWidth(32)
+        self._configure_compact_toolbar_height(self.style_radius_label, 22)
+        shape_widgets.append(self.style_radius_label)
 
         style_widgets.extend(shape_widgets)
         self._shape_group_widgets = {
             "thickness": [thickness_caption, self.style_thickness_slider, self.style_thickness_label],
             "style": [style_caption, self.style_stroke_style_combo],
-            "radius": [radius_caption, self.style_radius_spin],
+            "radius": [radius_caption, self.style_radius_slider, self.style_radius_label],
         }
 
         self._color_target_widgets = {
@@ -916,7 +929,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             "text": text_widgets,
         }
         style_tab.set_flow_widgets(style_widgets)
-        self._property_tabs.addTab(style_tab, "Style")
+        self._property_tabs.addTab(style_tab, "Edit")
 
         arrange_tab = FlowLayoutWidget(
             self._property_tabs,
@@ -1685,38 +1698,44 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         file_menu.addAction(save_action)
         self._register_shortcut_action("save_project", save_action)
 
+        # All export entries live in one submenu so the File menu stays short.
+        self.export_menu = file_menu.addMenu("Export")
+        self.export_menu.setToolTip("Export the current tab to an image, PDF, SVG, or several at once.")
+
         export_action = QAction("Export...", self)
         export_action.setToolTip("Open export dialog for image or PDF.")
         export_action.triggered.connect(self.export_with_dialog)
-        file_menu.addAction(export_action)
+        self.export_menu.addAction(export_action)
         self._register_shortcut_action("export", export_action)
 
         export_png = QAction("Export as PNG...", self)
         export_png.setToolTip("Export the composited image as PNG.")
         export_png.triggered.connect(lambda: self.export_image("PNG"))
-        file_menu.addAction(export_png)
+        self.export_menu.addAction(export_png)
 
         export_jpg = QAction("Export as JPEG...", self)
         export_jpg.setToolTip("Export the composited image as JPEG.")
         export_jpg.triggered.connect(lambda: self.export_image("JPG"))
-        file_menu.addAction(export_jpg)
+        self.export_menu.addAction(export_jpg)
 
         export_pdf = QAction("Export as PDF...", self)
         export_pdf.setToolTip("Export the composited image as PDF.")
         export_pdf.triggered.connect(self.export_pdf)
-        file_menu.addAction(export_pdf)
+        self.export_menu.addAction(export_pdf)
 
         export_svg = QAction("Export as SVG...", self)
         export_svg.setToolTip(
             "Export the composited image as a standard SVG (raster embedded)."
         )
         export_svg.triggered.connect(self.export_svg)
-        file_menu.addAction(export_svg)
+        self.export_menu.addAction(export_svg)
+
+        self.export_menu.addSeparator()
 
         export_batch = QAction("Batch Export...", self)
         export_batch.setToolTip("Export current tab to multiple formats at once.")
         export_batch.triggered.connect(self.export_batch_with_dialog)
-        file_menu.addAction(export_batch)
+        self.export_menu.addAction(export_batch)
 
         file_menu.addSeparator()
 
@@ -2424,9 +2443,10 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         corner_radius = payload.get("corner_radius")
         if isinstance(corner_radius, (int, float)) and selection_type in _SHAPE_RADIUS_SELECTION_TYPES:
-            self.style_radius_spin.blockSignals(True)
-            self.style_radius_spin.setValue(float(corner_radius))
-            self.style_radius_spin.blockSignals(False)
+            self.style_radius_slider.blockSignals(True)
+            self.style_radius_slider.setValue(clamp_corner_radius_degrees(corner_radius))
+            self.style_radius_slider.blockSignals(False)
+            self.style_radius_label.setText(f"{self.style_radius_slider.value()}°")
 
     def _restore_style_shape_controls(self) -> None:
         """
@@ -2446,9 +2466,10 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.style_stroke_style_combo.blockSignals(True)
         self.style_stroke_style_combo.setCurrentIndex(0)
         self.style_stroke_style_combo.blockSignals(False)
-        self.style_radius_spin.blockSignals(True)
-        self.style_radius_spin.setValue(0.0)
-        self.style_radius_spin.blockSignals(False)
+        self.style_radius_slider.blockSignals(True)
+        self.style_radius_slider.setValue(0)
+        self.style_radius_slider.blockSignals(False)
+        self.style_radius_label.setText("0°")
 
     def _style_thickness_changed(self, value: int) -> None:
         """
@@ -2492,19 +2513,20 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._set_next_history_label("Change line style")
         self._push_history_state()
 
-    def _style_corner_radius_changed(self, value: float) -> None:
+    def _style_corner_radius_changed(self, value: int) -> None:
         """
-        Applies a corner-radius change from the Style panel to the selected rectangle.
+        Applies a corner-radius change from the Edit panel to the selected rectangle.
 
         Args:
-            value: New corner radius in pixels.
+            value: New corner radius in degrees (0-180).
 
         Returns:
             None
         """
 
+        self.style_radius_label.setText(f"{int(value)}°")
         self.canvas.set_rect_corner_radius(
-            max(0.0, float(value)),
+            float(clamp_corner_radius_degrees(value)),
             apply_to_selection=True,
             update_default=False,
             emit_history=False,

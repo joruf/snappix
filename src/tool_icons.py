@@ -316,6 +316,65 @@ def build_tool_icon(tool: str, *, locked: bool = False) -> QIcon:
     return QIcon(pixmap)
 
 
+ZOOM_STEP_FONT_POINT_SIZE = 13
+
+
+def apply_zoom_step_button_style(button) -> None:
+    """
+    Makes a zoom +/- button's glyph large enough to read at a glance.
+
+    At the default toolbar font a bare "+" renders as a few faint pixels and is
+    easy to miss beside the much wider zoom slider.
+
+    Args:
+        button: Zoom step button to restyle.
+
+    Returns:
+        None
+    """
+
+    font = button.font()
+    font.setPointSize(ZOOM_STEP_FONT_POINT_SIZE)
+    font.setBold(True)
+    button.setFont(font)
+    button.setFixedWidth(30)
+
+
+def build_zoom_reset_icon(color: QColor) -> QIcon:
+    """
+    Draws a circular reset arrow used in place of a "Reset" text button.
+
+    Args:
+        color: Stroke color for the glyph.
+
+    Returns:
+        QIcon: Reset icon.
+    """
+
+    pixmap = QPixmap(QSize(18, 18))
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(color, 2.0)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    # Open circle, leaving a gap where the arrow head goes.
+    painter.drawArc(QRectF(3.0, 3.0, 12.0, 12.0), 55 * 16, 275 * 16)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(color))
+    painter.drawPolygon(
+        QPolygonF(
+            [
+                QPointF(11.4, 1.2),
+                QPointF(16.4, 4.6),
+                QPointF(10.8, 6.2),
+            ]
+        )
+    )
+    painter.end()
+    return QIcon(pixmap)
+
+
 def build_playback_icon(icon_id: str) -> QIcon:
     """
     Builds one vector icon for video playback controls.

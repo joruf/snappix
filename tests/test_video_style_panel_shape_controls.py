@@ -161,10 +161,10 @@ class TestVideoStylePanelShapeControls(unittest.TestCase):
         self.assertTrue(toolbar._property_tabs.isTabVisible(0))  # pylint: disable=protected-access
         self.assertFalse(toolbar.style_thickness_slider.isHidden())
         self.assertFalse(toolbar.style_stroke_style_combo.isHidden())
-        self.assertFalse(toolbar.style_radius_spin.isHidden())
+        self.assertFalse(toolbar.style_radius_slider.isHidden())
         self.assertEqual(toolbar.style_thickness_slider.value(), 6)
         self.assertEqual(toolbar.style_stroke_style_combo.currentData(), STROKE_STYLE_DASH)
-        self.assertAlmostEqual(toolbar.style_radius_spin.value(), 8.0)
+        self.assertEqual(toolbar.style_radius_slider.value(), 8)
 
     def test_selecting_a_line_hides_radius_but_shows_thickness_and_style(self) -> None:
         """
@@ -180,7 +180,7 @@ class TestVideoStylePanelShapeControls(unittest.TestCase):
 
         self.assertFalse(toolbar.style_thickness_slider.isHidden())
         self.assertFalse(toolbar.style_stroke_style_combo.isHidden())
-        self.assertTrue(toolbar.style_radius_spin.isHidden())
+        self.assertTrue(toolbar.style_radius_slider.isHidden())
 
     def test_multi_selection_hides_the_entire_style_tab(self) -> None:
         """

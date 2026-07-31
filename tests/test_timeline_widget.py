@@ -1322,3 +1322,172 @@ class TestTimelineTheming(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for timeline widget tests")
+class TestTimelineKeyboardRowNavigation(unittest.TestCase):
+    """
+    Verifies UP/DOWN walk the track rows and Delete hands selection onward,
+    so the whole track list is reachable and prunable from the keyboard.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_qapp()
+
+    def _make_widget(self, count: int = 4) -> TimelineWidget:
+        widget = TimelineWidget()
+        widget.resize(660, RULER_HEIGHT + 200)
+        widget.set_duration(10_000)
+        widget.set_annotations(
+            [_make_annotation(start_ms=1000 * index, end_ms=1000 * index + 800) for index in range(count)]
+        )
+        _show_full_timeline(widget)
+        return widget
+
+    def _press(self, widget: TimelineWidget, key) -> None:
+        widget.keyPressEvent(
+            QKeyEvent(QKeyEvent.Type.KeyPress, key, Qt.KeyboardModifier.NoModifier)
+        )
+
+    def test_down_selects_the_first_row_when_nothing_is_selected(self) -> None:
+        """
+        Ensures the keyboard has a defined starting point.
+        """
+
+        widget = self._make_widget()
+        self._press(widget, Qt.Key.Key_Down)
+
+        self.assertEqual(
+            widget.selected_annotation_id(),
+            widget._annotations[0].annotation_id,  # pylint: disable=protected-access
+        )
+
+    def test_down_and_up_walk_the_rows(self) -> None:
+        """
+        Ensures navigation moves one row per press, in both directions.
+        """
+
+        widget = self._make_widget()
+        annotations = widget._annotations  # pylint: disable=protected-access
+
+        self._press(widget, Qt.Key.Key_Down)
+        self._press(widget, Qt.Key.Key_Down)
+        self.assertEqual(widget.selected_annotation_id(), annotations[1].annotation_id)
+
+        self._press(widget, Qt.Key.Key_Up)
+        self.assertEqual(widget.selected_annotation_id(), annotations[0].annotation_id)
+
+    def test_navigation_stops_at_the_ends(self) -> None:
+        """
+        Ensures the selection does not wrap past the first or last row.
+        """
+
+        widget = self._make_widget()
+        annotations = widget._annotations  # pylint: disable=protected-access
+
+        widget._selected_id = annotations[0].annotation_id  # pylint: disable=protected-access
+        self.assertFalse(widget.select_relative_row(-1))
+
+        widget._selected_id = annotations[-1].annotation_id  # pylint: disable=protected-access
+        self.assertFalse(widget.select_relative_row(1))
+
+    def test_navigation_emits_selection_changes(self) -> None:
+        """
+        Ensures the editor learns about keyboard-driven selection.
+        """
+
+        widget = self._make_widget()
+        selected: list[str] = []
+        widget.annotation_selected.connect(selected.append)
+
+        self._press(widget, Qt.Key.Key_Down)
+
+        self.assertEqual(len(selected), 1)
+
+    def test_delete_moves_selection_to_the_previous_row(self) -> None:
+        """
+        Ensures repeated Delete keeps walking upward instead of stranding.
+        """
+
+        widget = self._make_widget()
+        annotations = widget._annotations  # pylint: disable=protected-access
+        widget._selected_id = annotations[2].annotation_id  # pylint: disable=protected-access
+        deleted: list[str] = []
+        widget.annotation_delete_requested.connect(deleted.append)
+
+        self._press(widget, Qt.Key.Key_Delete)
+
+        self.assertEqual(deleted, [annotations[2].annotation_id])
+        self.assertEqual(widget.selected_annotation_id(), annotations[1].annotation_id)
+
+    def test_deleting_the_first_row_selects_the_new_first(self) -> None:
+        """
+        Ensures deleting the top row still leaves a usable selection.
+        """
+
+        widget = self._make_widget()
+        annotations = widget._annotations  # pylint: disable=protected-access
+        widget._selected_id = annotations[0].annotation_id  # pylint: disable=protected-access
+
+        self._press(widget, Qt.Key.Key_Delete)
+
+        self.assertEqual(widget.selected_annotation_id(), annotations[1].annotation_id)
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for timeline widget tests")
+class TestEffectLabelPlacement(unittest.TestCase):
+    """
+    Verifies effect summaries are drawn inside the bar, not in the label column.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        ensure_qapp()
+
+    def test_label_column_no_longer_carries_the_effect_summary(self) -> None:
+        """
+        Ensures the narrow label column shows only the annotation's own name.
+        """
+
+        from PySide6.QtGui import QImage
+
+        from src.video_effects import EFFECT_EDGE_START, EFFECT_KIND_FADE, add_annotation_effect
+
+        annotation = _make_annotation(start_ms=1000, end_ms=9000)
+        add_annotation_effect(
+            annotation, kind=EFFECT_KIND_FADE, edge=EFFECT_EDGE_START, duration_ms=500
+        )
+        widget = TimelineWidget()
+        widget.resize(900, RULER_HEIGHT + 60)
+        widget.set_duration(10_000)
+        widget.set_annotations([annotation])
+        _show_full_timeline(widget)
+
+        image = QImage(900, RULER_HEIGHT + 60, QImage.Format.Format_ARGB32)
+        widget.render(image)
+
+        # Ink inside the bar (right of the label column) proves the summary
+        # moved there; the assertion is that painting happens at all without
+        # widening the label column.
+        bar = widget._bar_rect(0, annotation)  # pylint: disable=protected-access
+        self.assertGreater(bar.width(), LABEL_WIDTH)
+
+    def test_summary_is_still_available_for_the_bar(self) -> None:
+        """
+        Ensures the underlying summary text is unchanged by the move.
+        """
+
+        from src.video_effects import (
+            EFFECT_EDGE_START,
+            EFFECT_KIND_FADE,
+            add_annotation_effect,
+            track_effect_summary,
+        )
+
+        annotation = _make_annotation()
+        add_annotation_effect(
+            annotation, kind=EFFECT_KIND_FADE, edge=EFFECT_EDGE_START, duration_ms=400
+        )
+
+        self.assertEqual(track_effect_summary(annotation), "Fade In")

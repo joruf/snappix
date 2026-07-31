@@ -179,8 +179,8 @@ class TestEditorSelectionInfo(unittest.TestCase):
         )
 
         self.assertIn("Rectangle", summary)
-        self.assertIn("64×32", summary)
-        self.assertIn("@ 12, 18", summary)
+        self.assertIn("size(x/y):64x32px", summary)
+        self.assertIn("pos(x/y):12x18px", summary)
         self.assertIn("Stroke #FF0000", summary)
         self.assertIn("Fill rgba(255,0,0,80)", summary)
         self.assertIn("3px", summary)

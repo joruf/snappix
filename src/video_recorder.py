@@ -669,11 +669,15 @@ def run_ffmpeg_with_progress(
                 pass
     else:
         process.wait()
-        if on_progress is not None:
-            on_progress(latest_ms[0])
 
+    # Drain the readers before the final progress report. A short run can exit
+    # before the polling loop ever iterates, so reporting first would publish a
+    # stale position -- an export could finish showing less than 100%.
     for reader in readers:
         reader.join(timeout=2)
+
+    if on_progress is not None and not cancelled and not timed_out:
+        on_progress(latest_ms[0])
 
     return FfmpegRunResult(
         returncode=process.returncode if process.returncode is not None else -1,

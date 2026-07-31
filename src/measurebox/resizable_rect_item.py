@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QCursor, QFont, QPainter, QPainterPath, QPen
-from PySide6.QtWidgets import QApplication, QGraphicsItem, QGraphicsRectItem
+from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem
 
 from src.measurebox.geometry import compute_resized_scene_rect, normalize_rect
 
@@ -174,7 +174,7 @@ class ResizableRectItem(QGraphicsRectItem):
         :param event: Hover leave event.
         :return: None.
         """
-        QApplication.restoreOverrideCursor()
+        self.unsetCursor()
         super().hoverLeaveEvent(event)
 
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
@@ -368,7 +368,11 @@ class ResizableRectItem(QGraphicsRectItem):
             "bottom": Qt.CursorShape.SizeVerCursor,
         }
         cursor_shape = cursor_map.get(handle, Qt.CursorShape.SizeAllCursor)
-        QApplication.setOverrideCursor(QCursor(cursor_shape))
+        # Item-level cursor, never QApplication.setOverrideCursor(): the
+        # override cursor is a stack, and this runs on every hover move. Each
+        # move pushed another entry while leaving popped only one, so after a
+        # drag the last resize cursor stayed on screen for good.
+        self.setCursor(QCursor(cursor_shape))
 
     def _handle_rects(self) -> dict[str, QRectF]:
         """Compute all resize handle rectangles.

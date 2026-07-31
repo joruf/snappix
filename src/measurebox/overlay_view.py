@@ -2,7 +2,17 @@
 
 from __future__ import annotations
 
-from pynput import mouse
+try:
+    from pynput import mouse
+
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    # Not just ModuleNotFoundError: on a display-less session pynput picks a
+    # backend at import time and raises a plain ImportError. Importing this
+    # module must stay safe there so headless runs and CI can load MeasureBox.
+    mouse = None
+    PYNPUT_AVAILABLE = False
+
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QCursor, QGuiApplication, QKeyEvent, QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QApplication, QGraphicsScene, QGraphicsView
@@ -42,7 +52,7 @@ class OverlayView(QGraphicsView):
         self._ruler_outside = False
         self._crosshair_enabled = True
         self._crosshair_scene_pos: QPointF | None = None
-        self._mouse_controller = mouse.Controller()
+        self._mouse_controller = mouse.Controller() if PYNPUT_AVAILABLE else None
         self._forwarding_wheel = False
         self._wheel_angle_remainder_x = 0
         self._wheel_angle_remainder_y = 0
@@ -482,6 +492,11 @@ class OverlayView(QGraphicsView):
             vertical_steps = 1 if pixel_y > 0 else -1
 
         if vertical_steps == 0 and horizontal_steps == 0:
+            event.accept()
+            return
+
+        if self._mouse_controller is None:
+            # No pynput backend (display-less session): nothing to forward to.
             event.accept()
             return
 

@@ -335,6 +335,33 @@ class TestRunFfmpegWithProgress(unittest.TestCase):
         self.assertFalse(result.cancelled)
         self.assertIn(1000, seen)
 
+    def test_final_progress_is_reported_even_for_an_instant_run(self) -> None:
+        """
+        Ensures a run that exits before the first poll still reports its end.
+
+        The polling loop may never execute for a short run, so the final
+        progress value has to come from fully drained output rather than from
+        whatever the reader thread happened to have parsed by then. Otherwise a
+        finished export could stop short of 100%.
+        """
+
+        script = (
+            "import sys\n"
+            "sys.stdout.write('out_time_us=7000000\\n')\n"
+            "sys.stdout.flush()\n"
+        )
+        seen: list[int] = []
+        result = run_ffmpeg_with_progress(
+            [sys.executable, "-c", script],
+            on_progress=seen.append,
+            # Long interval: if the loop ran at all it would sleep, so this
+            # pins that the final report does not depend on loop iterations.
+            poll_interval_s=5.0,
+        )
+
+        self.assertTrue(result.succeeded)
+        self.assertEqual(seen[-1], 7000)
+
     def test_failing_run_captures_stderr(self) -> None:
         """
         Ensures a non-zero exit is reported with its stderr text.

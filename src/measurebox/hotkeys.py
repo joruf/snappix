@@ -6,7 +6,19 @@ import threading
 from time import monotonic
 from typing import Callable
 
-from pynput import keyboard, mouse
+try:
+    from pynput import keyboard, mouse
+
+    PYNPUT_AVAILABLE = True
+except ImportError:
+    # Not just ModuleNotFoundError: on a display-less session pynput selects a
+    # backend at import time and raises a plain ImportError ("failed to acquire
+    # X connection"). Importing this module must stay safe there, or every
+    # module reaching MeasureBox fails to import -- including under CI.
+    keyboard = None
+    mouse = None
+    PYNPUT_AVAILABLE = False
+
 from PySide6.QtCore import QObject, Signal
 
 
@@ -38,8 +50,12 @@ class GlobalHotkeyListener:
     def start(self) -> None:
         """Start global hotkey listener in background thread.
 
+        Does nothing when pynput is unavailable (no display / not installed).
+
         :return: None.
         """
+        if not PYNPUT_AVAILABLE:
+            return
         self.listener = keyboard.GlobalHotKeys({self.hotkey: self.on_toggle})
         self.listener.start()
 
@@ -88,8 +104,12 @@ class GlobalCtrlClickListener:
     def start(self) -> None:
         """Start global keyboard and mouse listeners.
 
+        Does nothing when pynput is unavailable (no display / not installed).
+
         :return: None.
         """
+        if not PYNPUT_AVAILABLE:
+            return
         self.keyboard_listener = keyboard.Listener(
             on_press=self._on_key_press,
             on_release=self._on_key_release,

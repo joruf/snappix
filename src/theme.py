@@ -334,13 +334,16 @@ def build_editor_accent_stylesheet(theme_name: str | None = None) -> str:
     accent, accent_hover = get_editor_accent_colors(theme_name)
     checked_text = colors.button_checked_text
     return (
+        # Selected tool: an accent outline, never a solid accent fill. A filled
+        # button hides the tool's own glyph colors behind the accent and reads
+        # as a pressed state rather than a selection.
         f"#editorHost QToolButton:checked {{"
-        f" background: {accent}; border: 1px solid {accent}; color: {checked_text};"
+        f" background: {colors.button_bg}; border: 2px solid {accent};"
+        f" color: {colors.text};"
         f" }}"
-        # Locked tools keep the lock badge; skip the solid accent fill so the
-        # tool glyph stays readable.
+        # Locked tools keep the lock badge and the same outline treatment.
         f'#editorHost QToolButton[toolLocked="true"]:checked {{'
-        f" background: {colors.button_bg}; border: 1px solid {accent};"
+        f" background: {colors.button_bg}; border: 2px solid {accent};"
         f" color: {colors.text};"
         f" }}"
         f"#editorHost QPushButton#primaryButton {{"
