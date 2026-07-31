@@ -211,9 +211,9 @@ Flatpak modules too would be a much larger, slower build.
 - Layers, geometry inspector (`X/Y/W/H`), document footer when nothing is selected
 - History with labeled undo list; zoom, grid, snap, smart guides
 - Export PNG / JPEG / PDF / SVG, batch export profiles, print
-- **Presentation frame** for exports (`Frame` in the Export tab): padding, rounded corners, drop
+- **Presentation frame** for exports (`Presentation` in the Export tab): padding, rounded corners, drop
   shadow, solid/gradient/transparent backdrop, and optional 16:9 / 4:3 / 3:2 / 1:1 letterboxing.
-  `Frame...` opens a live preview of the actual screenshot being exported.
+  `Presentation...` opens a live preview of the actual screenshot being exported.
 
 ### Session workspace
 

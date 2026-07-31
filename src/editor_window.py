@@ -1142,12 +1142,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         )
         self._configure_compact_toolbar_height(self.export_keep_transparency_check, 22)
         export_widgets.append(self.export_keep_transparency_check)
-        self.presentation_frame_check = QCheckBox("Frame")
+        self.presentation_frame_check = QCheckBox("Presentation")
         self.presentation_frame_check.setChecked(self._presentation_frame.enabled)
         self.presentation_frame_check.toggled.connect(self._on_presentation_frame_toggled)
         self._configure_compact_toolbar_height(self.presentation_frame_check, 22)
         export_widgets.append(self.presentation_frame_check)
-        self.presentation_frame_button = QPushButton("Frame...")
+        self.presentation_frame_button = QPushButton("Presentation...")
         self.presentation_frame_button.clicked.connect(self.edit_presentation_frame)
         self._configure_compact_toolbar_height(self.presentation_frame_button)
         export_widgets.append(self.presentation_frame_button)
@@ -1652,6 +1652,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             "Rename, duplicate, delete, and reorder batch profiles."
         )
         self.export_batch_button.setToolTip("Export current tab to multiple formats.")
+        self.presentation_frame_check.setToolTip(
+            "Frame exports with padding, rounded corners, a shadow, and a backdrop."
+        )
+        self.presentation_frame_button.setToolTip(
+            "Open the presentation frame settings with a live preview."
+        )
         self.tools_help_button.setToolTip("Open the tools reference table.")
     def _build_menu(self) -> None:
         """
