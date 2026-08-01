@@ -113,3 +113,55 @@ def ensure_min_contrast(
 
     target.setAlpha(color.alpha())
     return target
+
+
+# Halo width as a multiple of the annotation's own stroke width. Wide enough to
+# read as a separating edge at a glance, narrow enough that it never becomes the
+# dominant shape.
+HALO_WIDTH_FACTOR = 2.0
+# Minimum halo growth in pixels, so a hairline stroke still gets a usable edge.
+HALO_MIN_GROWTH = 2.0
+
+
+def halo_color_for(color: QColor) -> QColor:
+    """
+    Picks the halo color that separates one annotation color from any backdrop.
+
+    Returns white behind dark annotations and black behind light ones, chosen by
+    WCAG luminance rather than by hue. The annotation's own color is never
+    altered -- it only gains an edge -- so a deliberate brand red stays exactly
+    that red while still reading against a red banner underneath it.
+
+    Maximising contrast against the annotation -- rather than guessing at the
+    backdrop, which varies per pixel and is unknowable here -- is what makes this
+    robust: if the backdrop resembles the annotation, the halo separates the two;
+    if the backdrop instead resembles the halo, then by construction it already
+    contrasts with the annotation. One of the two is always visible.
+
+    Args:
+        color: The annotation's stroke color.
+
+    Returns:
+        QColor: Opaque halo color.
+    """
+
+    white = QColor(255, 255, 255)
+    black = QColor(0, 0, 0)
+    if contrast_ratio(color, white) >= contrast_ratio(color, black):
+        return white
+    return black
+
+
+def halo_pen_width(stroke_width: float) -> float:
+    """
+    Computes the halo pen width for one annotation stroke width.
+
+    Args:
+        stroke_width: The annotation's own stroke width in pixels.
+
+    Returns:
+        float: Width of the wider pen drawn underneath the stroke.
+    """
+
+    width = max(0.0, float(stroke_width))
+    return max(width * HALO_WIDTH_FACTOR, width + HALO_MIN_GROWTH)

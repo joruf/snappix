@@ -3,6 +3,10 @@
 Snappix is a screenshot and annotation app for Linux and Windows.  
 Capture quickly, annotate in a tabbed editor, record screen regions as video, and keep projects editable as `.sfp` / `.sfpv` files. Primary platform is **Linux**; **Windows 10/11** is supported as an MVP.
 
+**[User Manual](docs/MANUAL.md)** — capture, annotate, style, export, video editing, shortcuts, troubleshooting
+
+**[UI Overview](docs/UI_OVERVIEW.md)** — labelled screenshots of every part of the interface
+
 **[Technical Documentation](docs/TECHNICAL.md)** — architecture, modules, config schema, capture pipeline, session workspace, video editor
 
 ---

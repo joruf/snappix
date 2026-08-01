@@ -924,6 +924,16 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._configure_compact_toolbar_height(self.style_radius_label, 22)
         shape_widgets.append(self.style_radius_label)
 
+        self.style_halo_check = QCheckBox("Halo")
+        self.style_halo_check.setChecked(self.canvas.annotation_halo())
+        self.style_halo_check.setToolTip(
+            "Draw a contrasting outline behind the selected annotation so it stays "
+            "readable on any background."
+        )
+        self.style_halo_check.toggled.connect(self._style_halo_toggled)
+        self._configure_compact_toolbar_height(self.style_halo_check, 22)
+        shape_widgets.append(self.style_halo_check)
+
         style_widgets.extend(shape_widgets)
         self._shape_group_widgets = {
             "thickness": [thickness_caption, self.style_thickness_slider, self.style_thickness_label],
@@ -2471,6 +2481,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             self.style_radius_slider.blockSignals(False)
             self.style_radius_label.setText(f"{self.style_radius_slider.value()}°")
 
+        halo = payload.get("halo")
+        if isinstance(halo, bool) and hasattr(self, "style_halo_check"):
+            self.style_halo_check.blockSignals(True)
+            self.style_halo_check.setChecked(halo)
+            self.style_halo_check.blockSignals(False)
+
     def _restore_style_shape_controls(self) -> None:
         """
         Resets the Style panel's thickness/style/radius controls to neutral
@@ -2493,6 +2509,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.style_radius_slider.setValue(0)
         self.style_radius_slider.blockSignals(False)
         self.style_radius_label.setText("0°")
+        if hasattr(self, "style_halo_check"):
+            # Not a neutral placeholder like the others: with nothing selected
+            # this checkbox states what the next annotation will look like.
+            self.style_halo_check.blockSignals(True)
+            self.style_halo_check.setChecked(self.canvas.annotation_halo())
+            self.style_halo_check.blockSignals(False)
 
     def _style_thickness_changed(self, value: int) -> None:
         """
@@ -2534,6 +2556,29 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             update_active_style=False,
         )
         self._set_next_history_label("Change line style")
+        self._push_history_state()
+
+    def _style_halo_toggled(self, checked: bool) -> None:
+        """
+        Applies a contrast-halo change to the selection and to new draws.
+
+        Unlike the radius, this also moves the tool default: the checkbox is
+        just as often used with nothing selected, to decide how the next
+        annotation should look.
+
+        Args:
+            checked: True when the halo should be drawn.
+
+        Returns:
+            None
+        """
+
+        self.canvas.set_annotation_halo(
+            bool(checked),
+            apply_to_selection=True,
+            update_default=True,
+        )
+        self._set_next_history_label("Change annotation halo")
         self._push_history_state()
 
     def _style_corner_radius_changed(self, value: int) -> None:

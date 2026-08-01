@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QGroupBox,
@@ -371,6 +372,14 @@ class VideoVectorToolbar:
         self.style_radius_label.setMinimumWidth(32)
         shape_widgets.append(self.style_radius_label)
 
+        self.style_halo_check = QCheckBox("Halo")
+        self.style_halo_check.setToolTip(
+            "Draw a contrasting outline behind the selected annotation so it stays "
+            "readable on any background."
+        )
+        self.style_halo_check.toggled.connect(self._style_halo_toggled)
+        shape_widgets.append(self.style_halo_check)
+
         style_widgets.extend(shape_widgets)
         self._shape_group_widgets = {
             "thickness": [thickness_caption, self.style_thickness_slider, self.style_thickness_label],
@@ -579,6 +588,19 @@ class VideoVectorToolbar:
             apply_to_selection=True,
             update_active_style=False,
         )
+
+    def _style_halo_toggled(self, checked: bool) -> None:
+        """
+        Applies a contrast-halo change from the Edit panel to the selection.
+
+        Args:
+            checked: True when the halo should be drawn.
+
+        Returns:
+            None
+        """
+
+        self._canvas.set_annotation_halo(bool(checked), apply_to_selection=True)
 
     def _style_corner_radius_changed(self, value: int) -> None:
         """

@@ -10,6 +10,8 @@ from typing import cast
 from uuid import uuid4
 
 from PySide6.QtCore import QPointF, QRectF, Qt
+
+from src.shape_items import HaloMixin
 from PySide6.QtGui import (
     QColor,
     QFont,
@@ -284,12 +286,33 @@ class StyleState:
     text_style: str = TEXT_STYLE_PLAIN
 
 
-class StrokeLineItem(QGraphicsLineItem):
+class StrokeLineItem(HaloMixin, QGraphicsLineItem):
     """
     Line annotation with a thicker clickable stroke for reliable selection.
     """
 
     HIT_PADDING = 8.0
+
+    def paint(self, painter, option, widget=None) -> None:  # type: ignore[override]
+        """
+        Paints the contrast halo underneath the line stroke.
+
+        Args:
+            painter: Painter used by Qt.
+            option: Style option from Qt.
+            widget: Optional target widget.
+
+        Returns:
+            None
+        """
+
+        if self._halo_enabled and self.pen().style() != Qt.PenStyle.NoPen:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(self._halo_pen())
+            painter.drawLine(self.line())
+            painter.restore()
+        super().paint(painter, option, widget)
 
     def shape(self) -> QPainterPath:
         """
@@ -323,7 +346,10 @@ class StrokeLineItem(QGraphicsLineItem):
             QRectF: Item bounds for painting and layout.
         """
 
-        return self.shape().controlPointRect().adjusted(-1.0, -1.0, 1.0, 1.0)
+        # The hit-test shape already pads by HIT_PADDING, but a thick stroke
+        # can push the halo past that, so take whichever is larger.
+        margin = max(1.0, self._halo_extra_margin())
+        return self.shape().controlPointRect().adjusted(-margin, -margin, margin, margin)
 
 
 class ArrowItem(StrokeLineItem):
@@ -513,6 +539,20 @@ def clamp_corner_radius_degrees(value: float | int) -> int:
         return 0
     return max(0, min(MAX_CORNER_RADIUS_DEGREES, int(round(numeric))))
 
+
+def _halo_flag(item: object) -> bool:
+    """
+    Reads the contrast-halo flag off one annotation item.
+
+    Args:
+        item: Graphics item, which may predate the halo feature.
+
+    Returns:
+        bool: True when the item draws a halo.
+    """
+
+    getter = getattr(item, "halo_enabled", None)
+    return bool(getter()) if callable(getter) else False
 
 def color_to_list(color: QColor) -> list[int]:
     """
@@ -729,6 +769,7 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
             brush = item.brush()
             payload = {
                 "stroke_style": _stroke_style_from_pen(pen),
+            "halo": _halo_flag(item),
                 "corner_radius": item.corner_radius(),
                 "z_index": item.zValue(),
             }
@@ -750,6 +791,7 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
         brush = shape_item.brush()
         payload = {
             "stroke_style": _stroke_style_from_pen(pen),
+            "halo": _halo_flag(item),
             "z_index": item.zValue(),
         }
         merge_transform_into_payload(item, payload)
@@ -793,6 +835,7 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
         brush = item.brush()
         payload = {
             "stroke_style": _stroke_style_from_pen(pen),
+            "halo": _halo_flag(item),
             "z_index": item.zValue(),
         }
         if annotation_type in SHAPE_RADIUS_TYPES:
@@ -819,6 +862,7 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
         payload = {
             "points": points_to_payload(scene_points),
             "stroke_style": _stroke_style_from_pen(pen),
+            "halo": _halo_flag(item),
             "z_index": item.zValue(),
         }
         merge_transform_into_payload(item, payload)
@@ -840,6 +884,7 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
         pen = line_item.pen()
         payload = {
             "stroke_style": _stroke_style_from_pen(pen),
+            "halo": _halo_flag(item),
             "z_index": item.zValue(),
         }
         merge_transform_into_payload(item, payload)
@@ -912,6 +957,31 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
 
 
 def add_annotation_to_scene(
+    scene: QGraphicsScene,
+    annotation: AnnotationModel,
+) -> QGraphicsItem | None:
+    """
+    Recreates one annotation model as a scene item, halo included.
+
+    Args:
+        scene: Target graphics scene.
+        annotation: Serialized annotation model.
+
+    Returns:
+        QGraphicsItem | None: Created item.
+    """
+
+    item = _build_annotation_item(scene, annotation)
+    if item is not None:
+        setter = getattr(item, "set_halo_enabled", None)
+        if callable(setter):
+            # Absent key means a project saved before halos existed; those keep
+            # the exact look they were saved with rather than gaining an edge.
+            setter(bool(annotation.payload.get("halo", False)))
+    return item
+
+
+def _build_annotation_item(
     scene: QGraphicsScene,
     annotation: AnnotationModel,
 ) -> QGraphicsItem | None:

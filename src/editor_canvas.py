@@ -282,6 +282,9 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         self._style = create_default_style_state()
         self._rect_corner_radius = 0.0
+        # Halos default on: the feature exists so annotations stay readable,
+        # which only happens if new ones get one without being asked.
+        self._annotation_halo = True
         self._zoom_factor = 1.0
         self._initial_view_pending = False
         self._last_action_label = "Edit"
@@ -1116,6 +1119,50 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         return self._rect_corner_radius
 
+    def annotation_halo(self) -> bool:
+        """
+        Returns whether newly drawn annotations get a contrast halo.
+
+        Returns:
+            bool: Current tool default.
+        """
+
+        return bool(self._annotation_halo)
+
+    def set_annotation_halo(
+        self,
+        enabled: bool,
+        *,
+        apply_to_selection: bool = True,
+        update_default: bool = True,
+    ) -> None:
+        """
+        Turns the contrast halo on or off for new draws and/or a selection.
+
+        Args:
+            enabled: True to draw a halo behind the annotation.
+            apply_to_selection: When True, updates the current selection.
+            update_default: When True, newly drawn annotations use this setting.
+
+        Returns:
+            None
+        """
+
+        if update_default:
+            self._annotation_halo = bool(enabled)
+        if not apply_to_selection:
+            return
+        changed = False
+        for item in self._selected_annotation_items():
+            if bool(item.data(ITEM_ROLE_LOCKED) or False):
+                continue
+            setter = getattr(item, "set_halo_enabled", None)
+            if callable(setter):
+                setter(bool(enabled))
+                changed = True
+        if changed:
+            self._emit_content_changed("Change annotation halo")
+
     def set_rect_corner_radius(
         self,
         radius: float,
@@ -1949,6 +1996,25 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self._refresh_selection_info()
 
     def _create_preview_item(self, start: QPointF) -> QGraphicsItem:
+        """
+        Creates the in-progress item for the active tool, halo default applied.
+
+        Args:
+            start: Scene position where the drag began.
+
+        Returns:
+            QGraphicsItem: Item to show while dragging.
+        """
+
+        item = self._build_preview_item(start)
+        setter = getattr(item, "set_halo_enabled", None)
+        if callable(setter):
+            # Preview overlays (crop, blur, marquee) are plain Qt items without
+            # the mixin, so they fall through this check untouched.
+            setter(self._annotation_halo)
+        return item
+
+    def _build_preview_item(self, start: QPointF) -> QGraphicsItem:
         """
         Creates a temporary preview item for the active draw tool.
 

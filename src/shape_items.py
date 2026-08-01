@@ -19,6 +19,8 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem, QStyleOptionGraphicsItem, QWidget
 
+from src.color_contrast import halo_color_for, halo_pen_width
+
 # Rect-like annotation types that store AABB geometry (x, y, width, height).
 SHAPE_RECT_TYPES = frozenset(
     {
@@ -507,7 +509,87 @@ def path_for_shape_kind(
     return build_rect_path(rect, corner_radius=0.0)
 
 
-class PathShapeItem(QGraphicsPathItem):
+class HaloMixin:
+    """
+    Class HaloMixin
+
+    Adds an optional contrast halo drawn underneath a stroked annotation.
+
+    The halo is a wider pen in the counter-color, stroked before the item's own
+    painting. Items start without one so restoring a project cannot restyle it;
+    the canvas switches it on for newly drawn annotations via its tool default.
+    """
+
+    def __init__(self, *args, **kwargs) -> None:
+        """
+        Args:
+            *args: Forwarded to the graphics item base.
+            **kwargs: Forwarded to the graphics item base.
+        """
+
+        super().__init__(*args, **kwargs)
+        self._halo_enabled = False
+
+    def halo_enabled(self) -> bool:
+        """
+        Returns whether the contrast halo is drawn.
+
+        Returns:
+            bool: True when the halo is on.
+        """
+
+        return bool(self._halo_enabled)
+
+    def set_halo_enabled(self, enabled: bool) -> None:
+        """
+        Turns the contrast halo on or off.
+
+        Args:
+            enabled: True to draw the halo.
+
+        Returns:
+            None
+        """
+
+        resolved = bool(enabled)
+        if resolved == self._halo_enabled:
+            return
+        self._halo_enabled = resolved
+        self.prepareGeometryChange()
+        self.update()
+
+    def _halo_pen(self) -> QPen:
+        """
+        Builds the wider pen drawn underneath this item's own stroke.
+
+        Returns:
+            QPen: Halo pen matching the item's cap and join style.
+        """
+
+        own = self.pen()
+        halo = QPen(halo_color_for(own.color()))
+        halo.setWidthF(halo_pen_width(own.widthF()))
+        # Solid on purpose: a dashed halo behind a dashed stroke reads as noise.
+        halo.setStyle(Qt.PenStyle.SolidLine)
+        halo.setCapStyle(own.capStyle())
+        halo.setJoinStyle(own.joinStyle())
+        return halo
+
+    def _halo_extra_margin(self) -> float:
+        """
+        Returns how far the halo extends past the item's own stroke.
+
+        Returns:
+            float: Extra margin in pixels for bounding-rect growth.
+        """
+
+        if not self._halo_enabled:
+            return 0.0
+        own_width = self.pen().widthF()
+        return max(0.0, (halo_pen_width(own_width) - own_width) / 2.0)
+
+
+class PathShapeItem(HaloMixin, QGraphicsPathItem):
     """
     Rect-bounded vector shape (rectangle, triangle, star, stamps, legacy kinds).
     """
@@ -535,6 +617,47 @@ class PathShapeItem(QGraphicsPathItem):
         self._local_rect = QRectF(rect) if rect is not None else QRectF()
         self._corner_radius = max(0.0, float(corner_radius))
         self._rebuild_path()
+
+    def boundingRect(self) -> QRectF:  # type: ignore[override]
+        """
+        Returns the item bounds, grown to cover the halo when it is on.
+
+        Returns:
+            QRectF: Bounding rectangle in local coordinates.
+        """
+
+        bounds = super().boundingRect()
+        margin = self._halo_extra_margin()
+        if margin <= 0.0:
+            return bounds
+        return bounds.adjusted(-margin, -margin, margin, margin)
+
+    def paint(
+        self,
+        painter: QPainter,
+        option: QStyleOptionGraphicsItem,
+        widget: QWidget | None = None,
+    ) -> None:
+        """
+        Paints the contrast halo underneath the item's own stroke.
+
+        Args:
+            painter: Active painter.
+            option: Style options from Qt.
+            widget: Optional widget being painted.
+
+        Returns:
+            None
+        """
+
+        if self._halo_enabled and self.pen().style() != Qt.PenStyle.NoPen:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(self._halo_pen())
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self.path())
+            painter.restore()
+        super().paint(painter, option, widget)
 
     def shape_kind(self) -> str:
         """
@@ -876,7 +999,7 @@ class SpotlightItem(QGraphicsItem):
                 painter.drawEllipse(self._focus_rect)
 
 
-class PolyPathItem(QGraphicsPathItem):
+class PolyPathItem(HaloMixin, QGraphicsPathItem):
     """
     Multi-point polyline, polygon, or bent arrow annotation.
     """
@@ -985,7 +1108,7 @@ class PolyPathItem(QGraphicsPathItem):
             QRectF: Bounds including handle overhang.
         """
 
-        margin = VERTEX_HANDLE_PX
+        margin = VERTEX_HANDLE_PX + self._halo_extra_margin()
         return super().boundingRect().adjusted(-margin, -margin, margin, margin)
 
     def vertex_at(self, local_pos: QPointF) -> int | None:
@@ -1058,6 +1181,13 @@ class PolyPathItem(QGraphicsPathItem):
             None
         """
 
+        if self._halo_enabled and self.pen().style() != Qt.PenStyle.NoPen:
+            painter.save()
+            painter.setRenderHint(QPainter.Antialiasing, True)
+            painter.setPen(self._halo_pen())
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(self.path())
+            painter.restore()
         super().paint(painter, option, widget)
         if not self.isSelected() or not self._points:
             return
