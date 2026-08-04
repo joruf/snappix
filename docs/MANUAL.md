@@ -72,7 +72,9 @@ relevant control in a busy window.
 
 ### 3.2 Editing what you drew
 
-Select an object to reveal its handles. Drag to move, drag a handle to resize.
+Select an object to reveal its handles. Drag to move, drag a handle to resize. Hold `Ctrl`
+(or `Shift`) while dragging a handle to keep the object's proportions — hold it before you
+grab the corner, and keep it held.
 
 For **polyline, polygon, and bent arrow**, each vertex gets its own handle: drag a single
 vertex to reshape the object without moving it as a whole. Hold `Shift` while dragging to

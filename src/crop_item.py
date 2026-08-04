@@ -17,6 +17,29 @@ FRAME_MODE_LINE = "line"
 FRAME_MODES = frozenset({FRAME_MODE_RECT, FRAME_MODE_ELLIPSE, FRAME_MODE_LINE})
 
 
+# Modifiers that lock the aspect ratio while dragging a resize handle. Read live
+# from each move event rather than latched at press, so holding the key down
+# before grabbing the handle works -- which is how every other editor behaves,
+# and the order users reach for first.
+ASPECT_LOCK_MODIFIERS = (
+    Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+)
+
+
+def aspect_lock_requested(modifiers) -> bool:
+    """
+    Reports whether the pressed modifiers ask for a proportional resize.
+
+    Args:
+        modifiers: Keyboard modifiers carried by the event.
+
+    Returns:
+        bool: True when the aspect ratio should be preserved.
+    """
+
+    return bool(modifiers & ASPECT_LOCK_MODIFIERS)
+
+
 class CropSelectionItem(QGraphicsRectItem):
     """
     Provides a draggable and resizable crop/selection overlay with handles.
@@ -538,7 +561,7 @@ class CropSelectionItem(QGraphicsRectItem):
                 return
             lock_aspect_ratio = (
                 self._aspect_ratio_lock_enabled
-                and bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                and aspect_lock_requested(event.modifiers())
             )
             self._resize_from_handle(
                 self._active_handle,
