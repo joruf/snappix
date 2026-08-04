@@ -96,10 +96,9 @@ halo puts a contrasting outline behind the annotation without changing its color
 brand red stays exactly that red, it just gains an edge. The outline is white behind dark
 annotations and black behind light ones.
 
-It is on by default, so annotations stay readable without you having to think about it.
-The checkbox works two ways: with something selected it changes that object, and with
-nothing selected it sets how the next annotation will be drawn. Untick it if you want flat
-annotations on a background you already control.
+It is off by default. The checkbox works two ways: with something selected it changes that
+object, and with nothing selected it sets how the next annotation will be drawn. Switch it
+on for anything you place over a busy or unpredictable background.
 
 A note on **Radius**: rounding is capped by the shape's own size — a corner cannot round
 further than half the shorter edge. On a small shape the slider therefore stops having an
@@ -246,3 +245,23 @@ disk is full. A full disk is the common cause — Snappix needs room to unpack a
 video before it can show it.
 
 **Exports look soft.** Set Scale to @2x.
+
+**Snappix crashed.** Unsaved tabs are recovered on the next launch, and the crash is
+recorded in `~/.cache/snappix/crash.log`. Attach that file to a bug report: it holds the
+exact Python frames, any Qt warning that preceded the crash, and a short trail of what you
+did just before it — which action, on which kind of object.
+
+---
+
+## 9. Updating
+
+`Help -> Check for Updates...` in the editor, or `Check for Updates...` in the tray menu —
+the tray entry works with no editor tab open.
+
+Snappix compares the commit it runs from against the head of the repository's main branch.
+When it is behind, it offers to install and restart.
+
+Running from a git checkout, the update is a `git pull --ff-only` and is **refused if you
+have local changes** — it never discards your work. Otherwise the branch archive is
+unpacked over the installation; the workspace folder, configuration, and saved projects
+live elsewhere and are untouched.

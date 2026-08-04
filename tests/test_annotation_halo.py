@@ -368,16 +368,16 @@ class HaloToolDefaultTests(unittest.TestCase):
         self.canvas.set_tool(tool)
         return self.canvas._create_preview_item(QPointF(10.0, 10.0))  # pylint: disable=protected-access
 
-    def test_halo_is_on_by_default(self) -> None:
+    def test_halo_is_off_by_default(self) -> None:
         """
         Returns:
             None
         """
 
-        self.assertTrue(self.canvas.annotation_halo())
-        self.assertTrue(self.window.style_halo_check.isChecked())
+        self.assertFalse(self.canvas.annotation_halo())
+        self.assertFalse(self.window.style_halo_check.isChecked())
 
-    def test_newly_drawn_annotations_get_a_halo(self) -> None:
+    def test_newly_drawn_annotations_follow_the_default(self) -> None:
         """
         Returns:
             None
@@ -385,6 +385,10 @@ class HaloToolDefaultTests(unittest.TestCase):
 
         from src.editor_canvas import Tool
 
+        for tool in (Tool.RECT, Tool.ARROW, Tool.LINE):
+            self.assertFalse(self._preview(tool).halo_enabled(), msg=str(tool))
+
+        self.window.style_halo_check.setChecked(True)
         for tool in (Tool.RECT, Tool.ARROW, Tool.LINE):
             self.assertTrue(self._preview(tool).halo_enabled(), msg=str(tool))
 
@@ -396,13 +400,13 @@ class HaloToolDefaultTests(unittest.TestCase):
 
         from src.editor_canvas import Tool
 
-        self.window.style_halo_check.setChecked(False)
-        self.assertFalse(self.canvas.annotation_halo())
-        self.assertFalse(self._preview(Tool.ARROW).halo_enabled())
-
         self.window.style_halo_check.setChecked(True)
         self.assertTrue(self.canvas.annotation_halo())
         self.assertTrue(self._preview(Tool.ARROW).halo_enabled())
+
+        self.window.style_halo_check.setChecked(False)
+        self.assertFalse(self.canvas.annotation_halo())
+        self.assertFalse(self._preview(Tool.ARROW).halo_enabled())
 
     def test_checkbox_shows_the_default_when_nothing_is_selected(self) -> None:
         """

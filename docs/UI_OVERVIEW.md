@@ -91,7 +91,7 @@ gains an edge. The outline is white behind dark annotations and black behind lig
 picked by WCAG contrast against the annotation itself — which means either the halo or
 the annotation always separates from whatever is underneath.
 
-The halo is **on by default** for newly drawn annotations. With nothing selected, the
+The halo is **off by default**. With nothing selected, the
 checkbox states what the next annotation will look like; with something selected, it shows
 and changes that object.
 

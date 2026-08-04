@@ -430,6 +430,33 @@ Note the restore branch for `rect` hardcodes `configure_graphics_item(item, "rec
 kinds must go through the generic `PATH_SHAPE_KINDS` branch, which passes the annotation type
 through correctly.
 
+## Crash Logging
+
+`src/crash_log.py`, installed first thing in `main()` so it covers startup too. Four
+sources feed `~/.cache/snappix/crash.log`:
+
+| Source | Catches |
+|--------|---------|
+| `faulthandler` | Fatal signals (segfault, abort) -- the ones that otherwise leave nothing |
+| `sys.excepthook` | Uncaught exceptions on the main thread |
+| `threading.excepthook` | The same on workers, which otherwise die silently |
+| `qInstallMessageHandler` | Qt's own warnings |
+
+The Qt handler matters most for this app's crash class: PySide prints "Internal C++ object
+already deleted" *before* the process dies, so the warning preceding a crash often names a
+cause the C-level stack no longer can. It is installed after `QApplication` exists, which
+is why it is a separate call from `install()`.
+
+Breadcrumbs (`crash_log.breadcrumb`) record recent user actions in memory and are flushed
+as part of any crash block. A segfault inside Qt's scene graph produces a stack that says
+nothing about which interaction triggered it; the trail says "press tool=select on=arrow,
+move arrow". Fed from `_emit_content_changed` (completed actions) and from the canvas mouse
+press (drags that crash before completing). Bounded deque -- an unbounded trail would grow
+for the life of the process.
+
+Every path swallows its own errors: a full or unwritable disk must never turn a crash
+report into a second crash.
+
 ## Presentation Frame
 
 `src/presentation_frame.py` composites the export frame; `src/presentation_frame_dialog.py` is its

@@ -323,9 +323,9 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self._rebuilding_visible_items = False
         self._show_all_annotations = False
         self._rect_corner_radius = 0.0
-        # Halos default on: the feature exists so annotations stay readable,
-        # which only happens if new ones get one without being asked.
-        self._annotation_halo = True
+        # Off by default: the halo is a deliberate choice for busy backgrounds,
+        # not something every annotation should carry.
+        self._annotation_halo = False
         self._last_action_label = "Edit"
         self._scene.selectionChanged.connect(self._on_selection_changed)
 

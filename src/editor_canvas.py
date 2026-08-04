@@ -95,6 +95,7 @@ from src.annotation_shapes import (
     TEXT_STYLE_PLAIN,
 )
 from src.annotation_style_apply import apply_style_to_annotation_item
+from src.crash_log import breadcrumb
 from src.shape_items import (
     PATH_SHAPE_KINDS,
     SHAPE_LINE_TYPES,
@@ -282,9 +283,9 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         self._style = create_default_style_state()
         self._rect_corner_radius = 0.0
-        # Halos default on: the feature exists so annotations stay readable,
-        # which only happens if new ones get one without being asked.
-        self._annotation_halo = True
+        # Off by default: the halo is a deliberate choice for busy backgrounds,
+        # not something every annotation should carry.
+        self._annotation_halo = False
         self._zoom_factor = 1.0
         self._initial_view_pending = False
         self._last_action_label = "Edit"
@@ -751,6 +752,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         """
 
         resolved_label = action_label.strip() or "Edit"
+        breadcrumb(resolved_label)
         # Auto-fitting the document is a side effect. Keep the original draw/edit
         # label so one-shot tools can return to Select after a single use.
         if not self._fitting_document and self._fit_document_to_content():
@@ -1277,7 +1279,33 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         return self._grid_size
 
-    def mousePressEvent(self, event: QMouseEvent) -> None:
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: D401
+        self._breadcrumb_press(event)
+        return self._handle_mouse_press(event)
+
+    def _breadcrumb_press(self, event: QMouseEvent) -> None:
+        """
+        Records what was under the cursor when a drag started.
+
+        A crash during a drag never reaches the action label that would normally
+        describe it, so the press is recorded on its own.
+
+        Args:
+            event: The press event.
+
+        Returns:
+            None
+        """
+
+        try:
+            item = self.itemAt(event.position().toPoint())
+            kind = str(item.data(ITEM_ROLE_TYPE) or "") if item is not None else ""
+            breadcrumb(f"press tool={self._tool} on={kind or 'canvas'}")
+        except Exception:
+            # Diagnostics must never break the interaction they observe.
+            pass
+
+    def _handle_mouse_press(self, event: QMouseEvent) -> None:
         """
         Handles drawing start and text insertion actions.
 

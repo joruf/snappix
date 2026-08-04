@@ -1941,6 +1941,11 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         settings_action.triggered.connect(self.settings_requested.emit)
         view_menu.addAction(settings_action)
 
+        update_action = QAction("Check for Updates...", self)
+        update_action.setToolTip("Check GitHub for a newer version of Snappix.")
+        update_action.triggered.connect(self._check_for_updates)
+        help_menu.addAction(update_action)
+
         about_action = QAction("About", self)
         about_action.setToolTip("Show application information.")
         about_action.triggered.connect(self.show_about)
@@ -6639,6 +6644,18 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         if self.paste_drawing_area_from_clipboard():
             return
         self.canvas.paste_from_clipboard()
+
+    def _check_for_updates(self) -> None:
+        """
+        Opens the update check from the Help menu.
+
+        Returns:
+            None
+        """
+
+        from src.update_dialog import check_for_updates
+
+        check_for_updates(self)
 
     def show_about(self) -> None:
         """

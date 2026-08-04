@@ -932,6 +932,9 @@ class AppController:
             settings_action.triggered.connect(self.show_settings_dialog)
             tray_menu.addAction(settings_action)
             tray_menu.addSeparator()
+            update_action = QAction("Check for Updates...", tray_menu)
+            update_action.triggered.connect(self.check_for_updates)
+            tray_menu.addAction(update_action)
             about_action = QAction("About", tray_menu)
             about_action.triggered.connect(self.show_about_dialog)
             tray_menu.addAction(about_action)
@@ -3056,6 +3059,18 @@ class AppController:
         self.tray_icon.hide()
         self.app.quit()
 
+    def check_for_updates(self) -> None:
+        """
+        Opens the update check, reachable without any editor tab open.
+
+        Returns:
+            None
+        """
+
+        from src.update_dialog import check_for_updates
+
+        check_for_updates(self.capture_panel)
+
     def show_about_dialog(self) -> None:
         """
         Shows About dialog with project and maintainer information.
@@ -3086,6 +3101,9 @@ def main() -> int:
         int: Process exit code.
     """
 
+    from src.crash_log import install as install_crash_log
+
+    install_crash_log()
     runtime_code = _ensure_qt_runtime()
     if runtime_code != 0:
         return runtime_code
@@ -3132,6 +3150,11 @@ def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) 
 
     if is_linux():
         QGuiApplication.setDesktopFileName("snappix")
+    from src.crash_log import install_qt_message_handler
+
+    # After QApplication exists: Qt's "C++ object already deleted" warning
+    # is usually the last thing printed before this class of crash.
+    install_qt_message_handler()
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
