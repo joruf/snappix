@@ -430,6 +430,24 @@ Note the restore branch for `rect` hardcodes `configure_graphics_item(item, "rec
 kinds must go through the generic `PATH_SHAPE_KINDS` branch, which passes the annotation type
 through correctly.
 
+## Window Detection
+
+`detect_window_at_point` answers "which window covers this screen coordinate?" -- used by the
+capture overlay to highlight the window under the cursor.
+
+On X11 it walks `_NET_CLIENT_LIST_STACKING` (from `xprop`, bottom-to-top) from the **top
+down** and returns the first window whose geometry contains the point. Direction matters:
+the desktop covers every point, so a bottom-up walk always returns it.
+
+It must not use `xdotool getmouselocation`. That call can only ever answer for the real
+pointer, so it silently ignores the coordinate it was asked about -- every point then
+resolves to the same window, and once walked upward, usually the desktop. On screen that
+reads as "the window highlight is missing", because a highlight frame around the whole
+screen is indistinguishable from none. `tests/test_window_detection.py` pins this.
+
+`getmouselocation` remains only as a fallback for window managers that publish no stacking
+hint, where the pointer's own window is the best available answer.
+
 ## Crash Logging
 
 `src/crash_log.py`, installed first thing in `main()` so it covers startup too. Four

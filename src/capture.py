@@ -2042,6 +2042,54 @@ class ColorPickerOverlay(QWidget):
         image = self._screenshot.toImage()
         return image.pixelColor(local_pos)
 
+def _x11_stacking_order() -> list[str]:
+    """
+    Returns visible top-level window ids from bottom to top.
+
+    Args:
+        None
+
+    Returns:
+        list[str]: Decimal window ids in stacking order, bottom first.
+    """
+
+    try:
+        output = subprocess.run(
+            ["xprop", "-root", "_NET_CLIENT_LIST_STACKING"],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=0.5,
+        ).stdout
+    except Exception:
+        return []
+    return [str(int(match, 16)) for match in re.findall(r"0x[0-9a-fA-F]+", output)]
+
+
+def _x11_window_id_at_point(global_pos: QPoint) -> str:
+    """
+    Finds the topmost window covering one screen coordinate.
+
+    ``xdotool getmouselocation`` can only ever answer for the real pointer, so
+    it cannot serve a caller asking about an arbitrary point -- it silently
+    returns the window under the mouse instead, which is the wrong window and,
+    once resolved upward, often the desktop. Walking the stacking order from the
+    top down answers the question that was actually asked.
+
+    Args:
+        global_pos: Point in global screen coordinates.
+
+    Returns:
+        str: Window id, or an empty string when nothing matches.
+    """
+
+    for window_id in reversed(_x11_stacking_order()):
+        geometry = _window_geometry_from_id(window_id)
+        if not geometry.isNull() and geometry.contains(global_pos):
+            return window_id
+    return ""
+
+
 def detect_window_at_point(
     global_pos: QPoint,
     *,
@@ -2077,6 +2125,13 @@ def detect_window_at_point(
     if not has_xdotool_and_xwininfo():
         return "", QRect()
     try:
+        window_id = _x11_window_id_at_point(global_pos)
+        if window_id:
+            return window_id, _window_geometry_from_id(window_id)
+
+        # Fallback for window managers that publish no stacking hint: the
+        # pointer's own window. Only correct when the caller asks about the
+        # cursor, which is what every current caller does.
         mouse_data = subprocess.run(
             ["xdotool", "getmouselocation", "--shell"],
             capture_output=True,
@@ -2087,10 +2142,10 @@ def detect_window_at_point(
         window_match = re.search(r"WINDOW=(\d+)", mouse_data)
         if not window_match:
             return "", QRect()
-        window_id = _resolve_top_level_window_id(window_match.group(1))
-        if not window_id:
+        resolved = _resolve_top_level_window_id(window_match.group(1))
+        if not resolved:
             return "", QRect()
-        return window_id, _window_geometry_from_id(window_id)
+        return resolved, _window_geometry_from_id(resolved)
     except Exception:
         return "", QRect()
 
