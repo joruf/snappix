@@ -81,6 +81,18 @@ lock the vertex to one axis.
 The **selection footer** under the canvas reports the selection's size and position in
 whole pixels, and lists every vertex of a multi-point shape.
 
+### Reusing part of an image
+
+Mark a region with a selection tool and press `Ctrl+C`. The marked region alone goes to the
+clipboard — not the whole tab — and `Ctrl+V` drops it back in as a movable layer.
+
+Paste as often as you like: each `Ctrl+V` adds another copy, stepped down and to the right
+so the copies do not hide each other. The cutout also pastes into any other tab, and into
+other applications, because it is a plain image on the system clipboard.
+
+`Ctrl+A` marks the whole drawing area, so `Ctrl+A` `Ctrl+C` `Ctrl+V` copies and pastes the
+entire tab — the same three keys, whether you want a region or all of it.
+
 ### 3.3 Styling — the Edit tab
 
 | Control | Effect |
@@ -204,6 +216,7 @@ unexpectedly, the tabs come back on the next launch.
 | `Ctrl+Shift+E` | Export |
 | `Ctrl+P` | Print |
 | `Ctrl+W` | Close tab |
+| `Ctrl+A` | Select the whole drawing area |
 | `Ctrl+Z` | Undo |
 | `Ctrl+Y` / `Ctrl+Shift+Z` | Redo |
 | `Ctrl+D` | Duplicate selection |

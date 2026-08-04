@@ -283,6 +283,8 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         self._style = create_default_style_state()
         self._rect_corner_radius = 0.0
+        self._paste_cascade_key: tuple[int, int, int] | None = None
+        self._paste_cascade_count = 0
         # Off by default: the halo is a deliberate choice for busy backgrounds,
         # not something every annotation should carry.
         self._annotation_halo = False
@@ -3394,6 +3396,81 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         if self._copy_feedback_ticks >= 35:
             self.clear_copy_feedback()
 
+    # Each consecutive paste of the same content steps down-right by this much,
+    # so repeated Ctrl+V produces a visible stack instead of one copy hiding
+    # every earlier one.
+    PASTE_CASCADE_STEP = 16.0
+
+    def select_entire_document(self) -> bool:
+        """
+        Marks the whole document as the pixel selection.
+
+        Returns:
+            bool: True when a selection was set.
+        """
+
+        rect = self.document_rect()
+        if rect.isEmpty():
+            return False
+        path = QPainterPath()
+        path.addRect(rect)
+        self.set_pixel_selection_path(path)
+        return True
+
+    def copy_pixel_selection_pixmap(self) -> QPixmap:
+        """
+        Renders the active pixel selection as a standalone image.
+
+        Everything outside the selection path stays transparent, so a lasso or
+        magic-wand cutout keeps its shape rather than becoming its bounding box.
+
+        Returns:
+            QPixmap: The cut-out, or a null pixmap when nothing is selected.
+        """
+
+        if not self.has_pixel_selection():
+            return QPixmap()
+        path = self.pixel_selection_path()
+        bounds = path.boundingRect().toAlignedRect()
+        document = self.document_rect().toRect()
+        bounds = bounds.intersected(document)
+        if bounds.isEmpty():
+            return QPixmap()
+
+        source = self.export_composited_pixmap(scale=1.0)
+        cut = QPixmap(bounds.size())
+        cut.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(cut)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        painter.translate(-bounds.x(), -bounds.y())
+        painter.setClipPath(path)
+        painter.drawPixmap(document.topLeft(), source)
+        painter.end()
+        return cut
+
+    def paste_cascade_offset(self, pixmap: QPixmap) -> QPointF:
+        """
+        Returns the offset for the next paste of one image.
+
+        Pasting the same clipboard content repeatedly must not drop every copy
+        on the same spot, where only the last one is visible.
+
+        Args:
+            pixmap: Image about to be pasted.
+
+        Returns:
+            QPointF: Offset to apply to the insertion point.
+        """
+
+        key = (pixmap.cacheKey(), pixmap.width(), pixmap.height())
+        if key != self._paste_cascade_key:
+            self._paste_cascade_key = key
+            self._paste_cascade_count = 0
+        else:
+            self._paste_cascade_count += 1
+        step = self.PASTE_CASCADE_STEP * self._paste_cascade_count
+        return QPointF(step, step)
+
     def paste_from_clipboard(self, view_pos: QPoint | None = None) -> None:
         """
         Pastes Snappix payloads, text, image, image file, or image URL.
@@ -4175,6 +4252,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             None
         """
 
+        scene_pos = scene_pos + self.paste_cascade_offset(pixmap)
         snap_position = True
         if self._blank_document and not self.collect_annotations():
             blank = QPixmap(pixmap.size())
@@ -4333,7 +4411,17 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         """
 
         if mime.hasImage():
-            pixmap = QPixmap.fromImage(mime.image())
+            # QMimeData carries imageData(); image() exists on QClipboard, not
+            # here. Calling it raised AttributeError and killed every image
+            # paste before it reached the file-path fallback below.
+            image = mime.imageData()
+            pixmap = QPixmap()
+            if isinstance(image, QPixmap):
+                pixmap = image
+            elif isinstance(image, QImage):
+                pixmap = QPixmap.fromImage(image)
+            elif image is not None:
+                pixmap = QPixmap.fromImage(QImage(image))
             if not pixmap.isNull():
                 return pixmap
 

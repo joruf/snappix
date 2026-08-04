@@ -1843,6 +1843,12 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         import_image_action.triggered.connect(self.import_image)
         edit_menu.addAction(import_image_action)
 
+        select_all_action = QAction("Select All", self)
+        select_all_action.setToolTip("Mark the whole drawing area, ready to copy.")
+        select_all_action.triggered.connect(self.select_entire_drawing_area)
+        edit_menu.addAction(select_all_action)
+        self._register_shortcut_action("select_all", select_all_action)
+
         copy_image_action = QAction("Copy", self)
         copy_image_action.setToolTip(
             "Copy selected annotations, or the full drawing area when nothing is selected."
@@ -6437,9 +6443,54 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             self.copy_selected_annotations_to_clipboard()
             return
 
+        # A pixel selection is the most specific intent the user can express:
+        # they marked a region and asked for it, not for the whole tab.
+        if self.canvas.has_pixel_selection():
+            if self.copy_pixel_selection_to_clipboard():
+                return
+
         mime_data = self._build_canvas_clipboard_mime_data()
         QGuiApplication.clipboard().setMimeData(mime_data)
         self._show_drawing_area_copied_feedback()
+
+    def select_entire_drawing_area(self) -> None:
+        """
+        Marks the whole drawing area as a pixel selection.
+
+        With Copy now honouring a marked region, this is what restores "copy the
+        whole tab": select all, copy, paste -- the same three keys everywhere
+        else uses.
+
+        Returns:
+            None
+        """
+
+        if self.canvas.select_entire_document():
+            rect = self.canvas.document_rect().toRect()
+            self.statusBar().showMessage(
+                f"Selected the whole drawing area {rect.width()}x{rect.height()}px", 4000
+            )
+
+    def copy_pixel_selection_to_clipboard(self) -> bool:
+        """
+        Copies the marked region as a plain image.
+
+        Put on the clipboard as an image rather than a Snappix payload, so the
+        cutout pastes into other tabs, into a new tab, and into other
+        applications alike.
+
+        Returns:
+            bool: True when a cutout was copied.
+        """
+
+        cutout = self.canvas.copy_pixel_selection_pixmap()
+        if cutout.isNull():
+            return False
+        QGuiApplication.clipboard().setPixmap(cutout)
+        self.statusBar().showMessage(
+            f"Copied selection {cutout.width()}x{cutout.height()}px", 4000
+        )
+        return True
 
     def copy_selected_annotations_to_clipboard(self) -> bool:
         """

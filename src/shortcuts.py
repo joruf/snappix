@@ -46,6 +46,7 @@ EDITOR_SHORTCUT_DEFINITIONS: tuple[ShortcutDefinition, ...] = (
         "Ctrl+Y; Ctrl+Shift+Z",
     ),
     ShortcutDefinition("duplicate", "Duplicate selection", "Edit", "Ctrl+D"),
+    ShortcutDefinition("select_all", "Select All", "Edit", "Ctrl+A"),
     ShortcutDefinition("copy", "Copy", "Edit", "Ctrl+C"),
     ShortcutDefinition("paste", "Paste", "Edit", "Ctrl+V"),
     ShortcutDefinition(
