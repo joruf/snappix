@@ -1,38 +1,67 @@
 """
 User-facing update check.
 
-The check runs off the GUI thread: GitHub can take seconds or hang until the
-timeout, and a frozen window during a routine "is there a newer version?" reads
-as a crash.
+Modelled on youtube-clipster: the network call and the fetch both run on a plain
+daemon thread, and the result is handed back to the GUI thread through a signal.
+
+Two things here are load-bearing and easy to get wrong:
+
+* The bridge object lives at module level. An earlier version kept its worker and
+  its ``QThread`` in local variables; when the function returned, Python dropped
+  the last reference and Qt tore down a still-running thread, which aborts the
+  whole process. Clicking "Check for Updates" simply closed Snappix.
+* A ``threading.Thread`` marked daemon is used rather than ``QThread``, so no Qt
+  object's lifetime is tied to a local scope in the first place.
 """
 
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, QThread, Signal
+import threading
+
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
 from src.constants import APP_NAME
 from src.updater import UpdateInfo, apply, check, restart
 
 
-class _CheckWorker(QObject):
+class _UpdateBridge(QObject):
     """
-    Class _CheckWorker
+    Class _UpdateBridge
 
-    Runs one repository check on a worker thread.
+    Carries worker-thread results back into the GUI thread.
+
+    Emitting a signal across threads queues the call onto the receiving thread's
+    event loop, which is what makes it safe to touch widgets in the slots.
     """
 
-    finished = Signal(object)
+    checked = Signal(object)
+    applied = Signal(bool, str)
 
-    def run(self) -> None:
-        """
-        Performs the check and emits its result.
 
-        Returns:
-            None
-        """
+# Module level on purpose: the reference must outlive every call, or Qt tears
+# down objects a running thread still uses. Created lazily rather than at import
+# time, because a QObject built before QApplication exists is destroyed after Qt
+# has already shut down, which crashes the interpreter on exit.
+_BRIDGE: "_UpdateBridge | None" = None
+_BUSY = threading.Lock()
+_PARENT: QWidget | None = None
 
-        self.finished.emit(check())
+
+def _bridge() -> "_UpdateBridge":
+    """
+    Returns the shared bridge, creating and wiring it on first use.
+
+    Returns:
+        _UpdateBridge: The signal carrier back to the GUI thread.
+    """
+
+    global _BRIDGE
+    if _BRIDGE is None:
+        _BRIDGE = _UpdateBridge()
+        _BRIDGE.checked.connect(_on_checked)
+        _BRIDGE.applied.connect(_on_applied)
+    return _BRIDGE
 
 
 def check_for_updates(parent: QWidget | None = None) -> None:
@@ -46,47 +75,77 @@ def check_for_updates(parent: QWidget | None = None) -> None:
         None
     """
 
-    thread = QThread()
-    worker = _CheckWorker()
-    worker.moveToThread(thread)
-    thread.started.connect(worker.run)
+    global _PARENT
 
-    def on_finished(info: UpdateInfo) -> None:
+    if not _BUSY.acquire(blocking=False):
+        # A check is already running; a second click must not start another.
+        return
+
+    _PARENT = parent
+    bridge = _bridge()
+    QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+
+    def work() -> None:
         """
-        Reports the outcome and offers to apply an available update.
-
-        Args:
-            info: Result of the repository check.
+        Talks to GitHub off the interface thread.
 
         Returns:
             None
         """
 
-        thread.quit()
-        thread.wait()
-        # Keep both alive until the thread has actually stopped.
-        worker.deleteLater()
-        thread.deleteLater()
-        QApplication.restoreOverrideCursor()
-        _present(parent, info)
+        try:
+            bridge.checked.emit(check())
+        except Exception as exc:  # noqa: BLE001
+            bridge.checked.emit(UpdateInfo(error=str(exc)))
 
-    worker.finished.connect(on_finished)
-    thread.start()
+    threading.Thread(target=work, name="snappix-update-check", daemon=True).start()
 
 
-def _present(parent: QWidget | None, info: UpdateInfo) -> None:
+def _install(info: UpdateInfo) -> None:
     """
-    Shows the result of a check and runs the update when confirmed.
+    Fetches the new version off the interface thread.
 
     Args:
-        parent: Optional parent widget.
+        info: The check result that offered this update.
+
+    Returns:
+        None
+    """
+
+    bridge = _bridge()
+    QApplication.setOverrideCursor(Qt.CursorShape.BusyCursor)
+
+    def work() -> None:
+        """
+        Returns:
+            None
+        """
+
+        try:
+            success, message = apply()
+        except Exception as exc:  # noqa: BLE001
+            success, message = False, str(exc)
+        bridge.applied.emit(success, message)
+
+    threading.Thread(target=work, name="snappix-update-apply", daemon=True).start()
+
+
+def _on_checked(info: UpdateInfo) -> None:
+    """
+    Reports the outcome and offers to apply an available update.
+
+    Args:
         info: Result of the repository check.
 
     Returns:
         None
     """
 
+    QApplication.restoreOverrideCursor()
+    parent = _PARENT
+
     if info.error:
+        _BUSY.release()
         QMessageBox.warning(
             parent,
             f"{APP_NAME} Update",
@@ -95,6 +154,7 @@ def _present(parent: QWidget | None, info: UpdateInfo) -> None:
         return
 
     if not info.available:
+        _BUSY.release()
         detail = f"\n\nInstalled commit: {info.local}" if info.local else ""
         QMessageBox.information(
             parent,
@@ -112,13 +172,33 @@ def _present(parent: QWidget | None, info: UpdateInfo) -> None:
             f"Installed: {info.local}\nAvailable: {info.remote}{summary}\n\n"
             "Install it now? Snappix will restart."
         ),
-        QMessageBox.Yes | QMessageBox.No,
-        QMessageBox.Yes,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.Yes,
     )
-    if answer != QMessageBox.Yes:
+    if answer != QMessageBox.StandardButton.Yes:
+        _BUSY.release()
         return
 
-    success, message = apply()
+    # The lock stays held across the fetch: it is the same operation continuing.
+    _install(info)
+
+
+def _on_applied(success: bool, message: str) -> None:
+    """
+    Restarts when the update worked, reports the reason when it did not.
+
+    Args:
+        success: True when the new version was fetched.
+        message: Output of the update, for the user.
+
+    Returns:
+        None
+    """
+
+    QApplication.restoreOverrideCursor()
+    _BUSY.release()
+    parent = _PARENT
+
     if not success:
         QMessageBox.warning(parent, f"{APP_NAME} Update", f"Update failed:\n{message}")
         return
