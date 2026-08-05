@@ -6486,7 +6486,9 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         cutout = self.canvas.copy_pixel_selection_pixmap()
         if cutout.isNull():
             return False
+        bounds = self.canvas.pixel_selection_path().boundingRect()
         QGuiApplication.clipboard().setPixmap(cutout)
+        self.canvas.flash_copy_feedback(bounds)
         self.statusBar().showMessage(
             f"Copied selection {cutout.width()}x{cutout.height()}px", 4000
         )

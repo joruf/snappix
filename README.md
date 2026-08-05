@@ -475,6 +475,31 @@ scripts\check_cross_platform.bat
 
 CI runs the same contract tests and full suite on Ubuntu 22.04/24.04 and `windows-latest` (Python 3.11 and 3.12).
 
+### Regression guards
+
+Focused suites lock UX and platform contracts that have regressed before. Prefer these when changing copy, clipboard, selection, or OS path helpers:
+
+| Area | Module | What must stay true |
+|------|--------|---------------------|
+| **Copy feedback (Ctrl+C)** | `tests/test_copy_feedback.py` | Every Ctrl+C path (pixel selection, selected annotation, full drawing area, Copy Drawing Area) shows the short dashed animated outline around the copied place; animation advances and clears itself. |
+| **Region cutout copy/paste** | `tests/test_selection_cutout_paste.py` | Marked region wins over whole-tab copy; cutout pastes repeatedly with cascade offset; Ctrl+C still flashes feedback. |
+| **Annotation clipboard** | `tests/test_editor_multi_select_clipboard.py` | Multi-select copy prefers the selection; clipboard also carries a picture for other apps. |
+| **Cross-platform paths** | `tests/test_paths.py`, `tests/test_cross_platform_contract.py` | Linux XDG / Windows APPDATA contracts stay green on both CI OSes (path checks use `Path` parts, not slash-only strings). |
+| **OS capability matrix** | `tests/test_os_compatibility_matrix.py` | X11 / Wayland / Windows capability routing stays consistent when tools are present or missing. |
+
+```bash
+# Copy-feedback + cutout regression (Linux)
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest \
+  tests.test_copy_feedback tests.test_selection_cutout_paste -v
+
+# Cross-platform contract (same as CI’s first test step)
+.venv/bin/python -m unittest \
+  tests.test_cross_platform_contract tests.test_paths \
+  tests.test_os_compatibility_matrix -v
+```
+
+Do not remove or weaken these assertions without replacing equivalent coverage: silent drops (for example copying a marked region without the dashed outline) have already shipped once.
+
 ### Multi-OS matrix (local Linux host)
 
 From a Linux development machine, the companion suite `os-test-matrix` (clone or keep it

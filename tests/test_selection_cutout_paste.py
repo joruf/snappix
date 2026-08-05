@@ -88,6 +88,24 @@ class CutoutCopyTests(unittest.TestCase):
         clipboard = QGuiApplication.clipboard().pixmap()
         self.assertEqual((clipboard.width(), clipboard.height()), (80, 80))
 
+    def test_copy_flashes_dashed_feedback_around_the_selection(self) -> None:
+        """
+        Ctrl+C on a marked region must briefly outline that region.
+
+        Goes through ``copy_current_image_to_clipboard`` (the real Ctrl+C
+        entry point), not only the lower-level cutout helper.
+
+        Returns:
+            None
+        """
+
+        self.window.copy_current_image_to_clipboard()
+        feedback = self.window.canvas._copy_feedback_item
+        self.assertIsNotNone(feedback)
+        self.assertTrue(self.window.canvas._copy_feedback_timer.isActive())
+        # Feedback frame is padded a few pixels around the selection bounds.
+        self.assertTrue(feedback.rect().contains(QRectF(50.0, 50.0, 80.0, 80.0)))
+
     def test_copy_prefers_the_selection_over_the_whole_tab(self) -> None:
         """
         Ctrl+C with a marked region must not fall through to copying the entire
@@ -100,6 +118,9 @@ class CutoutCopyTests(unittest.TestCase):
         self.window.copy_current_image_to_clipboard()
         clipboard = QGuiApplication.clipboard().pixmap()
         self.assertEqual((clipboard.width(), clipboard.height()), (80, 80))
+        feedback = self.window.canvas._copy_feedback_item
+        self.assertIsNotNone(feedback)
+        self.assertTrue(self.window.canvas._copy_feedback_timer.isActive())
 
     def test_without_a_selection_there_is_no_cutout(self) -> None:
         """
