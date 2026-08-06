@@ -924,9 +924,20 @@ class CropSelectionItem(QGraphicsRectItem):
         """
         Triggers optional geometry-changed callback.
 
+        The callback runs from inside Qt virtual overrides (``itemChange``,
+        ``mouseReleaseEvent``). An exception escaping from there unwinds through
+        C++ and kills the process with a segfault a few events later, so a
+        failing callback is recorded and swallowed instead.
+
         Returns:
             None
         """
 
-        if self.on_geometry_changed is not None:
+        if self.on_geometry_changed is None:
+            return
+        try:
             self.on_geometry_changed()
+        except Exception:
+            from src.crash_log import log_exception
+
+            log_exception("Resize overlay geometry callback failed")

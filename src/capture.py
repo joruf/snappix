@@ -4,6 +4,7 @@ Screenshot capture panel and overlays.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import time
@@ -44,6 +45,7 @@ from PySide6.QtWidgets import (
 
 from src.constants import APP_NAME
 from src.auto_scroll_capture import MAX_SCROLL_FRAMES, perform_auto_scroll_capture
+from src.crash_log import breadcrumb
 from src.config import (
     CAPTURE_BACKEND_AUTO,
     CAPTURE_BACKEND_EXTERNAL,
@@ -54,7 +56,10 @@ from src.desktop_grab import (
     GRAB_BACKEND_QT,
     describe_grab_backends,
     grab_desktop_region,
-    is_blank_pixmap,
+    is_suspicious_fraction,
+    verify_image_against_x11,
+    visible_image_fraction,
+    visible_pixmap_fraction,
 )
 from src.flow_layout import FlowLayoutWidget
 from src.ocr import extract_text_from_png_bytes
@@ -63,6 +68,7 @@ from src.platform import (
     capture_region_with_grim_slurp,
     get_x11_focused_window_id,
     has_grim_and_slurp,
+    has_xdotool,
     has_xdotool_and_xwininfo,
     is_wayland_session,
     raise_x11_window,
@@ -82,6 +88,11 @@ class CaptureMode:
 
 _ACTIVE_OVERLAYS: list[QWidget] = []
 
+# Owning process per X11 window id, so the hit-test does not shell out to xprop on
+# every poll. Bounded because X recycles window ids.
+_X11_WINDOW_PID_CACHE: dict[str, int] = {}
+_X11_WINDOW_PID_CACHE_LIMIT = 256
+
 # Grab source for screenshots, mirrored from AppConfig.capture_backend.
 _capture_backend_preference = CAPTURE_BACKEND_AUTO
 
@@ -90,7 +101,7 @@ _GRAB_SOURCE_EXTERNAL = "external"
 
 # Set once Qt's own grab hands back an empty image, so later captures in this
 # session go straight to an external tool instead of grabbing black again.
-_qt_grab_blank_seen = False
+_qt_grab_unreliable = False
 
 # The all-black explanation is shown once per session, not per capture.
 _blank_capture_warning_shown = False
@@ -98,6 +109,10 @@ _blank_capture_warning_shown = False
 # Wait for the compositor to drop hidden Snappix windows (Capture panel, countdown)
 # before sampling the framebuffer. Too short and the panel still appears in shots.
 CAPTURE_UI_SETTLE_MS = 120
+
+# Pen width of the window-capture highlight frame. The frame is offset by the same
+# amount so it lands outside the target window instead of on its pixels.
+HIGHLIGHT_FRAME_WIDTH = 2
 
 # ---------------------------------------------------------------------------
 # Capture panel startup width (client area in pixels).
@@ -1667,6 +1682,9 @@ def _run_scroll_capture_after_pick(
 class WindowCaptureOverlay(QWidget):
     """
     Full-screen overlay that highlights the window under cursor.
+
+    The highlight frame is drawn outside the target window, so nothing that the
+    capture will contain is covered while picking.
     """
 
     capture_done = Signal(QPixmap)
@@ -1696,7 +1714,11 @@ class WindowCaptureOverlay(QWidget):
         self._virtual_geometry = virtual_geometry
         self._hover_rect = QRect()
         self._hover_label = ""
-        self._exclude_hwnds: tuple[int, ...] = ()
+        # Claim the window id before the first poll: X11 lists this overlay in the
+        # stacking order even though it is click-through, so without excluding it
+        # every hit-test returns the overlay and the highlight frame ends up
+        # around the whole desktop instead of the target window.
+        self._exclude_hwnds: tuple[int, ...] = self._own_window_ids()
         self._accept_mouse_input = accept_mouse_input
         self._poll_timer = QTimer(self)
         self._poll_timer.setInterval(70)
@@ -1728,10 +1750,77 @@ class WindowCaptureOverlay(QWidget):
         """
 
         super().showEvent(event)
+        self._exclude_hwnds = self._own_window_ids()
+
+    def _own_window_ids(self) -> tuple[int, ...]:
+        """
+        Returns this overlay's native window id for hit-test exclusion.
+
+        On X11 this is only a first line of defence -- Qt can recreate the native
+        window while showing it, so the reliable exclusion happens by process id
+        inside ``_x11_window_id_at_point``. On Windows the id is what counts.
+
+        Returns:
+            tuple[int, ...]: Window id, empty when it cannot be determined.
+        """
+
         try:
-            self._exclude_hwnds = (int(self.winId()),)
+            return (int(self.winId()),)
         except (RuntimeError, TypeError, ValueError):
-            self._exclude_hwnds = ()
+            return ()
+
+    def _highlight_frame_rect(self, local_rect: QRect) -> QRect:
+        """
+        Returns the frame rectangle drawn around a target window.
+
+        The frame sits fully *outside* the target so it never covers pixels that
+        the capture will contain. A window flush against a desktop edge has no
+        room there, so on that side the frame is pulled back onto the screen --
+        visible beats correct-but-invisible.
+
+        Args:
+            local_rect: Target window rectangle in overlay coordinates.
+
+        Returns:
+            QRect: Rectangle to stroke with the highlight pen.
+        """
+
+        offset = HIGHLIGHT_FRAME_WIDTH
+        outer = local_rect.adjusted(-offset, -offset, offset, offset)
+        available = self.rect().adjusted(
+            HIGHLIGHT_FRAME_WIDTH // 2,
+            HIGHLIGHT_FRAME_WIDTH // 2,
+            -HIGHLIGHT_FRAME_WIDTH // 2,
+            -HIGHLIGHT_FRAME_WIDTH // 2,
+        )
+        return QRect(
+            max(outer.x(), available.x()),
+            max(outer.y(), available.y()),
+            min(outer.right(), available.right()) - max(outer.x(), available.x()),
+            min(outer.bottom(), available.bottom()) - max(outer.y(), available.y()),
+        )
+
+    def _label_y_outside(self, local_rect: QRect, label_height: int) -> int:
+        """
+        Returns the geometry label's y position, kept off the captured area.
+
+        Args:
+            local_rect: Target window rectangle in overlay coordinates.
+            label_height: Label height in pixels.
+
+        Returns:
+            int: Label top edge in overlay coordinates.
+        """
+
+        gap = HIGHLIGHT_FRAME_WIDTH + 4
+        above = local_rect.y() - label_height - gap
+        if above >= 0:
+            return above
+        below = local_rect.bottom() + gap
+        if below + label_height <= self.height():
+            return below
+        # Neither side has room (window taller than the desktop): keep it visible.
+        return max(0, local_rect.y())
 
     def paintEvent(self, _) -> None:
         """
@@ -1753,14 +1842,14 @@ class WindowCaptureOverlay(QWidget):
         if not self._hover_rect.isNull():
             local_rect = self._to_local_rect(self._hover_rect)
             painter.drawPixmap(local_rect, self._screenshot, local_rect)
-            painter.setPen(QPen(QColor(46, 204, 113), 2))
-            painter.drawRect(local_rect)
+            painter.setPen(QPen(QColor(46, 204, 113), HIGHLIGHT_FRAME_WIDTH))
+            painter.drawRect(self._highlight_frame_rect(local_rect))
             if self._hover_label:
                 label_padding = 8
                 label_height = 24
                 label_width = max(180, len(self._hover_label) * 8)
                 label_x = local_rect.x()
-                label_y = max(0, local_rect.y() - label_height - 4)
+                label_y = self._label_y_outside(local_rect, label_height)
                 painter.fillRect(
                     QRect(label_x, label_y, label_width, label_height),
                     QColor(20, 20, 20, 220),
@@ -2095,7 +2184,69 @@ def _x11_stacking_order() -> list[str]:
     return [str(int(match, 16)) for match in re.findall(r"0x[0-9a-fA-F]+", output)]
 
 
-def _x11_window_id_at_point(global_pos: QPoint) -> str:
+def _x11_window_pid(window_id: str) -> int:
+    """
+    Returns the process id that owns one X11 window.
+
+    Args:
+        window_id: Decimal window id.
+
+    Returns:
+        int: Owning process id, or 0 when the window publishes none.
+    """
+
+    cached = _X11_WINDOW_PID_CACHE.get(window_id)
+    if cached is not None:
+        return cached
+    pid = 0
+    try:
+        output = subprocess.run(
+            ["xprop", "-id", window_id, "_NET_WM_PID"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=0.5,
+        ).stdout
+        match = re.search(r"=\s*(\d+)", output)
+        if match:
+            pid = int(match.group(1))
+    except Exception:
+        pid = 0
+    if len(_X11_WINDOW_PID_CACHE) > _X11_WINDOW_PID_CACHE_LIMIT:
+        # X recycles window ids, so the cache is dropped instead of growing stale.
+        _X11_WINDOW_PID_CACHE.clear()
+    _X11_WINDOW_PID_CACHE[window_id] = pid
+    return pid
+
+
+def _normalize_window_ids(window_ids) -> frozenset[str]:
+    """
+    Normalizes window ids to the decimal string form used on X11.
+
+    Args:
+        window_ids: Window ids as ints, decimal strings, or hex strings.
+
+    Returns:
+        frozenset[str]: Decimal window ids.
+    """
+
+    normalized: set[str] = set()
+    for value in window_ids or ():
+        try:
+            if isinstance(value, str):
+                text = value.strip()
+                normalized.add(str(int(text, 16) if text.lower().startswith("0x") else int(text)))
+            else:
+                normalized.add(str(int(value)))
+        except (TypeError, ValueError):
+            continue
+    return frozenset(normalized)
+
+
+def _x11_window_id_at_point(
+    global_pos: QPoint,
+    exclude_ids: frozenset[str] = frozenset(),
+) -> str:
     """
     Finds the topmost window covering one screen coordinate.
 
@@ -2107,15 +2258,29 @@ def _x11_window_id_at_point(global_pos: QPoint) -> str:
 
     Args:
         global_pos: Point in global screen coordinates.
+        exclude_ids: Window ids to skip, such as Snappix's own capture overlay.
+            The overlay is click-through for the pointer, but X11 still lists it
+            in the stacking order, so without this it wins every hit-test.
 
     Returns:
         str: Window id, or an empty string when nothing matches.
     """
 
+    own_pid = os.getpid()
     for window_id in reversed(_x11_stacking_order()):
+        if window_id in exclude_ids:
+            continue
         geometry = _window_geometry_from_id(window_id)
-        if not geometry.isNull() and geometry.contains(global_pos):
-            return window_id
+        if geometry.isNull() or not geometry.contains(global_pos):
+            continue
+        # Snappix's own capture overlay covers the whole desktop and is listed in
+        # the stacking order even though it is click-through, so it would win every
+        # hit-test and the highlight frame would sit on the outermost screen edge.
+        # Its Qt window id is not reliable here (Qt recreates the native window
+        # while showing it), so ownership is decided by process id.
+        if _x11_window_pid(window_id) == own_pid:
+            continue
+        return window_id
     return ""
 
 
@@ -2131,7 +2296,8 @@ def detect_window_at_point(
 
     Args:
         global_pos: Global cursor position.
-        exclude_hwnds: Optional HWNDs to ignore (Windows overlay, etc.).
+        exclude_hwnds: Window ids to ignore -- on both platforms this is how the
+            capture overlay keeps itself out of its own hit-test.
 
     Returns:
         tuple[str, QRect]: Window id and geometry, or empty values when unknown.
@@ -2153,8 +2319,9 @@ def detect_window_at_point(
 
     if not has_xdotool_and_xwininfo():
         return "", QRect()
+    excluded = _normalize_window_ids(exclude_hwnds)
     try:
-        window_id = _x11_window_id_at_point(global_pos)
+        window_id = _x11_window_id_at_point(global_pos, excluded)
         if window_id:
             return window_id, _window_geometry_from_id(window_id)
 
@@ -2171,8 +2338,10 @@ def detect_window_at_point(
         window_match = re.search(r"WINDOW=(\d+)", mouse_data)
         if not window_match:
             return "", QRect()
+        if window_match.group(1) in excluded:
+            return "", QRect()
         resolved = _resolve_top_level_window_id(window_match.group(1))
-        if not resolved:
+        if not resolved or resolved in excluded:
             return "", QRect()
         return resolved, _window_geometry_from_id(resolved)
     except Exception:
@@ -2383,7 +2552,7 @@ def capture_backend_preference() -> str:
     return _capture_backend_preference
 
 
-def qt_grab_returned_blank() -> bool:
+def qt_grab_unreliable() -> bool:
     """
     Returns whether Qt's own screen grab came back empty in this session.
 
@@ -2391,37 +2560,49 @@ def qt_grab_returned_blank() -> bool:
         bool: True once a Qt grab produced a blank image.
     """
 
-    return _qt_grab_blank_seen
+    return _qt_grab_unreliable
 
 
-def _compose_qt_desktop_grab(screens: list, virtual_geometry: QRect) -> QPixmap:
+def _compose_qt_desktop_grab(
+    screens: list,
+    virtual_geometry: QRect,
+) -> tuple[QPixmap, float]:
     """
     Grabs every screen with Qt and composes them into one virtual desktop image.
+
+    Each screen is measured on its own. A broken grab is not always
+    all-or-nothing: on a multi-monitor desktop one screen can come back black
+    while the other is fine, and judging only the composed image would call that
+    a success and freeze a half-black desktop into the capture overlay.
 
     Args:
         screens: Screens to grab.
         virtual_geometry: Bounding rectangle across all screens.
 
     Returns:
-        QPixmap: Composed desktop pixmap, null when no screen delivered data.
+        tuple[QPixmap, float]: Composed pixmap (null when no screen delivered
+        data) and the visible-content share of the *worst* screen.
     """
 
     composed = QPixmap(virtual_geometry.size())
     composed.fill(Qt.GlobalColor.transparent)
     painted = False
+    worst_fraction = 1.0
     painter = QPainter(composed)
     for screen in screens:
         geometry = screen.geometry()
         screen_pixmap = screen.grabWindow(0)
         if screen_pixmap.isNull():
+            worst_fraction = 0.0
             continue
+        worst_fraction = min(worst_fraction, visible_pixmap_fraction(screen_pixmap))
         target_pos = geometry.topLeft() - virtual_geometry.topLeft()
         painter.drawPixmap(target_pos, screen_pixmap)
         painted = True
     painter.end()
     if not painted:
-        return QPixmap()
-    return composed
+        return QPixmap(), 0.0
+    return composed, worst_fraction
 
 
 def _external_desktop_grab(virtual_geometry: QRect) -> tuple[QPixmap, str] | None:
@@ -2462,7 +2643,7 @@ def _desktop_grab_order() -> tuple[str, ...]:
         return (GRAB_BACKEND_QT,)
     if preference == CAPTURE_BACKEND_EXTERNAL:
         return (_GRAB_SOURCE_EXTERNAL,)
-    if is_wayland_session() or _qt_grab_blank_seen:
+    if is_wayland_session() or _qt_grab_unreliable:
         return (_GRAB_SOURCE_EXTERNAL, GRAB_BACKEND_QT)
     return (GRAB_BACKEND_QT, _GRAB_SOURCE_EXTERNAL)
 
@@ -2481,7 +2662,7 @@ def capture_full_screen() -> DesktopSnapshot:
         set when every source returned an empty image.
     """
 
-    global _qt_grab_blank_seen
+    global _qt_grab_unreliable
 
     screens = QApplication.screens()
     if not screens:
@@ -2494,40 +2675,115 @@ def capture_full_screen() -> DesktopSnapshot:
     if virtual_geometry.width() <= 0 or virtual_geometry.height() <= 0:
         return DesktopSnapshot(pixmap=QPixmap(), virtual_geometry=QRect())
 
-    blank_fallback: tuple[QPixmap, str] | None = None
+    best: tuple[QPixmap, str, float, float] | None = None
+    verdict: bool | None = None
     for source in _desktop_grab_order():
         if source == GRAB_BACKEND_QT:
-            pixmap = _compose_qt_desktop_grab(screens, virtual_geometry)
+            pixmap, worst_screen = _compose_qt_desktop_grab(screens, virtual_geometry)
             backend = GRAB_BACKEND_QT
         else:
             external = _external_desktop_grab(virtual_geometry)
             if external is None:
                 continue
             pixmap, backend = external
+            worst_screen = 1.0
         if pixmap.isNull():
             continue
-        if not is_blank_pixmap(pixmap):
-            return DesktopSnapshot(
-                pixmap=pixmap,
-                virtual_geometry=virtual_geometry,
-                backend=backend,
+        # One conversion per candidate: both the content measurement and the
+        # reference check work on this image.
+        image = pixmap.toImage()
+        if source == GRAB_BACKEND_QT:
+            # Second opinion straight from the X server. Content heuristics cannot
+            # tell a broken grab from a dark desktop, and they miss a grab that
+            # returns a sliver of content and black everywhere else.
+            verdict = verify_image_against_x11(
+                image,
+                virtual_geometry,
+                [screen.geometry() for screen in screens],
             )
+            if verdict is False:
+                worst_screen = 0.0
+        # Trust is decided by the emptiest screen, not by the composed average:
+        # one black monitor out of two still leaves half a desktop of content.
+        # A trustworthy grab always beats a suspicious one, even when the
+        # suspicious one covers more pixels -- content that is missing on one
+        # screen cannot be outvoted by content on another.
+        overall = visible_image_fraction(image)
+        trust = min(overall, worst_screen)
+        trusted = not is_suspicious_fraction(trust)
+        if best is None or (trusted, overall) > (
+            not is_suspicious_fraction(best[3]),
+            best[2],
+        ):
+            best = (pixmap, backend, overall, trust)
+        if trusted:
+            # Clearly a real desktop image: stop before paying for another source.
+            break
         if backend == GRAB_BACKEND_QT:
-            _qt_grab_blank_seen = True
-        if blank_fallback is None:
-            blank_fallback = (pixmap, backend)
+            _qt_grab_unreliable = True
 
-    if blank_fallback is not None:
-        # Every source agreed the screen is black. That can be the truth (a
-        # black desktop), so the capture still goes through -- flagged, so the
-        # caller can explain the situation once.
-        return DesktopSnapshot(
-            pixmap=blank_fallback[0],
-            virtual_geometry=virtual_geometry,
-            backend=blank_fallback[1],
-            blank=True,
-        )
-    return DesktopSnapshot(pixmap=QPixmap(), virtual_geometry=QRect())
+    if best is None:
+        return DesktopSnapshot(pixmap=QPixmap(), virtual_geometry=QRect())
+
+    pixmap, backend, fraction, trust = best
+    blank = fraction <= 0.0
+    if is_suspicious_fraction(trust) or verdict is False:
+        # Either the screen really is (nearly) black, the X server contradicted a
+        # grab, or every source failed the same way. The capture still goes
+        # through -- a black desktop must stay capturable -- but it is recorded so
+        # a repeat report is answerable.
+        _log_degraded_capture(backend, fraction, blank, verdict)
+    breadcrumb(f"capture grab backend={backend} visible={fraction * 100:.1f}%")
+    return DesktopSnapshot(
+        pixmap=pixmap,
+        virtual_geometry=virtual_geometry,
+        backend=backend,
+        blank=blank,
+    )
+
+
+def _log_degraded_capture(
+    backend: str,
+    fraction: float,
+    blank: bool,
+    verdict: bool | None = None,
+) -> None:
+    """
+    Records a capture that came back empty, nearly empty, or contradicted.
+
+    Written to the crash log so an intermittent grab failure leaves evidence
+    instead of only a user report.
+
+    Args:
+        backend: Grab source that produced the best image.
+        fraction: Visible-content share of that image.
+        blank: True when the image had no visible content at all.
+        verdict: X11 reference check result for the Qt grab, if it ran.
+
+    Returns:
+        None
+    """
+
+    from src.crash_log import log_note
+
+    state = "empty" if blank else "nearly empty"
+    if verdict is False:
+        reference = "contradicted by X server reference probe"
+    elif verdict is True:
+        reference = "matched X server reference probe"
+    else:
+        reference = "no reference probe available"
+    log_note(
+        "Degraded screen capture",
+        f"Best grab source: {backend}\n"
+        f"Visible content: {fraction * 100:.1f}% of samples\n"
+        f"Result: {state}\n"
+        f"Qt grab vs X server: {reference}\n"
+        f"Session: {'wayland' if is_wayland_session() else 'x11'}\n"
+        f"Backend preference: {capture_backend_preference()}\n"
+        f"Qt grab already known blank: {_qt_grab_unreliable}\n"
+        f"External tools available: {describe_grab_backends(wayland=is_wayland_session()) or 'none'}",
+    )
 
 
 def _warn_blank_capture_once() -> None:

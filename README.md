@@ -177,7 +177,7 @@ Flatpak modules too would be a much larger, slower build.
 - Post-capture: open editor, copy clipboard, or save to folder
 - Global hotkeys (defaults include `Ctrl+Shift+A/W/F/V/P/R`; unavailable modes are not registered)
 - Wayland region capture via `grim` + `slurp` when available
-- **Black-screenshot recovery**: on some X11 stacks (virtual GPUs, compositors that stop painting the root window) Qt's own screen grab returns a valid but completely black image — the overlay froze a black desktop and the export was black. Snappix now checks every grab and, when it comes back empty, repeats it through an external tool (`ffmpeg` x11grab, `maim`, ImageMagick `import`, `gnome-screenshot`, or `grim` on Wayland), then keeps using that tool for the rest of the session. Override it under **View → Settings → Screenshot source** (`Automatic` / `Qt only` / `External tool only`)
+- **Black-screenshot recovery**: on some X11 stacks (virtual GPUs, compositors that stop painting the root window) Qt's own screen grab intermittently returns a valid but completely black image — the overlay froze a black desktop and the export was black. Snappix measures every grab **per screen** (one black monitor out of two used to pass, because the composed desktop still looked half full) and repeats the capture through an external tool (`ffmpeg` x11grab, `maim`, ImageMagick `import`, `gnome-screenshot`, or `grim` on Wayland) whenever a screen comes back empty or nearly empty, keeping the working tool for the rest of the session. Degraded captures are recorded in `~/.cache/snappix/crash.log`. Override the source under **View → Settings → Screenshot source** (`Automatic` / `Qt only` / `External tool only`)
 - **Autostart mode**: launching via the OS boot/login entry (`--autostart`) keeps Snappix tray-only — no Capture window, no restored Editor tabs; a normal manual start is unaffected
 
 ### Video (X11)
@@ -300,7 +300,7 @@ Regenerate after UI changes (requires Qt display + optional `ffmpeg` for the vid
 |---------|--------|
 | Capture Fullscreen | Full virtual desktop |
 | Capture Area | Drag-selection overlay |
-| Capture Window | Window pick (X11 via xdotool; Windows via Win32); on Wayland prefer Area/Scroll |
+| Capture Window | Window pick (X11 via xdotool; Windows via Win32); on Wayland prefer Area/Scroll. A green frame marks the window that will be captured, drawn just **outside** it so nothing in the shot is covered |
 | Scroll | Auto-scroll + stitch long content |
 | Capture Video | Select region and record (X11, requires `ffmpeg`) |
 | Color picker | Sample screen color → clipboard |

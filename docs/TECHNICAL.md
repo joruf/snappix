@@ -131,8 +131,25 @@ first result that has visible content (`src/desktop_grab.py`):
 | `gnome-screenshot` | X11 fallback | Whole desktop only; result is cropped to the region |
 | `grim` | Wayland only, first | Qt cannot grab on Wayland at all |
 
-- `is_blank_pixmap()` samples a 64px grid (~2 ms on 5120x1440) and treats every
-  sample being transparent or below `BLANK_LUMA_THRESHOLD` as empty.
+- `visible_pixmap_fraction()` samples a 64px grid (~2 ms on 5120x1440) and returns
+  the share of samples that are opaque and above `BLANK_LUMA_THRESHOLD`.
+- **Trust is decided per screen, not per composed image.** The failure is not
+  always all-or-nothing: one monitor of two can come back black while the other
+  is fine, and the composed desktop then still looks 50 % full — which an
+  emptiness check on the whole image happily accepts, freezing a half-black
+  desktop into the overlay. `_compose_qt_desktop_grab()` therefore also reports
+  the *emptiest* screen's share, and anything below
+  `SUSPICIOUS_VISIBLE_FRACTION` (2 %) is cross-checked against an external grab.
+- Candidates are ranked `(trusted, overall_fraction)`: a trustworthy grab always
+  wins over a suspicious one, even when the suspicious one covers more pixels.
+  Content missing on one screen cannot be outvoted by content on another.
+- A genuinely dark desktop costs nothing but time: both sources then report the
+  same darkness, the image is identical, and it stays capturable.
+- Degraded captures are written to the crash log via `crash_log.log_note()`
+  ("Degraded screen capture", with backend, visible share, session type, and the
+  available fallback tools), and every capture leaves a `breadcrumb()` naming the
+  backend and share. An intermittent failure leaves evidence instead of only a
+  user report.
 - When *all* sources come back blank the image is still returned, with
   `DesktopSnapshot.blank` set — a genuinely black desktop must stay capturable —
   and `_warn_blank_capture_once()` explains the situation once per session.
@@ -157,7 +174,24 @@ On Wayland with `grim`/`slurp`, native tools may replace the Qt overlay.
 2. Highlight overlay; pick target window:
    - **Linux X11:** `xdotool selectwindow` + `xwininfo` (click-through overlay).
    - **Windows:** Win32 `EnumWindows` hit-test (`src/win32_window.py`); overlay accepts the click.
-3. Crop snapshot to window rect → editor tab.
+3. Crop snapshot to window rect → editor tab. The crop comes from the snapshot
+   taken in step 1, so nothing the overlay draws can ever land in the image.
+
+**The overlay must not win its own hit-test.** It covers the whole virtual desktop
+and X11 lists it in `_NET_CLIENT_LIST_STACKING` even though it is click-through, so
+`_x11_window_id_at_point()` used to return the overlay for every point: the
+highlight was drawn around the entire desktop and the frame disappeared onto the
+outermost screen edge. Ownership is decided by `_NET_WM_PID` (`_x11_window_pid()`,
+cached per window id) rather than by `winId()` — Qt recreates the native window
+while showing it, so the id read in `__init__`/`showEvent` is not the one X lists.
+`exclude_hwnds` is still honored on both platforms and is what Windows relies on.
+
+**The highlight frame is drawn outside the target** (`_highlight_frame_rect()`), so
+picking never covers pixels the capture will contain; the geometry label follows the
+same rule and flips below the window when there is no room above
+(`_label_y_outside()`). A window flush against a desktop edge has no outside on
+that side, so the frame is pulled back on screen there — visible beats
+correct-but-invisible.
 
 On Wayland, window capture is not reliable; the UI recommends Area or Scroll.
 
@@ -249,6 +283,7 @@ Two constraints shape that code:
 - Screenshot background item + gray workspace chrome outside the document
 - Annotation items tagged with `ITEM_ROLE_TYPE = 1001`
 - Tool state machine, crop, pixel selection, soft brush buffer
+- **Two text item classes**: `StyledTextItem` (plain/box/speech-bubble, `src/annotation_shapes.py`) and legacy `QGraphicsTextItem`. They share `font()` but *not* the setter — `set_font()` vs `setFont()` + `document().setDefaultFont()`. Always go through `apply_text_item_font()`; calling `setFont` on a `StyledTextItem` raises `AttributeError`, and the resize paths run inside Qt virtual overrides where that unwinds through C++ and segfaults the process a few events later. `CropSelectionItem._notify_geometry_changed()` now contains any callback failure and reports it via `crash_log.log_exception()` instead of letting it reach C++
 - Document footer payload when nothing is selected (`type: document`)
 - Rubber-band preview for polyline/polygon/bent-arrow path tools
 

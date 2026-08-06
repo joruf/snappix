@@ -93,6 +93,7 @@ from src.annotation_shapes import (
     TEXT_STYLE_BOX,
     TEXT_STYLE_BUBBLE,
     TEXT_STYLE_PLAIN,
+    apply_text_item_font,
 )
 from src.annotation_style_apply import apply_style_to_annotation_item
 from src.crash_log import breadcrumb
@@ -3725,24 +3726,12 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             return True
 
         if annotation_type == "text":
-            if isinstance(item, StyledTextItem):
-                font = QFont(item.font())
-                point_size = font.pointSize()
-                if point_size <= 0:
-                    point_size = 16
-                font.setPointSize(max(1, int(round(point_size * scale_factor))))
-                item.set_font(font)
-                return True
-            text_item = item
-            font = QFont(text_item.font())
+            font = QFont(item.font())
             point_size = font.pointSize()
             if point_size <= 0:
                 point_size = 16
             font.setPointSize(max(1, int(round(point_size * scale_factor))))
-            text_item.setFont(font)
-            if isinstance(text_item, QGraphicsTextItem):
-                text_item.document().setDefaultFont(font)
-            return True
+            return apply_text_item_font(item, font)
 
         if annotation_type == "image":
             image_item = item
@@ -4831,7 +4820,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             return True
 
         if annotation_type == "text":
-            font = target.font()
+            font = QFont(target.font())
             point_size = font.pointSize()
             if point_size <= 0:
                 point_size = 16
@@ -4839,7 +4828,8 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             scale_y = new_rect.height() / max(0.0001, old_rect.height())
             scale = max(0.1, (scale_x + scale_y) / 2.0)
             font.setPointSize(max(1, int(round(point_size * scale))))
-            target.setFont(font)
+            if not apply_text_item_font(target, font):
+                return False
             target.setPos(new_rect.topLeft())
             return True
 

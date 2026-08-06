@@ -399,11 +399,11 @@ class MeasureBoxSession(QObject):
             QImage | None: 1x1 image at that position, or None on failure.
         """
 
-        from src.capture import qt_grab_returned_blank
+        from src.capture import qt_grab_unreliable
         from src.desktop_grab import grab_desktop_region
         from src.platform import is_wayland_session
 
-        if qt_grab_returned_blank():
+        if qt_grab_unreliable():
             grabbed = grab_desktop_region(x, y, 1, 1, wayland=is_wayland_session())
             if grabbed is not None:
                 image = grabbed[0].toImage()

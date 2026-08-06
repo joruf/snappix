@@ -23,6 +23,38 @@ from src.models import AnnotationModel
 ITEM_ROLE_TYPE = 1001
 
 
+def apply_text_item_font(item: QGraphicsItem, font: QFont) -> bool:
+    """
+    Applies a font to a text annotation of either supported item class.
+
+    Text annotations come in two shapes: the custom ``StyledTextItem`` (plain,
+    box, and speech-bubble containers) and legacy ``QGraphicsTextItem``. They do
+    not share a font setter -- calling ``setFont`` on a ``StyledTextItem`` raises
+    ``AttributeError``, and when that happens inside a Qt virtual override it
+    takes the process down with a segfault. Every caller goes through here.
+
+    Args:
+        item: Text annotation item.
+        font: Font to apply.
+
+    Returns:
+        bool: True when the font was applied.
+    """
+
+    if isinstance(item, StyledTextItem):
+        item.set_font(font)
+        return True
+    if isinstance(item, QGraphicsTextItem):
+        item.setFont(font)
+        item.document().setDefaultFont(font)
+        return True
+    setter = getattr(item, "setFont", None)
+    if setter is None:
+        return False
+    setter(font)
+    return True
+
+
 def _configure_graphics_item(item: QGraphicsItem, annotation_type: str) -> None:
     """
     Applies generic selection flags and metadata to an item.

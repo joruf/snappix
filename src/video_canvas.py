@@ -7,7 +7,7 @@ from __future__ import annotations
 import copy
 
 from PySide6.QtCore import QPoint, QPointF, QRectF, QSizeF, QTimer, QUrl, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter
+from PySide6.QtGui import QColor, QFont, QKeyEvent, QMouseEvent, QPainter
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtMultimediaWidgets import QGraphicsVideoItem
 from PySide6.QtWidgets import (
@@ -37,7 +37,12 @@ from src.annotation_items import (
     list_to_color,
     normalize_stroke_style,
 )
-from src.annotation_shapes import TEXT_STYLE_BUBBLE, StepBadgeItem, StyledTextItem
+from src.annotation_shapes import (
+    TEXT_STYLE_BUBBLE,
+    StepBadgeItem,
+    StyledTextItem,
+    apply_text_item_font,
+)
 from src.annotation_style_apply import apply_style_to_annotation_item
 from src.draw_style_defaults import create_default_style_state
 from src.crop_item import CropSelectionItem
@@ -1862,7 +1867,7 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             return True
 
         if annotation_type in {Tool.TEXT, Tool.CALLOUT}:
-            font = target.font()
+            font = QFont(target.font())
             point_size = font.pointSize()
             if point_size <= 0:
                 point_size = 16
@@ -1870,7 +1875,8 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             scale_y = new_rect.height() / max(0.0001, old_rect.height())
             scale = max(0.1, (scale_x + scale_y) / 2.0)
             font.setPointSize(max(1, int(round(point_size * scale))))
-            target.setFont(font)
+            if not apply_text_item_font(target, font):
+                return False
             target.setPos(new_rect.topLeft())
             return True
 

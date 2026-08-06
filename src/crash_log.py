@@ -126,6 +126,42 @@ def _dump(title: str, body: str) -> None:
     _write("".join(lines))
 
 
+def log_note(title: str, body: str) -> None:
+    """
+    Records a titled diagnostic block with the current breadcrumb trail.
+
+    Used for degraded-but-survivable states that must stay diagnosable after the
+    fact, such as a screen grab that came back empty.
+
+    Args:
+        title: Block heading.
+        body: Detail text.
+
+    Returns:
+        None
+    """
+
+    _dump(title, body)
+
+
+def log_exception(title: str) -> None:
+    """
+    Records the exception being handled, without letting it escape.
+
+    Used at Python/Qt boundaries: an exception raised inside a Qt virtual
+    override unwinds through C++ and takes the process down with a segfault, so
+    those call sites swallow it and report it here instead.
+
+    Args:
+        title: Block heading describing where the failure happened.
+
+    Returns:
+        None
+    """
+
+    _dump(title, traceback.format_exc())
+
+
 def _excepthook(exc_type, exc_value, exc_traceback) -> None:
     """
     Records an uncaught exception, then defers to the previous hook.
