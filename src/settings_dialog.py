@@ -30,12 +30,14 @@ from PySide6.QtWidgets import (
 )
 
 from src.config import (
+    CAPTURE_BACKENDS,
     DEFAULT_HOTKEY_MEASURE_BOX,
     EDITOR_LAST_TAB_BEHAVIORS,
     POST_CAPTURE_ACTIONS,
     AppConfig,
     default_capture_save_directory,
     default_workspace_directory,
+    normalize_capture_backend,
     normalize_editor_last_tab_behavior,
     normalize_hotkey_spec,
     normalize_post_capture_action,
@@ -184,6 +186,24 @@ class SettingsDialog(QDialog):
         if current_index >= 0:
             self.post_capture_combo.setCurrentIndex(current_index)
         form.addRow("After capture:", self.post_capture_combo)
+
+        self.capture_backend_combo = QComboBox()
+        for backend_key, backend_label in CAPTURE_BACKENDS.items():
+            self.capture_backend_combo.addItem(backend_label, backend_key)
+        backend_index = self.capture_backend_combo.findData(
+            normalize_capture_backend(config.capture_backend)
+        )
+        if backend_index >= 0:
+            self.capture_backend_combo.setCurrentIndex(backend_index)
+        self.capture_backend_combo.setToolTip(
+            "Where screenshots are read from. Qt's own grab is the fastest, but "
+            "some drivers and compositors hand it a fully black image. "
+            "Automatic detects that and repeats the capture with an external "
+            "tool (ffmpeg, maim, ImageMagick, gnome-screenshot, or grim on "
+            "Wayland). Pick 'External tool only' if black captures keep "
+            "happening on this machine."
+        )
+        form.addRow("Screenshot source:", self.capture_backend_combo)
 
         self.editor_last_tab_combo = QComboBox()
         for behavior_key, behavior_label in EDITOR_LAST_TAB_BEHAVIORS.items():
@@ -540,6 +560,9 @@ class SettingsDialog(QDialog):
             hotkey_measure_box=normalize_hotkey_spec(self.hotkey_measure_box_edit.text()),
             post_capture_action=normalize_post_capture_action(
                 str(self.post_capture_combo.currentData())
+            ),
+            capture_backend=normalize_capture_backend(
+                str(self.capture_backend_combo.currentData())
             ),
             capture_save_directory=self.save_directory_edit.text().strip(),
             workspace_directory=self.workspace_directory_edit.text().strip(),

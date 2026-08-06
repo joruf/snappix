@@ -127,6 +127,26 @@ POST_CAPTURE_ACTIONS = {
     POST_CAPTURE_SAVE: "Save to folder",
 }
 
+# Grab source for screenshots. Qt's own grab is fast but returns a valid, fully
+# black image on some X11 stacks; external tools read the screen differently and
+# still work there.
+CAPTURE_BACKEND_AUTO = "auto"
+CAPTURE_BACKEND_QT = "qt"
+CAPTURE_BACKEND_EXTERNAL = "external"
+DEFAULT_CAPTURE_BACKEND = CAPTURE_BACKEND_AUTO
+VALID_CAPTURE_BACKENDS = frozenset(
+    {
+        CAPTURE_BACKEND_AUTO,
+        CAPTURE_BACKEND_QT,
+        CAPTURE_BACKEND_EXTERNAL,
+    }
+)
+CAPTURE_BACKENDS = {
+    CAPTURE_BACKEND_AUTO: "Automatic (fall back when empty)",
+    CAPTURE_BACKEND_QT: "Qt only (fastest)",
+    CAPTURE_BACKEND_EXTERNAL: "External tool only",
+}
+
 EDITOR_LAST_TAB_KEEP_OPEN = "keep_open"
 EDITOR_LAST_TAB_CLOSE_WINDOW = "close_window"
 DEFAULT_EDITOR_LAST_TAB_BEHAVIOR = EDITOR_LAST_TAB_KEEP_OPEN
@@ -438,6 +458,22 @@ def normalize_post_capture_action(action: str) -> str:
     return DEFAULT_POST_CAPTURE_ACTION
 
 
+def normalize_capture_backend(backend: str) -> str:
+    """
+    Returns a supported screenshot grab source.
+
+    Args:
+        backend: Requested grab source identifier.
+
+    Returns:
+        str: Valid grab source.
+    """
+
+    if backend in VALID_CAPTURE_BACKENDS:
+        return backend
+    return DEFAULT_CAPTURE_BACKEND
+
+
 def normalize_editor_last_tab_behavior(behavior: str) -> str:
     """
     Returns a supported editor behavior for closing the last tab.
@@ -563,6 +599,7 @@ class AppConfig:
         hotkey_recording_stop: Hotkey to stop an active recording.
         hotkey_measure_box: Hotkey for starting MeasureBox from Capture.
         post_capture_action: Action after a successful capture.
+        capture_backend: Grab source for screenshots (auto, qt, or external).
         capture_save_directory: Optional folder for automatic capture saves.
         workspace_directory: Folder for unsaved editor tabs and session recovery data.
         editor_last_tab_behavior: Behavior when the last editor tab is closed.
@@ -593,6 +630,7 @@ class AppConfig:
     hotkey_recording_stop: str = DEFAULT_HOTKEY_RECORDING_STOP
     hotkey_measure_box: str = DEFAULT_HOTKEY_MEASURE_BOX
     post_capture_action: str = DEFAULT_POST_CAPTURE_ACTION
+    capture_backend: str = DEFAULT_CAPTURE_BACKEND
     capture_save_directory: str = ""
     workspace_directory: str = ""
     editor_last_tab_behavior: str = DEFAULT_EDITOR_LAST_TAB_BEHAVIOR
@@ -710,6 +748,9 @@ class ConfigManager:
             post_capture_action=normalize_post_capture_action(
                 str(payload.get("post_capture_action", DEFAULT_POST_CAPTURE_ACTION))
             ),
+            capture_backend=normalize_capture_backend(
+                str(payload.get("capture_backend", DEFAULT_CAPTURE_BACKEND))
+            ),
             capture_save_directory=str(payload.get("capture_save_directory", "")).strip(),
             workspace_directory=str(payload.get("workspace_directory", "")).strip(),
             editor_last_tab_behavior=normalize_editor_last_tab_behavior(
@@ -799,6 +840,7 @@ class ConfigManager:
             "hotkey_recording_stop": normalize_hotkey_spec(config.hotkey_recording_stop),
             "hotkey_measure_box": normalize_hotkey_spec(config.hotkey_measure_box),
             "post_capture_action": normalize_post_capture_action(config.post_capture_action),
+            "capture_backend": normalize_capture_backend(config.capture_backend),
             "capture_save_directory": config.capture_save_directory.strip(),
             "workspace_directory": config.workspace_directory.strip(),
             "editor_last_tab_behavior": normalize_editor_last_tab_behavior(

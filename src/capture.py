@@ -44,14 +44,24 @@ from PySide6.QtWidgets import (
 
 from src.constants import APP_NAME
 from src.auto_scroll_capture import MAX_SCROLL_FRAMES, perform_auto_scroll_capture
+from src.config import (
+    CAPTURE_BACKEND_AUTO,
+    CAPTURE_BACKEND_EXTERNAL,
+    CAPTURE_BACKEND_QT,
+    normalize_capture_backend,
+)
+from src.desktop_grab import (
+    GRAB_BACKEND_QT,
+    describe_grab_backends,
+    grab_desktop_region,
+    is_blank_pixmap,
+)
 from src.flow_layout import FlowLayoutWidget
 from src.ocr import extract_text_from_png_bytes
 from src.scroll_capture import pixmap_to_png_bytes
 from src.platform import (
-    capture_desktop_png_bytes,
     capture_region_with_grim_slurp,
     get_x11_focused_window_id,
-    has_grim,
     has_grim_and_slurp,
     has_xdotool_and_xwininfo,
     is_wayland_session,
@@ -71,6 +81,19 @@ class CaptureMode:
 
 
 _ACTIVE_OVERLAYS: list[QWidget] = []
+
+# Grab source for screenshots, mirrored from AppConfig.capture_backend.
+_capture_backend_preference = CAPTURE_BACKEND_AUTO
+
+# Identifier for "any external screenshot tool" inside the grab order.
+_GRAB_SOURCE_EXTERNAL = "external"
+
+# Set once Qt's own grab hands back an empty image, so later captures in this
+# session go straight to an external tool instead of grabbing black again.
+_qt_grab_blank_seen = False
+
+# The all-black explanation is shown once per session, not per capture.
+_blank_capture_warning_shown = False
 
 # Wait for the compositor to drop hidden Snappix windows (Capture panel, countdown)
 # before sampling the framebuffer. Too short and the panel still appears in shots.
@@ -198,10 +221,14 @@ class DesktopSnapshot:
     Attributes:
         pixmap: Captured virtual desktop pixmap.
         virtual_geometry: Bounding rectangle across all screens.
+        backend: Grab source that produced the pixmap (``qt``, ``ffmpeg``, …).
+        blank: True when every grab source returned an empty (black) image.
     """
 
     pixmap: QPixmap
     virtual_geometry: QRect
+    backend: str = ""
+    blank: bool = False
 
 
 class CapturePanel(QWidget):
@@ -1373,6 +1400,8 @@ def execute_scroll_capture(
     if snapshot.pixmap.isNull() or snapshot.virtual_geometry.isNull():
         on_cancel()
         return
+    if snapshot.blank:
+        _warn_blank_capture_once()
 
     if is_windows():
         _execute_scroll_capture_windows(
@@ -2328,13 +2357,131 @@ def _window_geometry_from_id(window_id: str) -> QRect:
         return QRect()
 
 
+def set_capture_backend_preference(backend: str) -> None:
+    """
+    Sets which grab source screenshots should use.
+
+    Args:
+        backend: One of ``auto``, ``qt``, or ``external``.
+
+    Returns:
+        None
+    """
+
+    global _capture_backend_preference
+    _capture_backend_preference = normalize_capture_backend(backend)
+
+
+def capture_backend_preference() -> str:
+    """
+    Returns the configured grab source for screenshots.
+
+    Returns:
+        str: One of ``auto``, ``qt``, or ``external``.
+    """
+
+    return _capture_backend_preference
+
+
+def qt_grab_returned_blank() -> bool:
+    """
+    Returns whether Qt's own screen grab came back empty in this session.
+
+    Returns:
+        bool: True once a Qt grab produced a blank image.
+    """
+
+    return _qt_grab_blank_seen
+
+
+def _compose_qt_desktop_grab(screens: list, virtual_geometry: QRect) -> QPixmap:
+    """
+    Grabs every screen with Qt and composes them into one virtual desktop image.
+
+    Args:
+        screens: Screens to grab.
+        virtual_geometry: Bounding rectangle across all screens.
+
+    Returns:
+        QPixmap: Composed desktop pixmap, null when no screen delivered data.
+    """
+
+    composed = QPixmap(virtual_geometry.size())
+    composed.fill(Qt.GlobalColor.transparent)
+    painted = False
+    painter = QPainter(composed)
+    for screen in screens:
+        geometry = screen.geometry()
+        screen_pixmap = screen.grabWindow(0)
+        if screen_pixmap.isNull():
+            continue
+        target_pos = geometry.topLeft() - virtual_geometry.topLeft()
+        painter.drawPixmap(target_pos, screen_pixmap)
+        painted = True
+    painter.end()
+    if not painted:
+        return QPixmap()
+    return composed
+
+
+def _external_desktop_grab(virtual_geometry: QRect) -> tuple[QPixmap, str] | None:
+    """
+    Grabs the virtual desktop with an external screenshot tool.
+
+    Args:
+        virtual_geometry: Bounding rectangle across all screens.
+
+    Returns:
+        tuple[QPixmap, str] | None: Pixmap and backend key, or None when no
+        external tool produced an image.
+    """
+
+    return grab_desktop_region(
+        virtual_geometry.x(),
+        virtual_geometry.y(),
+        virtual_geometry.width(),
+        virtual_geometry.height(),
+        wayland=is_wayland_session(),
+    )
+
+
+def _desktop_grab_order() -> tuple[str, ...]:
+    """
+    Returns the grab sources to try, in order.
+
+    Qt's grab is the fast path and comes first on X11. On Wayland it cannot work
+    at all, and once it has returned a blank image in this session it is demoted
+    so every following capture skips the wasted attempt.
+
+    Returns:
+        tuple[str, ...]: Sources, each ``qt`` or ``external``.
+    """
+
+    preference = capture_backend_preference()
+    if preference == CAPTURE_BACKEND_QT:
+        return (GRAB_BACKEND_QT,)
+    if preference == CAPTURE_BACKEND_EXTERNAL:
+        return (_GRAB_SOURCE_EXTERNAL,)
+    if is_wayland_session() or _qt_grab_blank_seen:
+        return (_GRAB_SOURCE_EXTERNAL, GRAB_BACKEND_QT)
+    return (GRAB_BACKEND_QT, _GRAB_SOURCE_EXTERNAL)
+
+
 def capture_full_screen() -> DesktopSnapshot:
     """
     Captures the current virtual desktop across all monitors.
 
+    Tries the configured grab sources in order and keeps the first image that
+    carries visible content. A source can hand back a valid but completely black
+    pixmap -- Qt's X11 grab does this on some compositors and virtual GPUs -- so
+    every result is checked before it is accepted.
+
     Returns:
-        DesktopSnapshot: Virtual desktop screenshot and geometry.
+        DesktopSnapshot: Virtual desktop screenshot and geometry. ``blank`` is
+        set when every source returned an empty image.
     """
+
+    global _qt_grab_blank_seen
 
     screens = QApplication.screens()
     if not screens:
@@ -2347,30 +2494,77 @@ def capture_full_screen() -> DesktopSnapshot:
     if virtual_geometry.width() <= 0 or virtual_geometry.height() <= 0:
         return DesktopSnapshot(pixmap=QPixmap(), virtual_geometry=QRect())
 
-    if is_wayland_session() and has_grim():
-        png_bytes = capture_desktop_png_bytes()
-        if png_bytes:
-            grim_pixmap = QPixmap()
-            if grim_pixmap.loadFromData(png_bytes, "PNG") and not grim_pixmap.isNull():
-                if grim_pixmap.size() == virtual_geometry.size():
-                    return DesktopSnapshot(pixmap=grim_pixmap, virtual_geometry=virtual_geometry)
-                scaled = grim_pixmap.scaled(
-                    virtual_geometry.size(),
-                    Qt.AspectRatioMode.IgnoreAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-                return DesktopSnapshot(pixmap=scaled, virtual_geometry=virtual_geometry)
+    blank_fallback: tuple[QPixmap, str] | None = None
+    for source in _desktop_grab_order():
+        if source == GRAB_BACKEND_QT:
+            pixmap = _compose_qt_desktop_grab(screens, virtual_geometry)
+            backend = GRAB_BACKEND_QT
+        else:
+            external = _external_desktop_grab(virtual_geometry)
+            if external is None:
+                continue
+            pixmap, backend = external
+        if pixmap.isNull():
+            continue
+        if not is_blank_pixmap(pixmap):
+            return DesktopSnapshot(
+                pixmap=pixmap,
+                virtual_geometry=virtual_geometry,
+                backend=backend,
+            )
+        if backend == GRAB_BACKEND_QT:
+            _qt_grab_blank_seen = True
+        if blank_fallback is None:
+            blank_fallback = (pixmap, backend)
 
-    composed = QPixmap(virtual_geometry.size())
-    composed.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(composed)
-    for screen in screens:
-        geometry = screen.geometry()
-        screen_pixmap = screen.grabWindow(0)
-        target_pos = geometry.topLeft() - virtual_geometry.topLeft()
-        painter.drawPixmap(target_pos, screen_pixmap)
-    painter.end()
-    return DesktopSnapshot(pixmap=composed, virtual_geometry=virtual_geometry)
+    if blank_fallback is not None:
+        # Every source agreed the screen is black. That can be the truth (a
+        # black desktop), so the capture still goes through -- flagged, so the
+        # caller can explain the situation once.
+        return DesktopSnapshot(
+            pixmap=blank_fallback[0],
+            virtual_geometry=virtual_geometry,
+            backend=blank_fallback[1],
+            blank=True,
+        )
+    return DesktopSnapshot(pixmap=QPixmap(), virtual_geometry=QRect())
+
+
+def _warn_blank_capture_once() -> None:
+    """
+    Explains an all-black capture the first time it happens in a session.
+
+    Returns:
+        None
+    """
+
+    global _blank_capture_warning_shown
+
+    if _blank_capture_warning_shown:
+        return
+    _blank_capture_warning_shown = True
+    available = describe_grab_backends(wayland=is_wayland_session())
+    if available:
+        detail = (
+            f"Fallback tools tried: {available}.\n"
+            "If your desktop is not actually black, the display driver or "
+            "compositor refused to hand out the screen contents."
+        )
+    else:
+        detail = (
+            "No fallback screenshot tool is installed. Install one so Snappix "
+            "can bypass the failing Qt grab:\n"
+            "    python3 install_dependencies.py\n"
+            "(ffmpeg, maim, ImageMagick, or gnome-screenshot all work.)"
+        )
+    QMessageBox.warning(
+        None,
+        "Empty Screenshot",
+        "The screen capture came back completely black.\n\n"
+        f"{detail}\n\n"
+        "You can also force a capture source under View > Settings > "
+        "Screenshot source.",
+    )
 
 
 class CaptureDelayOverlay(QWidget):
@@ -2596,6 +2790,8 @@ def execute_color_pick(
     if snapshot.pixmap.isNull() or snapshot.virtual_geometry.isNull():
         on_cancel()
         return
+    if snapshot.blank:
+        _warn_blank_capture_once()
 
     overlay = ColorPickerOverlay(snapshot.pixmap, snapshot.virtual_geometry)
     _track_overlay(overlay)
@@ -2638,6 +2834,8 @@ def execute_text_recognition(
     if snapshot.pixmap.isNull() or snapshot.virtual_geometry.isNull():
         on_cancel()
         return
+    if snapshot.blank:
+        _warn_blank_capture_once()
 
     overlay = RegionCaptureOverlay(snapshot.pixmap, snapshot.virtual_geometry)
     _track_overlay(overlay)
@@ -2940,6 +3138,8 @@ def select_video_region(
         if screenshot.isNull() or virtual_geometry.isNull():
             on_cancel()
             return
+        if snapshot.blank:
+            _warn_blank_capture_once()
 
         overlay = RegionCaptureOverlay(screenshot, virtual_geometry)
         _track_overlay(overlay)

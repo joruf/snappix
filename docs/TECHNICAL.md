@@ -90,6 +90,7 @@ Startup:
 | `src/autostart.py` | XDG autostart `.desktop` |
 | `src/tool_reference.py` / `tool_reference_dialog.py` | In-app tools help |
 | `src/help_dialogs.py` | Shared About / Manual dialogs for both editors and the editor host menu |
+| `src/desktop_grab.py` | Blank-grab detection plus external screenshot backends (x11grab, maim, import, gnome-screenshot, grim) |
 | `src/new_canvas_dialog.py` | Blank canvas size picker |
 | `src/canvas_size.py` | Canvas size helpers |
 | `src/constants.py` | App name, `.sfp` / `.sfpv` extensions, format versions |
@@ -108,6 +109,39 @@ Startup:
 | Color pick | N/A | Full-screen eyedropper overlay |
 
 Before framebuffer grabs, the capture panel hides and the compositor is given a short settle window so Snappix chrome does not appear in screenshots (`CAPTURE_UI_SETTLE_MS` in `src/capture.py`).
+
+### Grab sources and the blank-grab fallback
+
+`QScreen.grabWindow(0)` is the fast path, but on some X11 stacks — virtual GPUs,
+and compositors that do not keep the root window painted — it returns a pixmap
+that is valid, not null, fully opaque, and **completely black**. Retrying does
+not help and no error is raised, so the old `isNull()` guard passed it straight
+into `RegionCaptureOverlay`: the overlay froze a black desktop and the export was
+black. External tools reading the same screen through XGetImage or the
+compositor still return real content in that state.
+
+`capture_full_screen()` therefore tries an ordered list of sources and keeps the
+first result that has visible content (`src/desktop_grab.py`):
+
+| Source | Order | Notes |
+|--------|-------|-------|
+| Qt `grabWindow` | first on X11 | Instant; demoted for the rest of the session once it returns blank |
+| `ffmpeg -f x11grab` | X11 fallback | ~1 s; `-draw_mouse 0` matches Qt's pointer-free grab |
+| `maim`, ImageMagick `import` | X11 fallback | Region-aware, stdout PNG |
+| `gnome-screenshot` | X11 fallback | Whole desktop only; result is cropped to the region |
+| `grim` | Wayland only, first | Qt cannot grab on Wayland at all |
+
+- `is_blank_pixmap()` samples a 64px grid (~2 ms on 5120x1440) and treats every
+  sample being transparent or below `BLANK_LUMA_THRESHOLD` as empty.
+- When *all* sources come back blank the image is still returned, with
+  `DesktopSnapshot.blank` set — a genuinely black desktop must stay capturable —
+  and `_warn_blank_capture_once()` explains the situation once per session.
+- `AppConfig.capture_backend` (`auto` / `qt` / `external`, View → Settings →
+  Screenshot source) forces one side; `AppController._apply_capture_backend()`
+  mirrors it into the capture module.
+- MeasureBox's eyedropper (`_sample_screen_pixel`) uses the external path only
+  after a full capture proved the Qt grab blank: one black pixel on its own is
+  indistinguishable from a legitimately black one.
 
 ### Region
 

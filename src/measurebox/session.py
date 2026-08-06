@@ -372,12 +372,8 @@ class MeasureBoxSession(QObject):
     def _handle_color_pick_at(self, x: int, y: int) -> None:
         if self._overlay is None:
             return
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:
-            return
-        sample = screen.grabWindow(0, x, y, 1, 1)
-        image = sample.toImage()
-        if image.isNull() or image.width() < 1 or image.height() < 1:
+        image = self._sample_screen_pixel(x, y)
+        if image is None:
             return
         color = image.pixelColor(0, 0)
         color_hex = color.name(QColor.NameFormat.HexRgb).upper()
@@ -385,6 +381,42 @@ class MeasureBoxSession(QObject):
         if clipboard is not None:
             clipboard.setText(color_hex)
         self._overlay.set_active_pick_result(color_hex, x, y)
+
+    def _sample_screen_pixel(self, x: int, y: int):
+        """
+        Reads one screen pixel, routing around a failing Qt grab.
+
+        Qt's grab returns black on some X11 stacks. A single black pixel is
+        indistinguishable from a legitimately black one, so the external
+        screenshot tool is only used once a full capture has proven the Qt grab
+        blank in this session.
+
+        Args:
+            x: Global pixel x coordinate.
+            y: Global pixel y coordinate.
+
+        Returns:
+            QImage | None: 1x1 image at that position, or None on failure.
+        """
+
+        from src.capture import qt_grab_returned_blank
+        from src.desktop_grab import grab_desktop_region
+        from src.platform import is_wayland_session
+
+        if qt_grab_returned_blank():
+            grabbed = grab_desktop_region(x, y, 1, 1, wayland=is_wayland_session())
+            if grabbed is not None:
+                image = grabbed[0].toImage()
+                if not image.isNull() and image.width() >= 1 and image.height() >= 1:
+                    return image
+
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return None
+        image = screen.grabWindow(0, x, y, 1, 1).toImage()
+        if image.isNull() or image.width() < 1 or image.height() < 1:
+            return None
+        return image
 
     def _refresh_passthrough_mode(self) -> None:
         if self._overlay is None or self._interaction_locked:

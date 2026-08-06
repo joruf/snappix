@@ -745,6 +745,7 @@ class AppController:
             on_finished=self._on_measure_box_finished,
         )
         self.capture_panel.set_measure_box_hotkey(self.config.hotkey_measure_box)
+        self._apply_capture_backend()
         self._apply_workspace_directory()
         if self.autostart_manager.is_enabled():
             self.config.autostart_enabled = True
@@ -1411,6 +1412,7 @@ class AppController:
         self.config_manager.save(self.config)
         self._measure_box_session.apply_settings(dialog.build_measure_box_settings())
         self.capture_panel.set_measure_box_hotkey(self.config.hotkey_measure_box)
+        self._apply_capture_backend()
         self._apply_workspace_directory()
         self._apply_hotkeys()
         self._install_host_editor_shortcuts()
@@ -1459,6 +1461,18 @@ class AppController:
             size=self.config.resize_handle_size,
             position=self.config.resize_handle_position,
         )
+
+    def _apply_capture_backend(self) -> None:
+        """
+        Applies the configured screenshot grab source to the capture module.
+
+        Returns:
+            None
+        """
+
+        from src.capture import set_capture_backend_preference
+
+        set_capture_backend_preference(self.config.capture_backend)
 
     def _apply_workspace_directory(self) -> None:
         """

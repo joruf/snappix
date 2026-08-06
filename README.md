@@ -177,6 +177,7 @@ Flatpak modules too would be a much larger, slower build.
 - Post-capture: open editor, copy clipboard, or save to folder
 - Global hotkeys (defaults include `Ctrl+Shift+A/W/F/V/P/R`; unavailable modes are not registered)
 - Wayland region capture via `grim` + `slurp` when available
+- **Black-screenshot recovery**: on some X11 stacks (virtual GPUs, compositors that stop painting the root window) Qt's own screen grab returns a valid but completely black image — the overlay froze a black desktop and the export was black. Snappix now checks every grab and, when it comes back empty, repeats it through an external tool (`ffmpeg` x11grab, `maim`, ImageMagick `import`, `gnome-screenshot`, or `grim` on Wayland), then keeps using that tool for the rest of the session. Override it under **View → Settings → Screenshot source** (`Automatic` / `Qt only` / `External tool only`)
 - **Autostart mode**: launching via the OS boot/login entry (`--autostart`) keeps Snappix tray-only — no Capture window, no restored Editor tabs; a normal manual start is unaffected
 
 ### Video (X11)
@@ -336,6 +337,7 @@ Regenerate after UI changes (requires Qt display + optional `ffmpeg` for the vid
 
 - Global hotkeys on/off and bindings (capture + recording)
 - Action after capture (editor / clipboard / save)
+- **Screenshot source**: `Automatic` (Qt grab, external tool when it returns black), `Qt only`, `External tool only`
 - Capture save folder (default `~/Downloads/snappix/`)
 - **Workspace folder** for unsaved tabs (default `~/.snappix/`)
 - Editor keyboard shortcut overrides
