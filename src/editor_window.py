@@ -37,7 +37,6 @@ from PySide6.QtGui import (
     QPolygonF,
     QPdfWriter,
     QPixmap,
-    QTextCursor,
 )
 from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
@@ -59,7 +58,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QProgressDialog,
     QPushButton,
     QSizePolicy,
@@ -75,7 +73,11 @@ from PySide6.QtWidgets import (
 from src.constants import (
     APP_FILE_EXTENSION,
     APP_NAME,
-    build_about_dialog_html,
+)
+from src.help_dialogs import (
+    EDITOR_MANUAL_INTRO,
+    show_about_dialog,
+    show_manual_dialog,
 )
 from src.flow_layout import FlowLayoutWidget
 from src.config import (
@@ -143,7 +145,6 @@ from src.theme import (
     palette_button_stylesheet,
 )
 from src.ocr import format_ocr_copied_status
-from src.shortcuts import build_shortcuts_reference_text
 from src.tool_reference import format_tool_tooltip
 from src.tool_reference_dialog import ToolReferenceDialog
 
@@ -6718,24 +6719,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             None
         """
 
-        box = QMessageBox(self)
-        box.setWindowTitle(f"About {APP_NAME}")
-        box.setIcon(QMessageBox.Icon.Information)
-        box.setTextFormat(Qt.TextFormat.RichText)
-        box.setText(build_about_dialog_html())
-        box.setStandardButtons(QMessageBox.StandardButton.Ok)
-        # QMessageBox labels do not open links unless explicitly enabled.
-        colors = get_theme_colors()
-        for label in box.findChildren(QLabel):
-            label.setTextInteractionFlags(
-                Qt.TextInteractionFlag.TextBrowserInteraction
-            )
-            label.setOpenExternalLinks(True)
-            label.setStyleSheet(
-                f"QLabel {{ color: {colors.text}; }}"
-                f"QLabel a {{ color: {colors.link}; text-decoration: underline; }}"
-            )
-        box.exec()
+        show_about_dialog(self)
 
     def show_manual(self) -> None:
         """
@@ -6745,39 +6729,11 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             None
         """
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Manual")
-        dialog.setModal(True)
-        dialog.resize(720, 560)
-        dialog.setMinimumSize(640, 420)
-
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        text = QPlainTextEdit(dialog)
-        text.setReadOnly(True)
-        text.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        text.setPlainText(
-            "How it works:\n"
-            "1) Use the capture panel to create a screenshot.\n"
-            "2) Annotate with tools in the top bar.\n"
-            "3) Save project, export image, or print from File menu.\n\n"
-            "Open the ? toolbar button for icon explanations.\n\n"
-            + build_shortcuts_reference_text(self._editor_shortcut_overrides)
+        show_manual_dialog(
+            self,
+            EDITOR_MANUAL_INTRO,
+            self._editor_shortcut_overrides,
         )
-        text.setUndoRedoEnabled(False)
-        text.moveCursor(QTextCursor.MoveOperation.Start)
-        layout.addWidget(text, 1)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
-        close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
-        if close_button is not None:
-            close_button.clicked.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        dialog.exec()
 
     def show_tools_reference(self) -> None:
         """

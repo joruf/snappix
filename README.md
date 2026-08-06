@@ -204,6 +204,7 @@ Flatpak modules too would be a much larger, slower build.
 ### Editor
 
 - Tabbed **Editor Host** for multiple image and video tabs
+- The Editor keeps a **File / View / Help menu without any open tab**, so New Canvas, Open Project, Import Image/Video, Theme, Settings, and Help → Check for Updates / About / Manual stay reachable in the empty editor; once a tab is open, that tab's own menu bar takes over
 - Drawing tools: Select, Rectangle, Ellipse, Line, Arrow, Text, Step, Crop, Polyline, Polygon, Bent Arrow, …
 - Pixel tools: Rect/Ellipse/Lasso selection, Magic Wand, Brush, Eraser, Fill, Eyedropper
 - Redaction: **Blur**; background paint: **Bg Fill**; **OCR** region → clipboard

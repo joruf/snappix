@@ -89,6 +89,7 @@ Startup:
 | `src/cli.py` | Non-GUI commands |
 | `src/autostart.py` | XDG autostart `.desktop` |
 | `src/tool_reference.py` / `tool_reference_dialog.py` | In-app tools help |
+| `src/help_dialogs.py` | Shared About / Manual dialogs for both editors and the editor host menu |
 | `src/new_canvas_dialog.py` | Blank canvas size picker |
 | `src/canvas_size.py` | Canvas size helpers |
 | `src/constants.py` | App name, `.sfp` / `.sfpv` extensions, format versions |
@@ -186,6 +187,26 @@ same listener.
 - `VideoEditorWindow` — video editor with timeline
 
 Accent styling: `build_editor_accent_stylesheet(theme)` on the host; capture panel uses `build_capture_accent_stylesheet(theme)`.
+
+#### Host menu bar
+
+Each tab is a `QMainWindow` that draws its own menu bar *inside* the tab, so with
+zero tabs the editor had no menu at all. `_build_editor_host_menu()` gives the host
+its own File / View / Help menu covering the tab-independent actions (new canvas,
+open/import, capture panel, theme, settings, update/about/manual);
+`_sync_editor_host_view()` shows it only while `editor_tabs.count() == 0` so two
+menu bars are never stacked.
+
+Two constraints shape that code:
+
+- The host key bindings are `QShortcut` objects on the same window
+  (`_install_host_editor_shortcuts()`). Giving the menu actions the same sequences
+  would make Qt report an ambiguous shortcut and fire neither, so the binding is
+  only *rendered* — `_host_menu_label()` appends `"\t<hint>"`, which Qt draws in the
+  menu's shortcut column.
+- PySide hands the menu bar and its menus to Python ownership; dropping the
+  references destroys the C++ objects and leaves titles that open nothing. They are
+  kept in `_host_menu_bar` / `_host_menus`.
 
 ### Image canvas
 

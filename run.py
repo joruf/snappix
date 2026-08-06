@@ -855,6 +855,7 @@ class AppController:
         self.editor_stack.addWidget(self.editor_empty_state)
         self.editor_stack.addWidget(self.editor_tabs)
         self.editor_host.setCentralWidget(self.editor_stack)
+        self._build_editor_host_menu()
         self._sync_editor_host_view()
         self._host_shortcuts: dict[str, object] = {}
         self._install_host_editor_shortcuts()
@@ -1642,6 +1643,7 @@ class AppController:
             self.config_manager.save(self.config)
         self._sync_editor_theme_actions(normalized)
         self._sync_theme_tray_actions(normalized)
+        self._sync_host_theme_actions(normalized)
         for editor in list(self.editors):
             try:
                 editor.refresh_theme_styles()
@@ -1662,6 +1664,7 @@ class AppController:
         if normalize_theme_name(theme_name) == normalize_theme_name(self.config.theme):
             self._sync_theme_tray_actions(theme_name)
             self._sync_editor_theme_actions(theme_name)
+            self._sync_host_theme_actions(theme_name)
             return
         self._apply_theme(theme_name, persist=True)
 
@@ -2635,6 +2638,293 @@ class AppController:
 
         self._show_editor_host()
 
+    def _build_editor_host_menu(self) -> None:
+        """
+        Builds the menu bar of the editor host window.
+
+        Every editor tab is a QMainWindow that draws its own menu bar inside the
+        tab, so without any tab the editor had no menu at all and File, View, and
+        Help entries were unreachable. This host menu covers exactly the actions
+        that work without a document.
+
+        Returns:
+            None
+        """
+
+        from PySide6.QtGui import QAction, QActionGroup
+
+        self._host_menu_actions: dict[str, tuple[object, str]] = {}
+        # PySide hands the menu bar and its menus to Python ownership, so the
+        # controller keeps references -- dropping them destroys the C++ objects
+        # and leaves the window with menu titles that open nothing.
+        self._host_menu_bar = self.editor_host.menuBar()
+        self._host_menu_bar.clear()
+        file_menu = self._host_menu_bar.addMenu("File")
+        view_menu = self._host_menu_bar.addMenu("View")
+        help_menu = self._host_menu_bar.addMenu("Help")
+        self._host_menus: dict[str, object] = {
+            "File": file_menu,
+            "View": view_menu,
+            "Help": help_menu,
+        }
+
+        self._add_host_menu_action(
+            file_menu,
+            "New Canvas...",
+            "Create a blank canvas with a custom size.",
+            lambda: self.create_new_canvas_tab(self.editor_host),
+            action_id="new_canvas",
+        )
+        self._add_host_menu_action(
+            file_menu,
+            "New Tab",
+            "Open a new empty editor tab.",
+            self.create_empty_editor_tab,
+            action_id="new_tab",
+        )
+        file_menu.addSeparator()
+        self._add_host_menu_action(
+            file_menu,
+            "Open Project...",
+            "Open an existing Snappix project.",
+            self._open_project_from_editor_host,
+            action_id="open_project",
+        )
+        self._add_host_menu_action(
+            file_menu,
+            "Import Image as New Tab...",
+            "Open an external image in a new editor tab.",
+            lambda: self.import_image_as_new_tab(self.editor_host),
+        )
+        self._add_host_menu_action(
+            file_menu,
+            "Import Video...",
+            "Open an external video file in a new video editor tab.",
+            lambda: self.import_video_as_new_tab(self.editor_host),
+        )
+        file_menu.addSeparator()
+        self._add_host_menu_action(
+            file_menu,
+            "Capture Panel",
+            "Bring the capture panel back to the front.",
+            self._show_capture_panel_from_editor,
+        )
+        file_menu.addSeparator()
+        self._add_host_menu_action(
+            file_menu,
+            "Close Editor Window",
+            "Hide the editor window and keep Snappix running in the tray.",
+            self.editor_host.close,
+        )
+        self._add_host_menu_action(
+            file_menu,
+            f"Quit {APP_NAME}",
+            "Exit the application completely.",
+            self.quit_application,
+        )
+
+        theme_menu = view_menu.addMenu("Theme")
+        self._host_menus["Theme"] = theme_menu
+        self._host_theme_action_group = QActionGroup(self.editor_host)
+        self._host_theme_action_group.setExclusive(True)
+        self._host_theme_actions: dict[str, QAction] = {}
+        for theme_name, label, tooltip in (
+            (THEME_DARK, "Dark", "Use the dark application theme."),
+            (THEME_LIGHT, "Light", "Use the light application theme."),
+            (THEME_SLATE, "Slate", "Use the cool slate application theme."),
+            (THEME_SEPIA, "Sepia", "Use the warm sepia application theme."),
+        ):
+            action = QAction(label, self.editor_host)
+            action.setCheckable(True)
+            action.setToolTip(tooltip)
+            action.triggered.connect(
+                lambda _checked=False, name=theme_name: self.set_theme(name)
+            )
+            self._host_theme_action_group.addAction(action)
+            theme_menu.addAction(action)
+            self._host_theme_actions[theme_name] = action
+        self._sync_host_theme_actions(self.config.theme)
+
+        view_menu.addSeparator()
+        self._add_host_menu_action(
+            view_menu,
+            "Settings...",
+            "Configure hotkeys, shortcuts, and capture behavior.",
+            self.show_settings_dialog,
+        )
+
+        self._add_host_menu_action(
+            help_menu,
+            "Check for Updates...",
+            "Check GitHub for a newer version of Snappix.",
+            self._check_for_updates_from_editor,
+        )
+        self._add_host_menu_action(
+            help_menu,
+            "About",
+            "Show application information.",
+            self._show_about_from_editor,
+        )
+        self._add_host_menu_action(
+            help_menu,
+            "Manual",
+            "Show a short manual and the current keyboard shortcuts.",
+            self._show_manual_from_editor,
+        )
+
+    def _add_host_menu_action(
+        self,
+        menu,
+        label: str,
+        tooltip: str,
+        callback,
+        action_id: str = "",
+    ):
+        """
+        Adds one action to the editor host menu bar.
+
+        Args:
+            menu: Target menu.
+            label: Menu entry text.
+            tooltip: Status tip shown for the entry.
+            callback: Zero-argument callable run on activation.
+            action_id: Optional shortcut identifier for the key hint.
+
+        Returns:
+            QAction: Created menu action.
+        """
+
+        from PySide6.QtGui import QAction
+
+        action = QAction(label, self.editor_host)
+        action.setToolTip(tooltip)
+        action.triggered.connect(lambda _checked=False: callback())
+        menu.addAction(action)
+        if action_id:
+            self._host_menu_actions[action_id] = (action, label)
+            action.setText(self._host_menu_label(label, action_id))
+        return action
+
+    def _host_menu_label(self, label: str, action_id: str) -> str:
+        """
+        Returns menu text with the configured shortcut as a right-aligned hint.
+
+        The host key bindings live on QShortcut objects owned by the editor host
+        (see ``_install_host_editor_shortcuts``). Giving the menu actions the same
+        key sequences would make Qt report an ambiguous shortcut and fire neither,
+        so the binding is rendered as the menu shortcut column via a tab character
+        instead of being registered a second time.
+
+        Args:
+            label: Plain menu entry text.
+            action_id: Shortcut identifier to resolve.
+
+        Returns:
+            str: Menu text, with a shortcut hint when one is configured.
+        """
+
+        from PySide6.QtGui import QKeySequence
+        from src.shortcuts import sequences_for_action
+
+        sequences = sequences_for_action(action_id, self.config.editor_shortcuts)
+        if not sequences:
+            return label
+        hint = sequences[0].toString(QKeySequence.SequenceFormat.NativeText)
+        if not hint:
+            return label
+        return f"{label}\t{hint}"
+
+    def _refresh_host_menu_shortcut_hints(self) -> None:
+        """
+        Re-renders host menu shortcut hints after a shortcut change.
+
+        Returns:
+            None
+        """
+
+        for action_id, (action, label) in getattr(self, "_host_menu_actions", {}).items():
+            try:
+                action.setText(self._host_menu_label(label, action_id))
+            except RuntimeError:
+                continue
+
+    def _sync_host_theme_actions(self, theme_name: str) -> None:
+        """
+        Updates checked states of the editor host theme menu actions.
+
+        Args:
+            theme_name: Active theme identifier.
+
+        Returns:
+            None
+        """
+
+        actions = getattr(self, "_host_theme_actions", None)
+        if not actions:
+            return
+        normalized = normalize_theme_name(theme_name)
+        for name, action in actions.items():
+            try:
+                action.blockSignals(True)
+                action.setChecked(name == normalized)
+                action.blockSignals(False)
+            except RuntimeError:
+                continue
+
+    def _show_capture_panel_from_editor(self) -> None:
+        """
+        Brings the capture panel back in front of the editor host.
+
+        Returns:
+            None
+        """
+
+        from src.platform import raise_qt_window
+
+        self.capture_panel.show()
+        self._apply_capture_taskbar_identity()
+        raise_qt_window(self.capture_panel)
+
+    def _check_for_updates_from_editor(self) -> None:
+        """
+        Opens the update check parented to the editor host window.
+
+        Returns:
+            None
+        """
+
+        from src.update_dialog import check_for_updates
+
+        check_for_updates(self.editor_host)
+
+    def _show_about_from_editor(self) -> None:
+        """
+        Shows the About dialog parented to the editor host window.
+
+        Returns:
+            None
+        """
+
+        from src.help_dialogs import show_about_dialog
+
+        show_about_dialog(self.editor_host)
+
+    def _show_manual_from_editor(self) -> None:
+        """
+        Shows the manual and current shortcuts from the editor host window.
+
+        Returns:
+            None
+        """
+
+        from src.help_dialogs import HOST_MANUAL_INTRO, show_manual_dialog
+
+        show_manual_dialog(
+            self.editor_host,
+            HOST_MANUAL_INTRO,
+            self.config.editor_shortcuts,
+        )
+
     def _install_host_editor_shortcuts(self) -> None:
         """
         Installs tab/host File shortcuts on the editor window (application-wide).
@@ -2675,6 +2965,8 @@ class AppController:
             else:
                 shortcut.setKeys([])
                 shortcut.setEnabled(False)
+
+        self._refresh_host_menu_shortcut_hints()
 
     def create_new_canvas_tab(self, parent=None) -> None:
         """
@@ -2940,7 +3232,11 @@ class AppController:
             None
         """
 
-        if self.editor_tabs.count() > 0:
+        has_tabs = self.editor_tabs.count() > 0
+        # Each tab draws its own menu bar inside the tab, so the host menu bar is
+        # only shown while no tab can provide one.
+        self._host_menu_bar.setVisible(not has_tabs)
+        if has_tabs:
             self.editor_stack.setCurrentWidget(self.editor_tabs)
             return
         self.editor_stack.setCurrentWidget(self.editor_empty_state)

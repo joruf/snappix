@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QEvent, QMimeData, Qt, QSize, Signal
-from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QKeyEvent, QTextCursor
+from PySide6.QtGui import QAction, QActionGroup, QColor, QGuiApplication, QKeyEvent
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
-    QPlainTextEdit,
     QProgressDialog,
     QPushButton,
     QSizePolicy,
@@ -37,9 +36,9 @@ from src.clipboard_json import get_json_clipboard_data, set_json_clipboard_data
 from src.draw_style_defaults import create_default_style_state
 from src.history_mixin import EditorHistoryMixin
 from src.shortcut_registry_mixin import ShortcutRegistryMixin
-from src.constants import APP_NAME, build_about_dialog_html
+from src.constants import APP_NAME
 from src.flow_layout import FlowLayoutWidget
-from src.shortcuts import build_shortcuts_reference_text
+from src.help_dialogs import VIDEO_MANUAL_INTRO, show_about_dialog, show_manual_dialog
 from src.theme import THEME_DARK, THEME_LIGHT, THEME_SEPIA, THEME_SLATE, get_theme_colors
 from src.timeline_widget import TimelineWidget
 from src.tool_icons import apply_zoom_step_button_style, build_playback_icon, build_zoom_reset_icon
@@ -1537,22 +1536,7 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             None
         """
 
-        box = QMessageBox(self)
-        box.setWindowTitle(f"About {APP_NAME}")
-        box.setIcon(QMessageBox.Icon.Information)
-        box.setTextFormat(Qt.TextFormat.RichText)
-        box.setText(build_about_dialog_html())
-        box.setStandardButtons(QMessageBox.StandardButton.Ok)
-        # QMessageBox labels do not open links unless explicitly enabled.
-        colors = get_theme_colors()
-        for label in box.findChildren(QLabel):
-            label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
-            label.setOpenExternalLinks(True)
-            label.setStyleSheet(
-                f"QLabel {{ color: {colors.text}; }}"
-                f"QLabel a {{ color: {colors.link}; text-decoration: underline; }}"
-            )
-        box.exec()
+        show_about_dialog(self)
 
     def show_manual(self) -> None:
         """
@@ -1562,38 +1546,11 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             None
         """
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Manual")
-        dialog.setModal(True)
-        dialog.resize(720, 560)
-        dialog.setMinimumSize(640, 420)
-
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(10)
-
-        text = QPlainTextEdit(dialog)
-        text.setReadOnly(True)
-        text.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
-        text.setPlainText(
-            "How it works:\n"
-            "1) Record or import a video.\n"
-            "2) Annotate with time-based tools in the top bar and timeline.\n"
-            "3) Save the project or export a flattened MP4 from the File menu.\n\n"
-            + build_shortcuts_reference_text(self._editor_shortcut_overrides)
+        show_manual_dialog(
+            self,
+            VIDEO_MANUAL_INTRO,
+            self._editor_shortcut_overrides,
         )
-        text.setUndoRedoEnabled(False)
-        text.moveCursor(QTextCursor.MoveOperation.Start)
-        layout.addWidget(text, 1)
-
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, dialog)
-        close_button = buttons.button(QDialogButtonBox.StandardButton.Close)
-        if close_button is not None:
-            close_button.clicked.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-
-        dialog.exec()
 
     def set_minimize_to_tray_on_close(self, enabled: bool) -> None:
         """
