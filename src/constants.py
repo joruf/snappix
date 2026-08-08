@@ -19,7 +19,7 @@ VIDEO_PROJECT_FORMAT_VERSION = 1
 MAX_VIDEO_DURATION_MS = 30 * 60 * 1000
 
 ABOUT_AUTHOR = "Joachim Ruf"
-ABOUT_WEBSITE = "loresoft.de"
+ABOUT_WEBSITE = "www.loresoft.de"
 ABOUT_GITHUB = "https://github.com/joruf/snappix"
 
 

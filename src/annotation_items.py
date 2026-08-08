@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 from src.annotation_shapes import TEXT_STYLE_PLAIN
 from src.models import AnnotationModel
 from src.storage import base64_png_to_pixmap
+from src.qt_safety import safe_bounding_rect, safe_paint, safe_shape
 
 ITEM_ROLE_TYPE = 1001
 ITEM_ROLE_ID = 1002
@@ -293,6 +294,7 @@ class StrokeLineItem(HaloMixin, QGraphicsLineItem):
 
     HIT_PADDING = 8.0
 
+    @safe_paint
     def paint(self, painter, option, widget=None) -> None:  # type: ignore[override]
         """
         Paints the contrast halo underneath the line stroke.
@@ -314,6 +316,7 @@ class StrokeLineItem(HaloMixin, QGraphicsLineItem):
             painter.restore()
         super().paint(painter, option, widget)
 
+    @safe_shape
     def shape(self) -> QPainterPath:
         """
         Returns a stroked path around the line for mouse hit testing.
@@ -338,6 +341,7 @@ class StrokeLineItem(HaloMixin, QGraphicsLineItem):
         stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         return stroker.createStroke(base)
 
+    @safe_bounding_rect
     def boundingRect(self) -> QRectF:
         """
         Returns bounds that include the expanded hit stroke.
@@ -394,6 +398,7 @@ class ArrowItem(StrokeLineItem):
         path.closeSubpath()
         return path
 
+    @safe_shape
     def shape(self) -> QPainterPath:
         """
         Returns clickable geometry for the shaft and arrow head.
@@ -408,6 +413,7 @@ class ArrowItem(StrokeLineItem):
             path.addPath(head)
         return path
 
+    @safe_paint
     def paint(
         self,
         painter: QPainter,
@@ -478,6 +484,7 @@ class DoubleArrowItem(StrokeLineItem):
             self._head_at(line.p2(), QPointF(dx, dy)),
         ]
 
+    @safe_shape
     def shape(self) -> QPainterPath:
         """
         Returns clickable geometry for the shaft and both arrow heads.
@@ -492,6 +499,7 @@ class DoubleArrowItem(StrokeLineItem):
                 path.addPath(head)
         return path
 
+    @safe_paint
     def paint(
         self,
         painter: QPainter,

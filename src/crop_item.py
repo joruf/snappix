@@ -11,6 +11,8 @@ from PySide6.QtCore import QLineF, QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QCursor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsRectItem
 
+from src.qt_safety import safe_bounding_rect, safe_item_change, safe_paint, safe_shape
+
 FRAME_MODE_RECT = "rect"
 FRAME_MODE_ELLIPSE = "ellipse"
 FRAME_MODE_LINE = "line"
@@ -178,6 +180,7 @@ class CropSelectionItem(QGraphicsRectItem):
         bottom = max(self._line_p1.y(), self._line_p2.y()) + pad
         self.setRect(QRectF(left, top, max(2.0, right - left), max(2.0, bottom - top)))
 
+    @safe_bounding_rect
     def boundingRect(self) -> QRectF:
         """
         Returns expanded bounds so handles remain interactive.
@@ -345,6 +348,7 @@ class CropSelectionItem(QGraphicsRectItem):
 
         return anchor_x, anchor_y
 
+    @safe_paint
     def paint(self, painter: QPainter, option, widget=None) -> None:
         """
         Paints crop frame and resize handles.
@@ -421,6 +425,7 @@ class CropSelectionItem(QGraphicsRectItem):
         self.prepareGeometryChange()
         self.update()
 
+    @safe_shape
     def shape(self) -> QPainterPath:
         """
         Returns the interactive hit region for the overlay.
@@ -903,6 +908,7 @@ class CropSelectionItem(QGraphicsRectItem):
         self.update()
         self._notify_geometry_changed()
 
+    @safe_item_change
     def itemChange(self, change, value):  # type: ignore[override]
         """
         Notifies geometry updates after item movement.

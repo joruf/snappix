@@ -20,6 +20,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem, QStyleOptionGraphicsItem, QWidget
 
 from src.color_contrast import halo_color_for, halo_pen_width
+from src.qt_safety import safe_bounding_rect, safe_paint, safe_shape
 
 # Rect-like annotation types that store AABB geometry (x, y, width, height).
 SHAPE_RECT_TYPES = frozenset(
@@ -618,6 +619,7 @@ class PathShapeItem(HaloMixin, QGraphicsPathItem):
         self._corner_radius = max(0.0, float(corner_radius))
         self._rebuild_path()
 
+    @safe_bounding_rect
     def boundingRect(self) -> QRectF:  # type: ignore[override]
         """
         Returns the item bounds, grown to cover the halo when it is on.
@@ -632,6 +634,7 @@ class PathShapeItem(HaloMixin, QGraphicsPathItem):
             return bounds
         return bounds.adjusted(-margin, -margin, margin, margin)
 
+    @safe_paint
     def paint(
         self,
         painter: QPainter,
@@ -935,6 +938,7 @@ class SpotlightItem(QGraphicsItem):
             scene_rect.height(),
         )
 
+    @safe_bounding_rect
     def boundingRect(self) -> QRectF:
         """
         Returns bounds covering the dim overlay and focus.
@@ -945,6 +949,7 @@ class SpotlightItem(QGraphicsItem):
 
         return self._cover_rect().united(self._focus_rect).adjusted(-2.0, -2.0, 2.0, 2.0)
 
+    @safe_shape
     def shape(self) -> QPainterPath:
         """
         Returns the selectable focus region (not the full dim overlay).
@@ -960,6 +965,7 @@ class SpotlightItem(QGraphicsItem):
             path.addEllipse(self._focus_rect)
         return path
 
+    @safe_paint
     def paint(
         self,
         painter: QPainter,
@@ -1083,6 +1089,7 @@ class PolyPathItem(HaloMixin, QGraphicsPathItem):
             path.addPath(build_arrow_head(tip, direction, size=size))
         self.setPath(path)
 
+    @safe_shape
     def shape(self) -> QPainterPath:
         """
         Returns a thickened clickable stroke around the path.
@@ -1100,6 +1107,7 @@ class PolyPathItem(HaloMixin, QGraphicsPathItem):
         stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         return stroker.createStroke(base)
 
+    @safe_bounding_rect
     def boundingRect(self) -> QRectF:
         """
         Returns the path bounds widened so vertex handles are not clipped.
@@ -1168,6 +1176,7 @@ class PolyPathItem(HaloMixin, QGraphicsPathItem):
             locked.setX(origin.x())
         return locked
 
+    @safe_paint
     def paint(self, painter: QPainter, option, widget=None) -> None:  # type: ignore[override]
         """
         Draws the path and, while selected, its draggable vertex handles.

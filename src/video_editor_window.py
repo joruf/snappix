@@ -1218,16 +1218,19 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             None
         """
 
+        # Cleared in a finally: a stuck flag swallows every later history pick,
+        # so clicking an undo entry would stop restoring that state.
         self._syncing_history_list = True
-        if not hasattr(self, "history_list_combo"):
+        try:
+            if not hasattr(self, "history_list_combo"):
+                return
+            self.history_list_combo.clear()
+            for index, label in enumerate(self._history_labels, start=1):
+                self.history_list_combo.addItem(f"{index}: {label}")
+            if self._history_index >= 0:
+                self.history_list_combo.setCurrentIndex(self._history_index)
+        finally:
             self._syncing_history_list = False
-            return
-        self.history_list_combo.clear()
-        for index, label in enumerate(self._history_labels, start=1):
-            self.history_list_combo.addItem(f"{index}: {label}")
-        if self._history_index >= 0:
-            self.history_list_combo.setCurrentIndex(self._history_index)
-        self._syncing_history_list = False
 
     def set_recovery_path(self, path: str) -> None:
         """

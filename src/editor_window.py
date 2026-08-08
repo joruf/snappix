@@ -4407,17 +4407,21 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                 selected_id = str(payload.get("id") or "")
                 break
 
+        # Cleared in a finally: a stuck flag makes every later combo change look
+        # like an echo of this refresh, and the layer controls stop working.
         self._syncing_layer_panel = True
-        self.layer_combo.clear()
-        for payload in layer_payloads:
-            label = str(payload.get("name") or "Layer")
-            layer_id = str(payload.get("id") or "")
-            self.layer_combo.addItem(label, layer_id)
-        if selected_id:
-            selected_index = self.layer_combo.findData(selected_id)
-            if selected_index >= 0:
-                self.layer_combo.setCurrentIndex(selected_index)
-        self._syncing_layer_panel = False
+        try:
+            self.layer_combo.clear()
+            for payload in layer_payloads:
+                label = str(payload.get("name") or "Layer")
+                layer_id = str(payload.get("id") or "")
+                self.layer_combo.addItem(label, layer_id)
+            if selected_id:
+                selected_index = self.layer_combo.findData(selected_id)
+                if selected_index >= 0:
+                    self.layer_combo.setCurrentIndex(selected_index)
+        finally:
+            self._syncing_layer_panel = False
         self._set_layer_controls_enabled(bool(layer_payloads))
 
     def _set_layer_controls_enabled(self, enabled: bool) -> None:
@@ -4607,8 +4611,10 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         if isinstance(layer_id, str) and layer_id:
             if self.layer_combo.findData(layer_id) >= 0:
                 self._syncing_layer_panel = True
-                self.layer_combo.setCurrentIndex(self.layer_combo.findData(layer_id))
-                self._syncing_layer_panel = False
+                try:
+                    self.layer_combo.setCurrentIndex(self.layer_combo.findData(layer_id))
+                finally:
+                    self._syncing_layer_panel = False
         self.layer_visible_check.blockSignals(True)
         self.layer_lock_check.blockSignals(True)
         self.layer_visible_check.setChecked(bool(payload.get("visible", True)))
@@ -5166,13 +5172,17 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             None
         """
 
+        # Cleared in a finally: a stuck flag swallows every later history pick,
+        # so clicking an undo entry would stop restoring that state.
         self._syncing_history_list = True
-        self.history_list_combo.clear()
-        for index, label in enumerate(self._history_labels, start=1):
-            self.history_list_combo.addItem(f"{index}: {label}")
-        if self._history_index >= 0:
-            self.history_list_combo.setCurrentIndex(self._history_index)
-        self._syncing_history_list = False
+        try:
+            self.history_list_combo.clear()
+            for index, label in enumerate(self._history_labels, start=1):
+                self.history_list_combo.addItem(f"{index}: {label}")
+            if self._history_index >= 0:
+                self.history_list_combo.setCurrentIndex(self._history_index)
+        finally:
+            self._syncing_history_list = False
 
     def import_image(self) -> None:
         """

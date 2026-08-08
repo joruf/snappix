@@ -261,23 +261,30 @@ class ResizeOverlayMixin:
             self._scene.addItem(overlay)
             self._resize_overlay_item = overlay
         else:
+            # The flag suppresses the geometry callback this block would otherwise
+            # trigger. It must be cleared even when a step in between fails --
+            # leaving it set makes every later sync return early, and the resize
+            # handles silently stop following the annotation for the rest of the
+            # session.
             self._updating_resize_overlay = True
-            self._resize_overlay_item.set_frame_mode(frame_mode)
-            self._resize_overlay_item.set_interior_interactive(interior_interactive)
-            self._resize_overlay_item.setFlag(
-                QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
-                self._resize_overlay_is_movable(target) and frame_mode != FRAME_MODE_LINE,
-            )
-            if frame_mode == FRAME_MODE_LINE:
-                endpoints = line_scene_endpoints(target)
-                if endpoints is not None:
-                    self._resize_overlay_item.set_line_endpoints(endpoints[0], endpoints[1])
-            else:
-                self._resize_overlay_item.setPos(target_rect.topLeft())
-                self._resize_overlay_item.setRect(
-                    QRectF(0.0, 0.0, target_rect.width(), target_rect.height())
+            try:
+                self._resize_overlay_item.set_frame_mode(frame_mode)
+                self._resize_overlay_item.set_interior_interactive(interior_interactive)
+                self._resize_overlay_item.setFlag(
+                    QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                    self._resize_overlay_is_movable(target) and frame_mode != FRAME_MODE_LINE,
                 )
-            self._updating_resize_overlay = False
+                if frame_mode == FRAME_MODE_LINE:
+                    endpoints = line_scene_endpoints(target)
+                    if endpoints is not None:
+                        self._resize_overlay_item.set_line_endpoints(endpoints[0], endpoints[1])
+                else:
+                    self._resize_overlay_item.setPos(target_rect.topLeft())
+                    self._resize_overlay_item.setRect(
+                        QRectF(0.0, 0.0, target_rect.width(), target_rect.height())
+                    )
+            finally:
+                self._updating_resize_overlay = False
         self._apply_resize_handle_style(self._resize_overlay_item)
         self._resize_overlay_target = target
 

@@ -37,7 +37,7 @@ class TestAboutConstants(unittest.TestCase):
         Ensures bare hostnames become https URLs.
         """
 
-        self.assertEqual(normalize_about_url("loresoft.de"), "https://loresoft.de")
+        self.assertEqual(normalize_about_url("www.loresoft.de"), "https://www.loresoft.de")
         self.assertEqual(
             normalize_about_url("https://github.com/joruf/snappix"),
             "https://github.com/joruf/snappix",
@@ -102,7 +102,7 @@ class TestAboutDialog(unittest.TestCase):
         self.assertEqual(len(created), 1)
         box = created[0]
         self.assertEqual(box.textFormat(), Qt.TextFormat.RichText)
-        self.assertIn('href="https://loresoft.de"', box.text())
+        self.assertIn('href="https://www.loresoft.de"', box.text())
         self.assertIn(f'href="{ABOUT_GITHUB}"', box.text())
         labels = [
             label

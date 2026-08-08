@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from src.models import AnnotationModel
+from src.qt_safety import safe_bounding_rect, safe_paint
 
 ITEM_ROLE_TYPE = 1001
 
@@ -143,6 +144,7 @@ class StepBadgeItem(QGraphicsEllipseItem):
             (self.rect().height() - label_rect.height()) / 2.0 - 1.0,
         )
 
+    @safe_paint
     def paint(
         self,
         painter: QPainter,
@@ -410,6 +412,7 @@ class StyledTextItem(QGraphicsItem):
 
         return self._corner_radius
 
+    @safe_bounding_rect
     def boundingRect(self) -> QRectF:
         """
         Returns the item bounds.
@@ -420,6 +423,7 @@ class StyledTextItem(QGraphicsItem):
 
         return self._bounds
 
+    @safe_paint
     def paint(
         self,
         painter: QPainter,

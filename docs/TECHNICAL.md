@@ -283,6 +283,23 @@ Two constraints shape that code:
 - Screenshot background item + gray workspace chrome outside the document
 - Annotation items tagged with `ITEM_ROLE_TYPE = 1001`
 - Tool state machine, crop, pixel selection, soft brush buffer
+- **Never let an exception reach Qt's C++ stack.** `boundingRect`, `shape`, `paint`, and
+  `itemChange` are called from inside Qt's render and event loops. A raising override
+  leaves PySide with no value to return to C++ and the process dies — the crash log
+  reads `Error calling Python override of QGraphicsRectItem::boundingRect()` followed by
+  `Fatal Python error: Segmentation fault`. Every such override in `shape_items.py`,
+  `annotation_shapes.py`, `crop_item.py`, and `annotation_items.py` therefore carries a
+  guard from `src/qt_safety.py` (`@safe_bounding_rect`, `@safe_shape`, `@safe_paint`,
+  `@safe_item_change`). The guard returns a usable fallback (empty rect/path, None, or
+  `itemChange`'s incoming value) and records the traceback once per override per session.
+  `tests/test_qt_override_safety.py` fails if a new override ships without it.
+- **Re-entrancy guards need `try/finally`.** `_updating_resize_overlay`,
+  `_syncing_layer_panel`, and `_syncing_history_list` all mean "ignore the next signal,
+  it is only an echo of this update". Set without `finally`, a failure in between leaves
+  them set for the session and the feature goes quiet: resize handles stop following the
+  annotation, layer controls stop applying, history entries stop restoring — no crash, no
+  log, which is why it gets reported as "it sometimes goes weird".
+  `tests/test_guard_flag_recovery.py` covers all three.
 - **Two text item classes**: `StyledTextItem` (plain/box/speech-bubble, `src/annotation_shapes.py`) and legacy `QGraphicsTextItem`. They share `font()` but *not* the setter — `set_font()` vs `setFont()` + `document().setDefaultFont()`. Always go through `apply_text_item_font()`; calling `setFont` on a `StyledTextItem` raises `AttributeError`, and the resize paths run inside Qt virtual overrides where that unwinds through C++ and segfaults the process a few events later. `CropSelectionItem._notify_geometry_changed()` now contains any callback failure and reports it via `crash_log.log_exception()` instead of letting it reach C++
 - Document footer payload when nothing is selected (`type: document`)
 - Rubber-band preview for polyline/polygon/bent-arrow path tools
