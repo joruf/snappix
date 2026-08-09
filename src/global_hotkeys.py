@@ -143,6 +143,8 @@ class GlobalHotkeyManager:
         bindings: list[tuple[str, str]] = [
             (config.hotkey_capture_region, "capture_region"),
             (config.hotkey_capture_fullscreen, "capture_fullscreen"),
+            (config.hotkey_capture_screen, "capture_screen"),
+            (config.hotkey_capture_last_region, "capture_last_region"),
             (config.hotkey_measure_box, "measure_box"),
         ]
         if supports_window_capture():

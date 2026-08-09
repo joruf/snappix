@@ -175,7 +175,10 @@ Flatpak modules too would be a much larger, slower build.
 - On Windows: Scroll uses Win32 PageDown (best-effort); Capture Video appears when `ffmpeg` is available
 - **Auto scroll capture** for long pages on Linux (scrollbar detect + stitch)
 - Post-capture: open editor, copy clipboard, or save to folder
-- Global hotkeys (defaults include `Ctrl+Shift+A/W/F/V/P/R`; unavailable modes are not registered)
+- **Capture Screen**: captures only the monitor the mouse is on (`Ctrl+Shift+S`) instead of the whole virtual desktop
+- **Same Area**: repeats the region captured last without dragging it again (`Ctrl+Shift+D`) — the fast path when documenting a sequence of steps
+- Region overlay shows the **live selection size** and a **magnifier** with the cursor's screen coordinate, for pixel-exact edges
+- Global hotkeys (defaults include `Ctrl+Shift+A/W/F/S/D/V/P/R`; unavailable modes are not registered)
 - Wayland region capture via `grim` + `slurp` when available
 - **Black-screenshot recovery**: on some X11 stacks (virtual GPUs, compositors that stop painting the root window) Qt's own screen grab intermittently returns a valid but completely black image — the overlay froze a black desktop and the export was black. Snappix measures every grab **per screen** (one black monitor out of two used to pass, because the composed desktop still looked half full) and repeats the capture through an external tool (`ffmpeg` x11grab, `maim`, ImageMagick `import`, `gnome-screenshot`, or `grim` on Wayland) whenever a screen comes back empty or nearly empty, keeping the working tool for the rest of the session. Degraded captures are recorded in `~/.cache/snappix/crash.log`. Override the source under **View → Settings → Screenshot source** (`Automatic` / `Qt only` / `External tool only`)
 - **Autostart mode**: launching via the OS boot/login entry (`--autostart`) keeps Snappix tray-only — no Capture window, no restored Editor tabs; a normal manual start is unaffected
@@ -193,6 +196,7 @@ Flatpak modules too would be a much larger, slower build.
 - Effect summaries (`Fade In`, `Zoom Out`, …) are written inside the track bar on the right, where there is room, instead of squeezed into the narrow label column
 - `|◀` / `▶|` jump the playhead to the previous/next annotation, scrolling it into view — the practical way to navigate a long recording instead of paging through it
 - MP4 export runs behind a cancellable progress dialog that follows ffmpeg's own encode progress
+- **GIF export** (`File → Export GIF...`) for short click-by-click instructions: a palette is generated from the clip so screen recordings do not band, and the width is capped (never enlarged)
 - Selection footer in **both** editors: `size(x/y):10x10px pos(x/y):30x20px`, whole pixels only, plus every corner for polyline/polygon/bent-arrow
 - **Editable vertices**: select a polyline, polygon, or bent arrow and drag any corner handle; the shape still moves as a whole when dragged from anywhere else. Hold **Shift** while dragging a corner to lock it to one axis
 - Copying a drawn object also puts a transparent picture of it on the system clipboard, so it can be pasted straight into any other application — in-app paste still uses the richer Snappix payload
@@ -216,6 +220,9 @@ Flatpak modules too would be a much larger, slower build.
 - Corner radius (0-90) for rectangles **and triangles**, in both editors
 - Layers, geometry inspector (`X/Y/W/H`), document footer when nothing is selected
 - History with labeled undo list; zoom, grid, snap, smart guides
+- **Image Size...** (Edit menu): resize the whole document; geometry, stroke widths, and font sizes scale with it
+- **Pin to Screen** (View menu): keep the image floating above all windows as a reference — drag to move, wheel to zoom, `Esc` closes
+- **Drag Out** (Export tab) and Copy now also publish the image as a **PNG file**, so it can be dropped or pasted into a file manager, a mail, or an upload field
 - Export PNG / JPEG / PDF / SVG, batch export profiles, print
 - **Presentation frame** for exports (`Presentation` in the Export tab): padding, rounded corners, drop
   shadow, solid/gradient/transparent backdrop, and optional 16:9 / 4:3 / 3:2 / 1:1 letterboxing.
@@ -340,6 +347,8 @@ Regenerate after UI changes (requires Qt display + optional `ffmpeg` for the vid
 - **Screenshot source**: `Automatic` (Qt grab, external tool when it returns black), `Qt only`, `External tool only`
 - Capture save folder (default `~/Downloads/snappix/`)
 - **Workspace folder** for unsaved tabs (default `~/.snappix/`)
+- **Language**: `System language`, `English`, or `Deutsch`
+- **File name** template for saved captures: `{date}`, `{time}`, `{year}`, `{month}`, `{day}`, `{counter}`
 - Editor keyboard shortcut overrides
 - Auto-crop unused canvas margins
 - Behavior when the last editor tab closes

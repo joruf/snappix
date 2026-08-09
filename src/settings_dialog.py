@@ -38,6 +38,7 @@ from src.config import (
     default_capture_save_directory,
     default_workspace_directory,
     normalize_capture_backend,
+    normalize_filename_template,
     normalize_editor_last_tab_behavior,
     normalize_hotkey_spec,
     normalize_post_capture_action,
@@ -50,6 +51,8 @@ from src.config import (
     sanitize_editor_shortcut_map,
 )
 from src.global_hotkeys import GlobalHotkeyManager, hotkey_spec_to_pynput
+from src.i18n import LANGUAGES, normalize_language
+from src.post_capture_service import DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS
 from src.measurebox.settings import MeasureBoxSettings
 from src.shortcuts import (
     EDITOR_SHORTCUT_DEFINITIONS,
@@ -158,6 +161,20 @@ class SettingsDialog(QDialog):
         self.hotkey_fullscreen_edit.setPlaceholderText("ctrl+shift+f")
         form.addRow("Capture fullscreen:", self.hotkey_fullscreen_edit)
 
+        self.hotkey_screen_edit = QLineEdit(config.hotkey_capture_screen)
+        self.hotkey_screen_edit.setPlaceholderText("ctrl+shift+s")
+        self.hotkey_screen_edit.setToolTip(
+            "Captures only the screen the mouse is on, not every monitor."
+        )
+        form.addRow("Capture current screen:", self.hotkey_screen_edit)
+
+        self.hotkey_last_region_edit = QLineEdit(config.hotkey_capture_last_region)
+        self.hotkey_last_region_edit.setPlaceholderText("ctrl+shift+d")
+        self.hotkey_last_region_edit.setToolTip(
+            "Repeats the region captured last, without dragging it again."
+        )
+        form.addRow("Capture same area:", self.hotkey_last_region_edit)
+
         self.hotkey_video_edit = QLineEdit(config.hotkey_capture_video)
         self.hotkey_video_edit.setPlaceholderText("ctrl+shift+v")
         self.hotkey_recording_pause_resume_edit = QLineEdit(
@@ -186,6 +203,18 @@ class SettingsDialog(QDialog):
         if current_index >= 0:
             self.post_capture_combo.setCurrentIndex(current_index)
         form.addRow("After capture:", self.post_capture_combo)
+
+        self.language_combo = QComboBox()
+        for language_key, language_label in LANGUAGES.items():
+            self.language_combo.addItem(language_label, language_key)
+        language_index = self.language_combo.findData(normalize_language(config.language))
+        if language_index >= 0:
+            self.language_combo.setCurrentIndex(language_index)
+        self.language_combo.setToolTip(
+            "Interface language. Applies to windows opened after the change; "
+            "restart Snappix to translate everything."
+        )
+        form.addRow("Language:", self.language_combo)
 
         self.capture_backend_combo = QComboBox()
         for backend_key, backend_label in CAPTURE_BACKENDS.items():
@@ -259,6 +288,18 @@ class SettingsDialog(QDialog):
         save_directory_row.addWidget(self.save_directory_edit, 1)
         save_directory_row.addWidget(browse_button)
         form.addRow("Save folder:", save_directory_row)
+
+        self.filename_template_edit = QLineEdit(
+            normalize_filename_template(config.capture_filename_template)
+        )
+        self.filename_template_edit.setPlaceholderText(DEFAULT_FILENAME_TEMPLATE)
+        placeholder_help = ", ".join(sorted(FILENAME_PLACEHOLDERS))
+        self.filename_template_edit.setToolTip(
+            "Name for saved captures, without extension.\n"
+            f"Placeholders: {placeholder_help}\n"
+            "A name that already exists gets a number appended."
+        )
+        form.addRow("File name:", self.filename_template_edit)
 
         workspace_directory_row = QHBoxLayout()
         initial_workspace_directory = (
@@ -550,6 +591,10 @@ class SettingsDialog(QDialog):
             hotkey_capture_fullscreen=normalize_hotkey_spec(
                 self.hotkey_fullscreen_edit.text()
             ),
+            hotkey_capture_screen=normalize_hotkey_spec(self.hotkey_screen_edit.text()),
+            hotkey_capture_last_region=normalize_hotkey_spec(
+                self.hotkey_last_region_edit.text()
+            ),
             hotkey_capture_video=normalize_hotkey_spec(self.hotkey_video_edit.text()),
             hotkey_recording_pause_resume=normalize_hotkey_spec(
                 self.hotkey_recording_pause_resume_edit.text()
@@ -563,6 +608,10 @@ class SettingsDialog(QDialog):
             ),
             capture_backend=normalize_capture_backend(
                 str(self.capture_backend_combo.currentData())
+            ),
+            language=normalize_language(str(self.language_combo.currentData())),
+            capture_filename_template=normalize_filename_template(
+                self.filename_template_edit.text()
             ),
             capture_save_directory=self.save_directory_edit.text().strip(),
             workspace_directory=self.workspace_directory_edit.text().strip(),

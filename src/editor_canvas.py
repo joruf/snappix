@@ -2608,6 +2608,55 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self._pixel_selection_path.translate(origin)
         self._update_pixel_selection_overlay()
 
+    def scale_document(self, target_width: int, target_height: int) -> bool:
+        """
+        Resizes the whole document: background pixels and every annotation.
+
+        Annotations are scaled through their serialized models rather than by
+        transforming scene items, so geometry, stroke widths, font sizes, and the
+        multi-point payloads all stay consistent with the new pixel size.
+
+        Args:
+            target_width: New document width in pixels.
+            target_height: New document height in pixels.
+
+        Returns:
+            bool: True when the document was resized.
+        """
+
+        from src.document_scale import clamp_document_size, scale_annotations
+
+        screenshot = self.screenshot()
+        if screenshot.isNull():
+            return False
+        width = clamp_document_size(target_width)
+        height = clamp_document_size(target_height)
+        if width == screenshot.width() and height == screenshot.height():
+            return False
+
+        scale_x = width / max(1, screenshot.width())
+        scale_y = height / max(1, screenshot.height())
+        annotations = scale_annotations(self.collect_annotations(), scale_x, scale_y)
+        scaled = screenshot.scaled(
+            width,
+            height,
+            Qt.AspectRatioMode.IgnoreAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self.clear_pixel_selection()
+        self._set_screenshot_without_view_reset(scaled, reset_base_content=True)
+        self.load_annotations(annotations)
+        self._blank_document = False
+        # The user asked for an exact pixel size, so the auto-fit is suppressed
+        # here: an annotation whose halo reaches past the edge would otherwise
+        # grow the document again and the result would not be the size requested.
+        self._fitting_document = True
+        try:
+            self._emit_content_changed("Resize image")
+        finally:
+            self._fitting_document = False
+        return True
+
     def flatten_annotations(self) -> None:
         """
         Burns all annotations into the screenshot and clears editable items.

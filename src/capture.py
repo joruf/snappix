@@ -81,7 +81,9 @@ class CaptureMode:
     """
 
     FULL_SCREEN = "full_screen"
+    CURRENT_SCREEN = "current_screen"
     REGION = "region"
+    LAST_REGION = "last_region"
     WINDOW = "window"
     SCROLL = "scroll"
 
@@ -106,6 +108,10 @@ _qt_grab_unreliable = False
 # The all-black explanation is shown once per session, not per capture.
 _blank_capture_warning_shown = False
 
+# Last dragged capture region, so the same area can be captured again without
+# redrawing it -- the common case when documenting a sequence of steps.
+_last_capture_region = QRect()
+
 # Wait for the compositor to drop hidden Snappix windows (Capture panel, countdown)
 # before sampling the framebuffer. Too short and the panel still appears in shots.
 CAPTURE_UI_SETTLE_MS = 120
@@ -113,6 +119,16 @@ CAPTURE_UI_SETTLE_MS = 120
 # Pen width of the window-capture highlight frame. The frame is offset by the same
 # amount so it lands outside the target window instead of on its pixels.
 HIGHLIGHT_FRAME_WIDTH = 2
+
+# Live size readout next to the drag rectangle.
+SIZE_READOUT_PADDING = 8
+SIZE_READOUT_GAP = 6
+
+# Loupe shown while picking a region. Nearest-neighbour at this zoom keeps single
+# pixels square and countable, which is the point of the magnifier.
+MAGNIFIER_SIZE = 132
+MAGNIFIER_ZOOM = 8
+MAGNIFIER_GAP = 24
 
 # ---------------------------------------------------------------------------
 # Capture panel startup width (client area in pixels).
@@ -344,6 +360,16 @@ class CapturePanel(QWidget):
         self.capture_fullscreen_button.setToolTip("Capture all screens immediately.")
         button_widgets.append(self.capture_fullscreen_button)
 
+        self.capture_screen_button = QPushButton("Capture Screen")
+        self.capture_screen_button.setObjectName("primaryButton")
+        self.capture_screen_button.clicked.connect(
+            lambda: self._emit_request_for_mode(CaptureMode.CURRENT_SCREEN)
+        )
+        self.capture_screen_button.setToolTip(
+            "Capture only the screen the mouse is on, not every monitor."
+        )
+        button_widgets.append(self.capture_screen_button)
+
         self.capture_area_button = QPushButton("Capture Area")
         self.capture_area_button.setObjectName("primaryButton")
         self.capture_area_button.clicked.connect(
@@ -351,6 +377,17 @@ class CapturePanel(QWidget):
         )
         self.capture_area_button.setToolTip("Select and capture a custom screen region.")
         button_widgets.append(self.capture_area_button)
+
+        self.capture_last_region_button = QPushButton("Same Area")
+        self.capture_last_region_button.setObjectName("primaryButton")
+        self.capture_last_region_button.clicked.connect(
+            lambda: self._emit_request_for_mode(CaptureMode.LAST_REGION)
+        )
+        self.capture_last_region_button.setToolTip(
+            "Capture the region used last, without dragging it again."
+        )
+        self.capture_last_region_button.setEnabled(has_last_capture_region())
+        button_widgets.append(self.capture_last_region_button)
 
         self.capture_window_button = QPushButton("Capture Window")
         self.capture_window_button.setObjectName("primaryButton")
@@ -576,6 +613,7 @@ class CapturePanel(QWidget):
         from src.platform import apply_linux_window_identity, apply_windows_window_icon
 
         super().showEvent(event)
+        self.refresh_last_region_state()
         apply_windows_window_icon(self, self.windowIcon())
         apply_linux_window_identity(
             self,
@@ -583,6 +621,16 @@ class CapturePanel(QWidget):
             wm_instance="snappix",
             wm_class="snappix",
         )
+
+    def refresh_last_region_state(self) -> None:
+        """
+        Enables the repeat button once a region has been captured.
+
+        Returns:
+            None
+        """
+
+        self.capture_last_region_button.setEnabled(has_last_capture_region())
 
     def resizeEvent(self, event) -> None:
         """
@@ -812,6 +860,108 @@ class RegionCaptureOverlay(QWidget):
 
                 painter.setPen(inner_pen)
                 painter.drawRect(inner_rect)
+                self._draw_size_readout(painter, selection)
+        if self.rect().contains(self._cursor_point):
+            self._draw_magnifier(painter, self._cursor_point)
+
+    def _draw_size_readout(self, painter: QPainter, selection: QRect) -> None:
+        """
+        Draws the live pixel size of the current selection.
+
+        Placed outside the selection when there is room below it, so it never
+        hides the content being captured.
+
+        Args:
+            painter: Active painter.
+            selection: Selection rectangle in overlay coordinates.
+
+        Returns:
+            None
+        """
+
+        label = f"{selection.width()} x {selection.height()} px"
+        metrics = painter.fontMetrics()
+        text_width = metrics.horizontalAdvance(label)
+        box = QRect(0, 0, text_width + (SIZE_READOUT_PADDING * 2), metrics.height() + 8)
+        box.moveLeft(selection.left())
+        below = selection.bottom() + SIZE_READOUT_GAP
+        if below + box.height() <= self.height():
+            box.moveTop(below)
+        elif selection.top() - SIZE_READOUT_GAP - box.height() >= 0:
+            box.moveTop(selection.top() - SIZE_READOUT_GAP - box.height())
+        else:
+            box.moveTop(selection.top() + SIZE_READOUT_GAP)
+        box.moveLeft(max(0, min(box.left(), self.width() - box.width())))
+
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(20, 20, 20, 220))
+        painter.drawRoundedRect(box, 4, 4)
+        painter.setPen(QColor(236, 240, 241, 255))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, label)
+
+    def _draw_magnifier(self, painter: QPainter, cursor: QPoint) -> None:
+        """
+        Draws a zoomed loupe of the pixels around the cursor.
+
+        Selecting an exact edge is guesswork at 1:1 -- the loupe shows the pixels
+        under the crosshair magnified, with the cursor's screen coordinate.
+
+        Args:
+            painter: Active painter.
+            cursor: Cursor position in overlay coordinates.
+
+        Returns:
+            None
+        """
+
+        source_span = max(4, MAGNIFIER_SIZE // MAGNIFIER_ZOOM)
+        half = source_span // 2
+        source = QRect(cursor.x() - half, cursor.y() - half, source_span, source_span)
+        source = source.intersected(self.rect())
+        if source.width() <= 0 or source.height() <= 0:
+            return
+
+        target = QRect(0, 0, MAGNIFIER_SIZE, MAGNIFIER_SIZE)
+        target.moveTopLeft(cursor + QPoint(MAGNIFIER_GAP, MAGNIFIER_GAP))
+        # Flip to the other side of the cursor when the loupe would leave the screen.
+        if target.right() >= self.width():
+            target.moveLeft(cursor.x() - MAGNIFIER_GAP - target.width())
+        if target.bottom() >= self.height():
+            target.moveTop(cursor.y() - MAGNIFIER_GAP - target.height())
+        if not self.rect().contains(target):
+            return
+
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
+        painter.drawPixmap(target, self._screenshot, source)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(20, 20, 20, 220), 3))
+        painter.drawRect(target)
+        painter.setPen(QPen(QColor(255, 255, 255, 240), 1))
+        painter.drawRect(target)
+
+        center = target.center()
+        painter.setPen(QPen(QColor(231, 76, 60, 230), 1))
+        painter.drawLine(target.left(), center.y(), target.right(), center.y())
+        painter.drawLine(center.x(), target.top(), center.x(), target.bottom())
+
+        global_point = cursor + self._virtual_geometry.topLeft()
+        label = f"{global_point.x()}, {global_point.y()}"
+        metrics = painter.fontMetrics()
+        caption = QRect(
+            target.left(),
+            target.bottom() + 2,
+            target.width(),
+            metrics.height() + 4,
+        )
+        if caption.bottom() >= self.height():
+            caption.moveTop(target.top() - caption.height() - 2)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(20, 20, 20, 220))
+        painter.drawRect(caption)
+        painter.setPen(QColor(236, 240, 241, 255))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawText(caption, Qt.AlignmentFlag.AlignCenter, label)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         """
@@ -2526,6 +2676,93 @@ def _window_geometry_from_id(window_id: str) -> QRect:
         return QRect()
 
 
+def screen_rect_under_cursor() -> QRect:
+    """
+    Returns the geometry of the screen the mouse pointer is on.
+
+    Args:
+        None
+
+    Returns:
+        QRect: Screen rectangle in virtual-desktop coordinates, empty when no
+        screen can be determined.
+    """
+
+    screen = QGuiApplication.screenAt(QCursor.pos())
+    if screen is None:
+        screen = QGuiApplication.primaryScreen()
+    if screen is None:
+        return QRect()
+    return QRect(screen.geometry())
+
+
+def remember_capture_region(rect: QRect) -> None:
+    """
+    Stores one captured region so it can be repeated.
+
+    Args:
+        rect: Region in virtual-desktop coordinates.
+
+    Returns:
+        None
+    """
+
+    global _last_capture_region
+
+    if rect.width() > 0 and rect.height() > 0:
+        _last_capture_region = QRect(rect)
+
+
+def last_capture_region() -> QRect:
+    """
+    Returns the most recently captured region.
+
+    Args:
+        None
+
+    Returns:
+        QRect: Stored region, empty when nothing was captured yet.
+    """
+
+    return QRect(_last_capture_region)
+
+
+def has_last_capture_region() -> bool:
+    """
+    Reports whether a region capture can be repeated.
+
+    Args:
+        None
+
+    Returns:
+        bool: True when a usable region is stored.
+    """
+
+    return _last_capture_region.width() > 0 and _last_capture_region.height() > 0
+
+
+def crop_snapshot_to_rect(snapshot: DesktopSnapshot, rect: QRect) -> QPixmap:
+    """
+    Cuts one region out of a virtual-desktop snapshot.
+
+    Args:
+        snapshot: Captured virtual desktop.
+        rect: Region in virtual-desktop coordinates.
+
+    Returns:
+        QPixmap: Cropped image, null when the region is unusable or lies
+        outside the captured desktop.
+    """
+
+    if snapshot.pixmap.isNull() or rect.width() <= 0 or rect.height() <= 0:
+        return QPixmap()
+    local = rect.translated(-snapshot.virtual_geometry.topLeft())
+    local = local.intersected(QRect(0, 0, snapshot.pixmap.width(), snapshot.pixmap.height()))
+    if local.width() <= 0 or local.height() <= 0:
+        return QPixmap()
+    return snapshot.pixmap.copy(local)
+
+
 def set_capture_backend_preference(backend: str) -> None:
     """
     Sets which grab source screenshots should use.
@@ -3161,9 +3398,26 @@ def execute_capture_request(
             on_capture(screenshot)
             return
 
-        if request.mode == CaptureMode.REGION:
+        if request.mode == CaptureMode.CURRENT_SCREEN:
+            crop = crop_snapshot_to_rect(snapshot, screen_rect_under_cursor())
+            if crop.isNull():
+                on_capture(screenshot)
+            else:
+                on_capture(crop)
+            return
+
+        if request.mode == CaptureMode.LAST_REGION:
+            crop = crop_snapshot_to_rect(snapshot, last_capture_region())
+            if not crop.isNull():
+                on_capture(crop)
+                return
+            # Nothing stored yet (first run, or the region no longer fits the
+            # desktop): fall through and let the user pick one.
+
+        if request.mode in (CaptureMode.REGION, CaptureMode.LAST_REGION):
             overlay = RegionCaptureOverlay(screenshot, virtual_geometry)
             _track_overlay(overlay)
+            overlay.region_selected.connect(remember_capture_region)
             overlay.capture_done.connect(on_capture)
             overlay.capture_done.connect(lambda _pixmap: _untrack_overlay(overlay))
             overlay.capture_cancelled.connect(on_cancel)

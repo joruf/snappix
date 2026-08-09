@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from src.config import POST_CAPTURE_CLIPBOARD, POST_CAPTURE_SAVE
+from src.post_capture_service import DEFAULT_FILENAME_TEMPLATE
 
 try:
     from PySide6.QtGui import QColor, QPixmap
@@ -39,7 +40,10 @@ def _make_controller(*, post_capture_action: str, save_directory: Path | None = 
     from run import AppController
 
     controller = object.__new__(AppController)
-    controller.config = SimpleNamespace(post_capture_action=post_capture_action)
+    controller.config = SimpleNamespace(
+        post_capture_action=post_capture_action,
+        capture_filename_template=DEFAULT_FILENAME_TEMPLATE,
+    )
     controller.capture_panel = MagicMock()
     controller._QMessageBox = MagicMock()
     controller._tray_available = True

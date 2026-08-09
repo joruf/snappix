@@ -89,6 +89,11 @@ Startup:
 | `src/cli.py` | Non-GUI commands |
 | `src/autostart.py` | XDG autostart `.desktop` |
 | `src/tool_reference.py` / `tool_reference_dialog.py` | In-app tools help |
+| `src/document_scale.py` | Scaling a document: image plus every annotation's geometry, stroke, and font |
+| `src/drag_export.py` | Session temp directory, `text/uri-list` payloads, and the drag source |
+| `src/i18n.py` / `src/i18n_widgets.py` | Language state and dictionary (Qt-free) / widget-tree translation |
+| `src/image_size_dialog.py` | Pixel or percent resize dialog |
+| `src/pin_window.py` | Frameless always-on-top reference window |
 | `src/help_dialogs.py` | Shared About / Manual dialogs for both editors and the editor host menu |
 | `src/desktop_grab.py` | Blank-grab detection plus external screenshot backends (x11grab, maim, import, gnome-screenshot, grim) |
 | `src/new_canvas_dialog.py` | Blank canvas size picker |
@@ -102,6 +107,8 @@ Startup:
 | Mode | Constant | Description |
 |------|----------|-------------|
 | Fullscreen | `CaptureMode.FULL_SCREEN` | Virtual desktop composite |
+| Current screen | `CaptureMode.CURRENT_SCREEN` | Crops the snapshot to the screen under the cursor |
+| Same area | `CaptureMode.LAST_REGION` | Crops the snapshot to the region stored by the previous drag; falls back to picking one |
 | Region | `CaptureMode.REGION` | Drag selection overlay |
 | Window | `CaptureMode.WINDOW` | Window pick (X11 `xdotool` / Windows Win32) |
 | Scroll | `CaptureMode.SCROLL` | Auto-scroll + vertical stitch |

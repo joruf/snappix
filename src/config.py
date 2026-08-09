@@ -9,6 +9,8 @@ from src.py_compat import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.i18n import DEFAULT_LANGUAGE, normalize_language
+from src.post_capture_service import DEFAULT_FILENAME_TEMPLATE
 from src.theme import DEFAULT_THEME, normalize_theme_name
 from src.shortcuts import normalize_editor_shortcuts
 
@@ -206,6 +208,8 @@ DEFAULT_EXPORT_KEEP_TRANSPARENCY = True
 DEFAULT_HOTKEY_CAPTURE_REGION = "ctrl+shift+a"
 DEFAULT_HOTKEY_CAPTURE_WINDOW = "ctrl+shift+w"
 DEFAULT_HOTKEY_CAPTURE_FULLSCREEN = "ctrl+shift+f"
+DEFAULT_HOTKEY_CAPTURE_SCREEN = "ctrl+shift+s"
+DEFAULT_HOTKEY_CAPTURE_LAST_REGION = "ctrl+shift+d"
 DEFAULT_HOTKEY_CAPTURE_VIDEO = "ctrl+shift+v"
 DEFAULT_HOTKEY_RECORDING_PAUSE_RESUME = "ctrl+shift+p"
 DEFAULT_HOTKEY_RECORDING_STOP = "ctrl+shift+r"
@@ -458,6 +462,21 @@ def normalize_post_capture_action(action: str) -> str:
     return DEFAULT_POST_CAPTURE_ACTION
 
 
+def normalize_filename_template(template: str) -> str:
+    """
+    Returns a usable capture file-name template.
+
+    Args:
+        template: Requested template.
+
+    Returns:
+        str: Template text, or the default when it is empty.
+    """
+
+    text = str(template or "").strip()
+    return text or DEFAULT_FILENAME_TEMPLATE
+
+
 def normalize_capture_backend(backend: str) -> str:
     """
     Returns a supported screenshot grab source.
@@ -594,12 +613,16 @@ class AppConfig:
         hotkey_capture_region: Hotkey for region capture.
         hotkey_capture_window: Hotkey for window capture.
         hotkey_capture_fullscreen: Hotkey for fullscreen capture.
+        hotkey_capture_screen: Hotkey for capturing the screen under the cursor.
+        hotkey_capture_last_region: Hotkey for repeating the last region.
         hotkey_capture_video: Hotkey for starting a video recording.
         hotkey_recording_pause_resume: Hotkey to pause/resume an active recording.
         hotkey_recording_stop: Hotkey to stop an active recording.
         hotkey_measure_box: Hotkey for starting MeasureBox from Capture.
         post_capture_action: Action after a successful capture.
         capture_backend: Grab source for screenshots (auto, qt, or external).
+        capture_filename_template: File-name template for saved captures.
+        language: Interface language (system, en, or de).
         capture_save_directory: Optional folder for automatic capture saves.
         workspace_directory: Folder for unsaved editor tabs and session recovery data.
         editor_last_tab_behavior: Behavior when the last editor tab is closed.
@@ -625,12 +648,16 @@ class AppConfig:
     hotkey_capture_region: str = DEFAULT_HOTKEY_CAPTURE_REGION
     hotkey_capture_window: str = DEFAULT_HOTKEY_CAPTURE_WINDOW
     hotkey_capture_fullscreen: str = DEFAULT_HOTKEY_CAPTURE_FULLSCREEN
+    hotkey_capture_screen: str = DEFAULT_HOTKEY_CAPTURE_SCREEN
+    hotkey_capture_last_region: str = DEFAULT_HOTKEY_CAPTURE_LAST_REGION
     hotkey_capture_video: str = DEFAULT_HOTKEY_CAPTURE_VIDEO
     hotkey_recording_pause_resume: str = DEFAULT_HOTKEY_RECORDING_PAUSE_RESUME
     hotkey_recording_stop: str = DEFAULT_HOTKEY_RECORDING_STOP
     hotkey_measure_box: str = DEFAULT_HOTKEY_MEASURE_BOX
     post_capture_action: str = DEFAULT_POST_CAPTURE_ACTION
     capture_backend: str = DEFAULT_CAPTURE_BACKEND
+    capture_filename_template: str = DEFAULT_FILENAME_TEMPLATE
+    language: str = DEFAULT_LANGUAGE
     capture_save_directory: str = ""
     workspace_directory: str = ""
     editor_last_tab_behavior: str = DEFAULT_EDITOR_LAST_TAB_BEHAVIOR
@@ -720,6 +747,17 @@ class ConfigManager:
             hotkey_capture_window=normalize_hotkey_spec(
                 str(payload.get("hotkey_capture_window", DEFAULT_HOTKEY_CAPTURE_WINDOW))
             ),
+            hotkey_capture_screen=normalize_hotkey_spec(
+                str(payload.get("hotkey_capture_screen", DEFAULT_HOTKEY_CAPTURE_SCREEN))
+            ),
+            hotkey_capture_last_region=normalize_hotkey_spec(
+                str(
+                    payload.get(
+                        "hotkey_capture_last_region",
+                        DEFAULT_HOTKEY_CAPTURE_LAST_REGION,
+                    )
+                )
+            ),
             hotkey_capture_fullscreen=normalize_hotkey_spec(
                 str(
                     payload.get(
@@ -750,6 +788,10 @@ class ConfigManager:
             ),
             capture_backend=normalize_capture_backend(
                 str(payload.get("capture_backend", DEFAULT_CAPTURE_BACKEND))
+            ),
+            language=normalize_language(str(payload.get("language", DEFAULT_LANGUAGE))),
+            capture_filename_template=normalize_filename_template(
+                str(payload.get("capture_filename_template", DEFAULT_FILENAME_TEMPLATE))
             ),
             capture_save_directory=str(payload.get("capture_save_directory", "")).strip(),
             workspace_directory=str(payload.get("workspace_directory", "")).strip(),
@@ -830,6 +872,10 @@ class ConfigManager:
             "hotkeys_enabled": config.hotkeys_enabled,
             "hotkey_capture_region": normalize_hotkey_spec(config.hotkey_capture_region),
             "hotkey_capture_window": normalize_hotkey_spec(config.hotkey_capture_window),
+            "hotkey_capture_screen": normalize_hotkey_spec(config.hotkey_capture_screen),
+            "hotkey_capture_last_region": normalize_hotkey_spec(
+                config.hotkey_capture_last_region
+            ),
             "hotkey_capture_fullscreen": normalize_hotkey_spec(
                 config.hotkey_capture_fullscreen
             ),
@@ -841,6 +887,10 @@ class ConfigManager:
             "hotkey_measure_box": normalize_hotkey_spec(config.hotkey_measure_box),
             "post_capture_action": normalize_post_capture_action(config.post_capture_action),
             "capture_backend": normalize_capture_backend(config.capture_backend),
+            "language": normalize_language(config.language),
+            "capture_filename_template": normalize_filename_template(
+                config.capture_filename_template
+            ),
             "capture_save_directory": config.capture_save_directory.strip(),
             "workspace_directory": config.workspace_directory.strip(),
             "editor_last_tab_behavior": normalize_editor_last_tab_behavior(

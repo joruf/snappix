@@ -45,7 +45,11 @@ from src.tool_icons import apply_zoom_step_button_style, build_playback_icon, bu
 from src.video_canvas import VideoCanvas
 from src.video_models import VideoAnnotationModel, VideoProjectModel
 from src.video_effects import normalize_effect_duration_ms
-from src.video_recorder import OverlaySegment, build_export_command
+from src.video_recorder import (
+    OverlaySegment,
+    build_export_command,
+    build_gif_export_command,
+)
 from src.video_storage import (
     build_video_project_model,
     load_video_project,
@@ -255,6 +259,14 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         export_action.setToolTip("Render a flattened MP4 with annotations burned in.")
         export_action.triggered.connect(self.export_mp4)
         file_menu.addAction(export_action)
+
+        export_gif_action = QAction("Export GIF...", self)
+        export_gif_action.setToolTip(
+            "Render an animated GIF with annotations burned in, for short "
+            "click-by-click instructions."
+        )
+        export_gif_action.triggered.connect(self.export_gif)
+        file_menu.addAction(export_gif_action)
 
         file_menu.addSeparator()
 
@@ -1668,6 +1680,50 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         self.statusBar().showMessage(f"Exported to {path}", 5000)
 
+    def export_gif(self) -> None:
+        """
+        Renders the clip as an animated GIF with annotations burned in.
+
+        Returns:
+            None
+        """
+
+        from src.video_recorder import DEFAULT_GIF_FPS, DEFAULT_GIF_WIDTH, has_ffmpeg
+
+        if not has_ffmpeg():
+            QMessageBox.warning(
+                self,
+                "Export GIF",
+                "GIF export requires ffmpeg. Please install ffmpeg to enable this feature.",
+            )
+            return
+
+        default_path = str(Path(self._video_path).with_suffix(".export.gif"))
+        path, _filter = QFileDialog.getSaveFileName(
+            self,
+            "Export GIF",
+            default_path,
+            "Animated GIF (*.gif)",
+        )
+        if not path:
+            return
+
+        self.statusBar().showMessage(
+            f"Exporting GIF at {DEFAULT_GIF_FPS} fps, {DEFAULT_GIF_WIDTH}px wide…"
+        )
+        try:
+            completed = self._run_export(Path(path), include_audio=False, as_gif=True)
+        except (OSError, RuntimeError) as exc:
+            QMessageBox.warning(self, "Export GIF", f"Could not export GIF:\n{exc}")
+            self.statusBar().showMessage("Export failed", 5000)
+            return
+
+        if not completed:
+            self.statusBar().showMessage("Export cancelled", 5000)
+            return
+
+        self.statusBar().showMessage(f"Exported to {path}", 5000)
+
     def _prompt_export_options(self) -> dict[str, bool] | None:
         """
         Asks whether the exported MP4 should include audio.
@@ -1789,7 +1845,13 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         item.paint(painter, style_option, None)
         painter.restore()
 
-    def _run_export(self, output_path: Path, *, include_audio: bool = True) -> bool:
+    def _run_export(
+        self,
+        output_path: Path,
+        *,
+        include_audio: bool = True,
+        as_gif: bool = False,
+    ) -> bool:
         """
         Composites annotation-layer PNGs and invokes ffmpeg to burn them into the video.
 
@@ -1876,13 +1938,21 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                     )
                 )
 
-            command = build_export_command(
-                Path(self._video_path),
-                segments,
-                output_path,
-                include_audio=include_audio,
-                report_progress=True,
-            )
+            if as_gif:
+                command = build_gif_export_command(
+                    Path(self._video_path),
+                    segments,
+                    output_path,
+                    report_progress=True,
+                )
+            else:
+                command = build_export_command(
+                    Path(self._video_path),
+                    segments,
+                    output_path,
+                    include_audio=include_audio,
+                    report_progress=True,
+                )
 
             def _on_encode_progress(position_ms: int) -> None:
                 """

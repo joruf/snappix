@@ -746,6 +746,7 @@ class AppController:
         )
         self.capture_panel.set_measure_box_hotkey(self.config.hotkey_measure_box)
         self._apply_capture_backend()
+        self._apply_language()
         self._apply_workspace_directory()
         if self.autostart_manager.is_enabled():
             self.config.autostart_enabled = True
@@ -1012,6 +1013,8 @@ class AppController:
             "capture_region": CaptureMode.REGION,
             "capture_window": CaptureMode.WINDOW,
             "capture_fullscreen": CaptureMode.FULL_SCREEN,
+            "capture_screen": CaptureMode.CURRENT_SCREEN,
+            "capture_last_region": CaptureMode.LAST_REGION,
         }
         mode = mode_by_action.get(action)
         if mode is None:
@@ -1413,6 +1416,7 @@ class AppController:
         self._measure_box_session.apply_settings(dialog.build_measure_box_settings())
         self.capture_panel.set_measure_box_hotkey(self.config.hotkey_measure_box)
         self._apply_capture_backend()
+        self._apply_language()
         self._apply_workspace_directory()
         self._apply_hotkeys()
         self._install_host_editor_shortcuts()
@@ -1461,6 +1465,25 @@ class AppController:
             size=self.config.resize_handle_size,
             position=self.config.resize_handle_position,
         )
+
+    def _apply_language(self) -> None:
+        """
+        Activates the configured interface language.
+
+        Windows already on screen keep their current texts; the translation runs
+        when a window is shown, so newly opened windows and dialogs follow the
+        setting immediately and a restart covers the rest.
+
+        Returns:
+            None
+        """
+
+        from src.i18n import set_language
+
+        set_language(self.config.language)
+        translation_filter = getattr(self, "_translation_filter", None)
+        if translation_filter is not None:
+            translation_filter.forget()
 
     def _apply_capture_backend(self) -> None:
         """
@@ -1516,7 +1539,11 @@ class AppController:
 
         from src.post_capture_service import save_capture_pixmap_to_directory
 
-        return save_capture_pixmap_to_directory(pixmap, self._capture_save_directory())
+        return save_capture_pixmap_to_directory(
+            pixmap,
+            self._capture_save_directory(),
+            self.config.capture_filename_template,
+        )
 
     def _handle_capture_result(self, pixmap) -> None:
         """
@@ -3468,6 +3495,12 @@ def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) 
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setQuitOnLastWindowClosed(False)
+    from src.drag_export import cleanup_session_export_dir
+    from src.i18n_widgets import install_translation_filter
+
+    # Installed before any window exists: the filter translates each window when
+    # it is first shown, which also covers dialogs created later on demand.
+    translation_filter = install_translation_filter(app)
     capture_icon = _build_capture_icon()
     app.setWindowIcon(capture_icon)
     if is_linux() and not autostart_launch:
@@ -3477,7 +3510,9 @@ def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) 
         startup_project_path=startup_project_path,
         autostart_launch=autostart_launch,
     )
+    controller._translation_filter = translation_filter
     app.aboutToQuit.connect(controller._save_editor_session)
+    app.aboutToQuit.connect(cleanup_session_export_dir)
     controller.show()
     return app.exec()
 

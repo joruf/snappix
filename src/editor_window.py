@@ -74,6 +74,7 @@ from src.constants import (
     APP_FILE_EXTENSION,
     APP_NAME,
 )
+from src.drag_export import ImageDragButton, attach_image_file
 from src.help_dialogs import (
     EDITOR_MANUAL_INTRO,
     show_about_dialog,
@@ -497,6 +498,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.resize(1400, 900)
         self._current_project_path = ""
         self._recovery_path = ""
+        self._pinned_windows: list = []
         self._minimize_to_tray_on_close = True
         self._jpeg_quality = 90
         self._pdf_dpi = 300
@@ -1177,6 +1179,14 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.export_batch_button.clicked.connect(self.export_batch_with_dialog)
         self._configure_compact_toolbar_height(self.export_batch_button)
         export_widgets.append(self.export_batch_button)
+
+        self.drag_out_button = ImageDragButton(self._drag_out_payload)
+        self.drag_out_button.setText("Drag Out")
+        self.drag_out_button.setToolTip(
+            "Drag this into another application to drop the image as a PNG file."
+        )
+        self._configure_compact_toolbar_height(self.drag_out_button)
+        export_widgets.append(self.drag_out_button)
         export_tab.set_flow_widgets(export_widgets)
         self._property_tabs.addTab(export_tab, "Export")
         self._property_tabs.installEventFilter(self)
@@ -1806,6 +1816,20 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._register_shortcut_action("duplicate", duplicate_action)
 
         edit_menu.addSeparator()
+
+        pin_action = QAction("Pin to Screen", self)
+        pin_action.setToolTip(
+            "Keep this image floating above all windows as a reference."
+        )
+        pin_action.triggered.connect(self.pin_to_screen)
+        view_menu.addAction(pin_action)
+
+        image_size_action = QAction("Image Size...", self)
+        image_size_action.setToolTip(
+            "Resize the whole document; annotations scale with the image."
+        )
+        image_size_action.triggered.connect(self.change_image_size)
+        edit_menu.addAction(image_size_action)
 
         flatten_action = QAction("Flatten Annotations", self)
         flatten_action.setToolTip(
@@ -6539,6 +6563,11 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         selection_image = self.canvas.render_selection_image()
         if selection_image is not None and not selection_image.isNull():
             mime_data.setImageData(selection_image)
+            attach_image_file(
+                mime_data,
+                QPixmap.fromImage(selection_image),
+                f"{self._clipboard_file_name()}-selection",
+            )
         QGuiApplication.clipboard().setMimeData(mime_data)
 
         bounds = self.canvas.selected_annotations_bounds()
@@ -6606,7 +6635,33 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         set_json_clipboard_data(mime_data, _CANVAS_CLIPBOARD_MIME, payload)
         mime_data.setData("image/png", bytes(image_bytes))
         mime_data.setImageData(composited.toImage())
+        # A file reference as well, so the result can be pasted into a file
+        # manager or attached to a mail -- both read text/uri-list, not image data.
+        attach_image_file(mime_data, composited, self._clipboard_file_name())
         return mime_data
+
+    def _drag_out_payload(self) -> tuple[QPixmap, str]:
+        """
+        Returns the image and file name for a drag-out operation.
+
+        Returns:
+            tuple[QPixmap, str]: Composited image and preferred file name.
+        """
+
+        return self.canvas.export_composited_pixmap(), self._clipboard_file_name()
+
+    def _clipboard_file_name(self) -> str:
+        """
+        Returns the file name used when handing the image out as a file.
+
+        Returns:
+            str: File name without directory.
+        """
+
+        if self._current_project_path:
+            return Path(self._current_project_path).stem
+        title = self.windowTitle().split(" - ")[0].strip()
+        return title or "snappix"
 
     def paste_selected_annotations_from_clipboard(self) -> bool:
         """
@@ -6720,6 +6775,64 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         from src.update_dialog import check_for_updates
 
         check_for_updates(self)
+
+    def pin_to_screen(self) -> "object | None":
+        """
+        Opens the current image in a floating always-on-top window.
+
+        Returns:
+            PinWindow | None: Created window, or None when there is no image.
+        """
+
+        from src.pin_window import PinWindow
+
+        pixmap = self.canvas.export_composited_pixmap()
+        if pixmap.isNull():
+            return None
+        window = PinWindow(pixmap)
+        # Held by the editor tab: a frameless tool window with no parent is
+        # otherwise garbage-collected the moment this method returns.
+        self._pinned_windows.append(window)
+        window.closed.connect(lambda: self._forget_pinned_window(window))
+        window.show()
+        window.raise_()
+        window.activateWindow()
+        self.statusBar().showMessage("Pinned to screen - Esc closes it", 4000)
+        return window
+
+    def _forget_pinned_window(self, window) -> None:
+        """
+        Drops a closed pin window from the keep-alive list.
+
+        Args:
+            window: Window that was closed.
+
+        Returns:
+            None
+        """
+
+        if window in self._pinned_windows:
+            self._pinned_windows.remove(window)
+
+    def change_image_size(self) -> None:
+        """
+        Asks for a new document size and applies it to image and annotations.
+
+        Returns:
+            None
+        """
+
+        from src.image_size_dialog import ImageSizeDialog
+
+        screenshot = self.canvas.screenshot()
+        if screenshot.isNull():
+            return
+        dialog = ImageSizeDialog(screenshot.width(), screenshot.height(), self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        width, height = dialog.selected_size()
+        if self.canvas.scale_document(width, height):
+            self.statusBar().showMessage(f"Image resized to {width} x {height} px")
 
     def show_about(self) -> None:
         """

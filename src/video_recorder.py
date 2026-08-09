@@ -18,6 +18,12 @@ from shutil import which
 
 from PySide6.QtCore import QObject, QRect, Signal
 
+# GIF export defaults. A GIF is a lossy, 256-color, uncompressed-frame format:
+# exporting a 30 fps 4K recording at full size produces hundreds of megabytes
+# that no viewer plays smoothly, so both rate and width are reduced by default.
+DEFAULT_GIF_FPS = 12
+DEFAULT_GIF_WIDTH = 960
+
 
 class RecordingState:
     """
@@ -503,6 +509,80 @@ def build_export_command(
     else:
         command += ["-c:v", "libx264", "-crf", "18", "-pix_fmt", "yuv420p", "-an"]
     command.append(str(output_path))
+    return command
+
+
+def build_gif_export_command(
+    source_video: Path,
+    overlay_segments: list[OverlaySegment],
+    output_path: Path,
+    *,
+    fps: int = DEFAULT_GIF_FPS,
+    width: int = DEFAULT_GIF_WIDTH,
+    report_progress: bool = False,
+) -> list[str]:
+    """
+    Builds the ffmpeg command line that exports the clip as an animated GIF.
+
+    GIF carries only 256 colors, so a palette is generated from the clip instead
+    of using the default web palette -- without it, screen recordings band badly
+    on gradients and antialiased text. Frame rate and width are reduced as well:
+    a GIF of a full-resolution 30 fps recording is enormous and no viewer plays
+    it smoothly.
+
+    Args:
+        source_video: Path to the raw recorded video.
+        overlay_segments: Time-bounded transparent annotation-layer PNGs.
+        output_path: Destination GIF file path.
+        fps: Output frame rate.
+        width: Output width in pixels; height follows the aspect ratio.
+        report_progress: When True, stream encode progress on stdout.
+
+    Returns:
+        list[str]: Complete ffmpeg command line arguments.
+    """
+
+    command = [resolve_ffmpeg_path() or "ffmpeg", "-y"]
+    if report_progress:
+        command += ["-progress", "pipe:1", "-nostats"]
+    command += ["-i", str(source_video)]
+    for segment in overlay_segments:
+        command += ["-i", str(segment.png_path)]
+
+    filter_parts = []
+    current_label = "0:v"
+    for index, segment in enumerate(overlay_segments):
+        input_index = index + 1
+        out_label = f"g{index}"
+        enable_expr = f"between(t,{segment.start_s},{segment.end_s})"
+        filter_parts.append(
+            f"[{current_label}][{input_index}:v]overlay=enable='{enable_expr}'[{out_label}]"
+        )
+        current_label = out_label
+
+    safe_fps = max(1, int(fps))
+    safe_width = max(16, int(width))
+    # Cap the width, never enlarge: upscaling a small recording only inflates the
+    # file without adding detail. -2 keeps the height even, which some decoders
+    # insist on even for GIF.
+    filter_parts.append(
+        f"[{current_label}]fps={safe_fps},"
+        f"scale=w='min({safe_width},iw)':h=-2:flags=lanczos,"
+        "split[pal_a][pal_b]"
+    )
+    filter_parts.append("[pal_a]palettegen=stats_mode=diff[pal]")
+    filter_parts.append("[pal_b][pal]paletteuse=dither=bayer:bayer_scale=5[vout]")
+
+    command += [
+        "-filter_complex",
+        ";".join(filter_parts),
+        "-map",
+        "[vout]",
+        "-loop",
+        "0",
+        "-an",
+        str(output_path),
+    ]
     return command
 
 
