@@ -162,6 +162,304 @@ class TestCaptureModes(unittest.TestCase):
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required")
+class TestCapturePanelLayout(unittest.TestCase):
+    """
+    Verifies every capture button stays managed by the wrapping flow layout.
+
+    Adding a button to the panel but not to ``_refresh_capture_button_flow``
+    leaves it a child of the frame that the flow layout never positions: it
+    keeps its previous geometry and is drawn on top of a neighbour or outside
+    the panel. That is exactly what happened when the two new capture modes were
+    added, and it is invisible to any test that only checks the buttons exist.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """
+        Ensures a Qt application exists.
+        """
+
+        cls._app = ensure_qapp()
+
+    def _panel(self):
+        """
+        Builds a capture panel with its flow rebuilt.
+
+        Returns:
+            CapturePanel: Panel under test.
+        """
+
+        from src.capture import CapturePanel
+
+        panel = CapturePanel()
+        self.addCleanup(panel.close)
+        panel.show()
+        self._app.processEvents()
+        panel._apply_initial_window_geometry()
+        panel._refresh_capture_button_flow()
+        self._app.processEvents()
+        return panel
+
+    def _resize(self, panel, width: int) -> None:
+        """
+        Resizes the panel and lets it settle.
+
+        The panel pins its height inside the resize event, so no extra flush is
+        needed -- that is exactly the behaviour under test.
+
+        Args:
+            panel: Panel under test.
+            width: New window width.
+
+        Returns:
+            None
+        """
+
+        panel.resize(width, panel.height())
+        self._app.processEvents()
+
+    def test_every_visible_button_is_in_the_flow_layout(self) -> None:
+        """
+        Ensures no capture button is left unmanaged.
+        """
+
+        from PySide6.QtWidgets import QPushButton
+
+        panel = self._panel()
+        frame = panel.capture_fullscreen_button.parent()
+        managed = {
+            id(item.widget())
+            for item in frame._flow_layout._items
+            if item.widget() is not None
+        }
+        unmanaged = [
+            button.text() or "icon"
+            for button in frame.findChildren(QPushButton)
+            if not button.isHidden() and id(button) not in managed
+        ]
+        self.assertEqual(unmanaged, [], "buttons missing from the flow layout")
+
+    def test_new_capture_buttons_are_flow_candidates(self) -> None:
+        """
+        Ensures the two new modes are part of the rebuilt candidate list, not
+        only of the initial construction list.
+        """
+
+        panel = self._panel()
+        frame = panel.capture_fullscreen_button.parent()
+        managed = {
+            id(item.widget())
+            for item in frame._flow_layout._items
+            if item.widget() is not None
+        }
+        self.assertIn(id(panel.capture_screen_button), managed)
+        self.assertIn(id(panel.capture_last_region_button), managed)
+
+    def test_no_button_is_painted_outside_the_panel(self) -> None:
+        """
+        Ensures the panel grows to fit the buttons instead of clipping them.
+        """
+
+        from PySide6.QtWidgets import QPushButton
+
+        panel = self._panel()
+        frame = panel.capture_fullscreen_button.parent()
+        overflowing = [
+            f"{button.text() or 'icon'} bottom={button.geometry().bottom()}"
+            for button in frame.findChildren(QPushButton)
+            if not button.isHidden() and button.geometry().bottom() > frame.height()
+        ]
+        self.assertEqual(overflowing, [], "buttons reach past the panel edge")
+
+    def test_width_change_keeps_the_smallest_possible_height(self) -> None:
+        """
+        Ensures widening or narrowing the panel leaves no empty band below the
+        buttons: the flow rewraps and the window follows the new row count.
+        """
+
+        panel = self._panel()
+        for width in (360, 420, 620, 1000):
+            self._resize(panel, width)
+            self.assertEqual(
+                panel.height(),
+                panel.minimumSizeHint().height(),
+                f"height does not match the minimum at width {width}",
+            )
+
+    def test_panel_cannot_be_narrowed_below_its_startup_width(self) -> None:
+        """
+        Ensures the window cannot be squeezed into a sliver.
+
+        Without a floor the flow layout stacks every button in its own row and
+        the panel shoots up to nearly screen height -- narrowing the window made
+        it taller and taller.
+        """
+
+        from src.capture import CAPTURE_PANEL_START_WIDTH
+
+        panel = self._panel()
+        self.assertGreaterEqual(panel.minimumWidth(), CAPTURE_PANEL_START_WIDTH)
+
+        for width in (300, 200, 120):
+            self._resize(panel, width)
+            self.assertGreaterEqual(panel.width(), CAPTURE_PANEL_START_WIDTH)
+
+    def test_narrowing_never_makes_the_panel_taller(self) -> None:
+        """
+        Ensures dragging the edge inward does not add button rows.
+        """
+
+        panel = self._panel()
+        start_height = panel.height()
+
+        for width in (400, 300, 150):
+            self._resize(panel, width)
+            self.assertLessEqual(
+                panel.height(),
+                start_height,
+                f"panel grew taller when narrowed to {width}",
+            )
+
+    def test_height_stays_bounded_across_every_width(self) -> None:
+        """
+        Ensures no width turns the panel into a tall column of buttons.
+
+        A row holding a 32 px icon button next to 25 px text buttons is 7 px
+        taller, so the height varies slightly with the wrap; what must not
+        happen is the panel growing by whole rows.
+        """
+
+        panel = self._panel()
+        start_height = panel.height()
+
+        heights = []
+        for width in range(420, 1300, 40):
+            self._resize(panel, width)
+            heights.append(panel.height())
+
+        self.assertLessEqual(
+            max(heights),
+            start_height + 10,
+            f"panel height grew to {max(heights)} from {start_height}",
+        )
+
+    def test_height_is_pinned_while_the_width_changes(self) -> None:
+        """
+        Ensures the height is set during the drag, not once it ends.
+
+        Publishing a size constraint lets the window manager clamp the height
+        itself while it still owns the interactive resize; requesting a new
+        geometry instead made every request the WM's new base and the window
+        grew hundreds of pixels taller than its content.
+        """
+
+        panel = self._panel()
+
+        for width in range(430, 700, 30):
+            panel.resize(width, panel.height())
+            self._app.processEvents()
+            expected = panel.content_height()
+            self.assertEqual(
+                panel.minimumHeight(),
+                expected,
+                f"minimum height not applied at width {width}",
+            )
+            self.assertEqual(panel.height(), expected)
+
+    def test_height_cannot_be_stretched_by_the_window_manager(self) -> None:
+        """
+        Ensures the panel keeps the smallest height its content allows.
+
+        Its height follows entirely from how the buttons wrap, so there is
+        nothing to drag vertically and a taller window is always empty space.
+        """
+
+        panel = self._panel()
+        expected = panel.content_height()
+        self.assertEqual(panel.minimumHeight(), expected)
+        self.assertEqual(panel.maximumHeight(), expected)
+
+        panel.resize(panel.width(), 600)
+        self._app.processEvents()
+        self.assertEqual(panel.height(), expected)
+
+    def test_delay_row_does_not_absorb_vertical_space(self) -> None:
+        """
+        Ensures the frame holding the delay slider keeps its own height.
+
+        With the default Preferred policy it soaked up whatever vertical slack
+        the window had, so the panel stayed tall after the buttons below it had
+        already rewrapped into fewer rows.
+        """
+
+        from PySide6.QtWidgets import QSizePolicy
+
+        panel = self._panel()
+        delay_frame = panel.delay_slider.parent()
+
+        self.assertEqual(
+            delay_frame.sizePolicy().verticalPolicy(),
+            QSizePolicy.Policy.Maximum,
+        )
+
+        heights = []
+        for width in (420, 600, 900, 1200):
+            self._resize(panel, width)
+            heights.append(delay_frame.height())
+        self.assertEqual(
+            len(set(heights)), 1, f"delay row height varied: {heights}"
+        )
+
+    def test_height_never_falls_back_to_the_constant_size_hint(self) -> None:
+        """
+        Ensures the panel cannot jump to full height while its edge is dragged.
+
+        ``sizeHint()`` ignores height-for-width and reports one tall value for
+        every width. Using it as a fallback stretched the panel whenever the
+        layout reported no height-for-width mid-resize, which is what happened
+        during an interactive drag.
+        """
+
+        panel = self._panel()
+        panel.resize(620, 400)
+        self._app.processEvents()
+        panel._height_settle_timer.stop()
+
+        with patch.object(
+            type(panel.layout()), "hasHeightForWidth", return_value=False
+        ):
+            panel.shrink_height_to_content()
+        self._app.processEvents()
+
+        self.assertEqual(panel.height(), panel.minimumSizeHint().height())
+        self.assertLess(panel.height(), panel.sizeHint().height())
+
+    def test_buttons_do_not_overlap(self) -> None:
+        """
+        Ensures no two buttons share pixels, which is how the unmanaged button
+        showed up: half-hidden behind its neighbour.
+        """
+
+        from PySide6.QtWidgets import QPushButton
+
+        panel = self._panel()
+        frame = panel.capture_fullscreen_button.parent()
+        buttons = [
+            button
+            for button in frame.findChildren(QPushButton)
+            if not button.isHidden()
+        ]
+        collisions = []
+        for index, first in enumerate(buttons):
+            for second in buttons[index + 1 :]:
+                if first.geometry().intersects(second.geometry()):
+                    collisions.append(
+                        f"{first.text() or 'icon'} / {second.text() or 'icon'}"
+                    )
+        self.assertEqual(collisions, [], "overlapping capture buttons")
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required")
 class TestRegionOverlayReadouts(unittest.TestCase):
     """
     Verifies the size readout and magnifier drawn while picking a region.

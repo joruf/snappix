@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -136,6 +137,10 @@ MAGNIFIER_GAP = 24
 # Height is always the minimum that fits the content at that width.
 # ---------------------------------------------------------------------------
 CAPTURE_PANEL_START_WIDTH = 420
+
+# Quiet period after the last width change before the panel corrects its height.
+# Long enough to sit out a continuous drag, short enough to feel immediate.
+PANEL_HEIGHT_SETTLE_MS = 180
 
 
 def schedule_capture_after_ui_settle(callback: Callable[[], None]) -> None:
@@ -296,6 +301,14 @@ class CapturePanel(QWidget):
             | Qt.WindowType.WindowCloseButtonHint
         )
         self._initial_position_done = False
+        # Height is corrected only once the width stops changing. Resizing the
+        # window from inside a resize event fights the window manager's own
+        # interactive resize: each of our requests becomes the WM's new base
+        # geometry, and the window ends up far taller than its content needs.
+        self._height_settle_timer = QTimer(self)
+        self._height_settle_timer.setSingleShot(True)
+        self._height_settle_timer.setInterval(PANEL_HEIGHT_SETTLE_MS)
+        self._height_settle_timer.timeout.connect(self.shrink_height_to_content)
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(8, 8, 8, 8)
@@ -307,6 +320,10 @@ class CapturePanel(QWidget):
         frame = QFrame()
         frame.setFrameShape(QFrame.Shape.StyledPanel)
         frame.setToolTip("Capture timing: delay before the capture starts.")
+        # Maximum, not the default Preferred: a Preferred frame happily absorbs
+        # whatever vertical slack the window has, so the delay row kept the
+        # panel tall after the buttons below it had already rewrapped smaller.
+        frame.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         root_layout.addWidget(frame)
         form = QFormLayout(frame)
 
@@ -360,6 +377,22 @@ class CapturePanel(QWidget):
         self.capture_fullscreen_button.setToolTip("Capture all screens immediately.")
         button_widgets.append(self.capture_fullscreen_button)
 
+        self.capture_area_button = QPushButton("Capture Area")
+        self.capture_area_button.setObjectName("primaryButton")
+        self.capture_area_button.clicked.connect(
+            lambda: self._emit_request_for_mode(CaptureMode.REGION)
+        )
+        self.capture_area_button.setToolTip("Select and capture a custom screen region.")
+        button_widgets.append(self.capture_area_button)
+
+        self.capture_window_button = QPushButton("Capture Window")
+        self.capture_window_button.setObjectName("primaryButton")
+        self.capture_window_button.clicked.connect(
+            lambda: self._emit_request_for_mode(CaptureMode.WINDOW)
+        )
+        self.capture_window_button.setToolTip("Select one application window to capture.")
+        button_widgets.append(self.capture_window_button)
+
         self.capture_screen_button = QPushButton("Capture Screen")
         self.capture_screen_button.setObjectName("primaryButton")
         self.capture_screen_button.clicked.connect(
@@ -369,14 +402,6 @@ class CapturePanel(QWidget):
             "Capture only the screen the mouse is on, not every monitor."
         )
         button_widgets.append(self.capture_screen_button)
-
-        self.capture_area_button = QPushButton("Capture Area")
-        self.capture_area_button.setObjectName("primaryButton")
-        self.capture_area_button.clicked.connect(
-            lambda: self._emit_request_for_mode(CaptureMode.REGION)
-        )
-        self.capture_area_button.setToolTip("Select and capture a custom screen region.")
-        button_widgets.append(self.capture_area_button)
 
         self.capture_last_region_button = QPushButton("Same Area")
         self.capture_last_region_button.setObjectName("primaryButton")
@@ -388,14 +413,6 @@ class CapturePanel(QWidget):
         )
         self.capture_last_region_button.setEnabled(has_last_capture_region())
         button_widgets.append(self.capture_last_region_button)
-
-        self.capture_window_button = QPushButton("Capture Window")
-        self.capture_window_button.setObjectName("primaryButton")
-        self.capture_window_button.clicked.connect(
-            lambda: self._emit_request_for_mode(CaptureMode.WINDOW)
-        )
-        self.capture_window_button.setToolTip("Select one application window to capture.")
-        button_widgets.append(self.capture_window_button)
 
         self.capture_scroll_button = QPushButton("Scroll")
         self.capture_scroll_button.setObjectName("primaryButton")
@@ -480,10 +497,19 @@ class CapturePanel(QWidget):
             None
         """
 
+        # Every capture button belongs here. A button missing from this list
+        # stays a child of the frame but is no longer managed by the flow
+        # layout, so it keeps its last geometry and ends up drawn on top of its
+        # neighbours or outside the panel.
+        # Order matters: it is the wrap order. The three original capture
+        # buttons stay on the first row at the default width, so the two modes
+        # added later follow them instead of pushing them out of place.
         candidates = [
             self.capture_fullscreen_button,
             self.capture_area_button,
             self.capture_window_button,
+            self.capture_screen_button,
+            self.capture_last_region_button,
             self.capture_scroll_button,
             self.capture_video_button,
             self.pick_color_button,
@@ -493,6 +519,57 @@ class CapturePanel(QWidget):
         ]
         visible_buttons = [button for button in candidates if not button.isHidden()]
         self._buttons_flow.set_flow_widgets(visible_buttons)
+        self._apply_minimum_panel_width(visible_buttons)
+        self.apply_content_height()
+
+    def _apply_minimum_panel_width(self, visible_buttons: list[QWidget]) -> None:
+        """
+        Stops the panel from being dragged narrower than one row of buttons.
+
+        Without a floor the window can be squeezed to a sliver: the flow layout
+        then stacks every button in its own row and the panel shoots up to
+        almost screen height. The floor is measured from the buttons themselves
+        rather than hardcoded, so a translated interface with longer labels
+        raises it accordingly.
+
+        Setting the minimum on the flow container rather than the window lets Qt
+        add the surrounding frame and layout margins itself.
+
+        Args:
+            visible_buttons: Buttons currently placed in the flow layout.
+
+        Returns:
+            None
+        """
+
+        if not visible_buttons:
+            return
+
+        primary = [
+            button
+            for button in (
+                self.capture_fullscreen_button,
+                self.capture_area_button,
+                self.capture_window_button,
+            )
+            if not button.isHidden()
+        ]
+        if not primary:
+            primary = [max(visible_buttons, key=lambda item: item.sizeHint().width())]
+
+        spacing = max(0, self._buttons_flow.flow_layout.horizontalSpacing())
+        margins = self._buttons_flow.flow_layout.contentsMargins()
+        required = sum(button.sizeHint().width() for button in primary)
+        required += spacing * (len(primary) - 1)
+        required += margins.left() + margins.right()
+        self._buttons_flow.setMinimumWidth(required)
+
+        # The startup width is the width the button rows are designed for.
+        # Narrower than that, the flow has to open another row and the panel
+        # grows taller the more the user narrows it -- the opposite of what
+        # dragging a window edge inward should do. Qt uses whichever floor is
+        # larger, so a translation with wider buttons still wins.
+        self.setMinimumWidth(max(1, int(CAPTURE_PANEL_START_WIDTH)))
 
     def set_video_capture_available(self, available: bool) -> None:
         """
@@ -650,9 +727,13 @@ class CapturePanel(QWidget):
         super().resizeEvent(event)
         if event.oldSize().width() == event.size().width():
             return
-        # Defer: the flow layout has to re-wrap for the new width before its
-        # preferred height means anything.
-        QTimer.singleShot(0, self.shrink_height_to_content)
+        # Applied on every step of the drag, not afterwards: this publishes a
+        # size constraint rather than requesting a new geometry, so the window
+        # manager clamps the height itself while it still owns the resize.
+        self.apply_content_height()
+        # The timer is the backstop for the final width, in case the last
+        # resize event arrives before the flow layout has rewrapped.
+        self._height_settle_timer.start()
 
     def shrink_height_to_content(self) -> None:
         """
@@ -662,21 +743,77 @@ class CapturePanel(QWidget):
             None
         """
 
+        self.apply_content_height()
+
+    def content_height(self) -> int:
+        """
+        Returns the smallest height the current width allows.
+
+        ``minimumSizeHint()`` tracks the wrapped row count, because the flow
+        container publishes its height-for-width as a minimum. ``sizeHint()``
+        must never be used here -- it ignores height-for-width and reports one
+        constant, tall value for every width.
+
+        Returns:
+            int: Required content height in pixels, or 0 when unknown.
+        """
+
         layout = self.layout()
-        target_height = -1
+        buttons_flow = getattr(self, "_buttons_flow", None)
         if layout is not None:
-            # Children need current geometry before their height-for-width
-            # means anything for the new width.
+            # invalidate() before activate(): activate() alone is a no-op when
+            # the layout is not marked dirty, and a plain width change does not
+            # mark it. Without this the flow container is still measured at its
+            # previous width and the panel keeps the taller height.
+            layout.invalidate()
             layout.activate()
+
+        # The container learns its new width from the activate() above, but Qt
+        # delivers that resize as a posted event. Rewrapping it here makes the
+        # new row count readable in this same call, which is what allows the
+        # height to be pinned while the drag is still running rather than after.
+        if buttons_flow is not None:
+            buttons_flow.update_flow_geometry()
+            # updateGeometry() only posts a layout request to the parent, so the
+            # frame around the buttons would still report the previous row
+            # count. Invalidating every layout between the container and the
+            # window makes the new height readable immediately.
+            widget = buttons_flow
+            while widget is not None:
+                widget_layout = widget.layout()
+                if widget_layout is not None:
+                    widget_layout.invalidate()
+                    widget_layout.activate()
+                if widget is self:
+                    break
+                widget = widget.parentWidget()
+
+        target_height = self.minimumSizeHint().height()
         if layout is not None and layout.hasHeightForWidth():
-            # sizeHint() ignores height-for-width, so it cannot see that the
-            # flow-wrapped buttons need fewer rows at this width.
-            target_height = layout.heightForWidth(self.width())
+            content_width = max(1, self.contentsRect().width())
+            target_height = max(target_height, layout.heightForWidth(content_width))
+        return max(0, target_height)
+
+    def apply_content_height(self) -> None:
+        """
+        Pins the panel to the height its content needs at the current width.
+
+        The height is fixed rather than merely requested: the panel's height is
+        fully determined by how the buttons wrap, so there is nothing for the
+        user to drag vertically, and a fixed height is a constraint the window
+        manager honours during its own interactive resize instead of a competing
+        geometry request.
+
+        Returns:
+            None
+        """
+
+        target_height = self.content_height()
         if target_height <= 0:
-            target_height = self.sizeHint().height()
-        if target_height <= 0 or self.height() == target_height:
             return
-        self.resize(self.width(), target_height)
+        if self.minimumHeight() == target_height and self.maximumHeight() == target_height:
+            return
+        self.setFixedHeight(target_height)
 
     def set_autostart_checked(self, enabled: bool) -> None:
         """
@@ -752,14 +889,11 @@ class CapturePanel(QWidget):
         if self._initial_position_done:
             return
         width = max(1, int(CAPTURE_PANEL_START_WIDTH))
+        self.setMaximumHeight(16777215)
         self.resize(width, 1)
         QApplication.processEvents()
-        layout = self.layout()
-        if layout is not None and layout.hasHeightForWidth():
-            height = max(1, int(layout.heightForWidth(max(1, self.contentsRect().width()))))
-        else:
-            height = max(1, int(self.minimumSizeHint().height()))
-        self.resize(width, height)
+        self.apply_content_height()
+        self.resize(width, self.height())
         screen = QGuiApplication.screenAt(QCursor.pos())
         if screen is None:
             screen = QGuiApplication.primaryScreen()
