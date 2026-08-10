@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 try:
-    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtCore import QPoint, QRect, Qt
     from PySide6.QtGui import QColor, QImage, QPixmap
 
     from tests.qt_test_utils import ensure_qapp
@@ -162,6 +162,227 @@ class TestCaptureModes(unittest.TestCase):
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required")
+class TestWindowPicking(unittest.TestCase):
+    """
+    Verifies which window the window-capture mode picks under the cursor.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """
+        Ensures a Qt application exists.
+        """
+
+        cls._app = ensure_qapp()
+
+    def _xprop(self, text: str):
+        """
+        Builds a fake ``xprop`` result.
+
+        Args:
+            text: Stdout the call should produce.
+
+        Returns:
+            unittest.mock.Mock: Stand-in for a completed process.
+        """
+
+        from unittest.mock import Mock
+
+        return Mock(stdout=text)
+
+    def test_minimized_window_is_not_pickable(self) -> None:
+        """
+        Ensures a minimized window is skipped.
+
+        Muffin keeps minimized windows mapped and listed in the stacking order
+        with their full geometry, so a minimized maximized window would win the
+        hit-test and the capture would return a whole monitor.
+        """
+
+        import src.capture as capture
+
+        state = (
+            "_NET_WM_STATE(ATOM) = _NET_WM_STATE_MAXIMIZED_HORZ, "
+            "_NET_WM_STATE_HIDDEN\n_NET_WM_DESKTOP(CARDINAL) = 0\n"
+        )
+        with patch.object(capture.subprocess, "run", return_value=self._xprop(state)):
+            self.assertFalse(capture._x11_window_is_pickable("42", 0))
+
+    def test_window_on_another_workspace_is_not_pickable(self) -> None:
+        """
+        Ensures a window parked on another workspace is skipped.
+        """
+
+        import src.capture as capture
+
+        state = "_NET_WM_STATE(ATOM) = \n_NET_WM_DESKTOP(CARDINAL) = 3\n"
+        with patch.object(capture.subprocess, "run", return_value=self._xprop(state)):
+            self.assertFalse(capture._x11_window_is_pickable("42", 0))
+
+    def test_window_on_every_workspace_is_pickable(self) -> None:
+        """
+        Ensures a pinned window still qualifies.
+        """
+
+        import src.capture as capture
+
+        state = f"_NET_WM_STATE(ATOM) = \n_NET_WM_DESKTOP(CARDINAL) = {0xFFFFFFFF}\n"
+        with patch.object(capture.subprocess, "run", return_value=self._xprop(state)):
+            self.assertTrue(capture._x11_window_is_pickable("42", 0))
+
+    def test_unreadable_state_keeps_the_window(self) -> None:
+        """
+        Ensures a failing xprop does not silently drop a valid target.
+        """
+
+        import src.capture as capture
+
+        with patch.object(capture.subprocess, "run", side_effect=OSError("boom")):
+            self.assertTrue(capture._x11_window_is_pickable("42", 0))
+
+    def test_own_overlay_from_xdotool_falls_back_to_the_point_lookup(self) -> None:
+        """
+        Ensures picking a window never returns the whole desktop.
+
+        Muffin ignores the overlay's click-through input shape and hands
+        ``xdotool selectwindow`` the overlay itself, whose geometry spans every
+        monitor. The highlight frame looked right because it uses the point
+        lookup, while the capture used the reported id.
+        """
+
+        import os
+
+        import src.capture as capture
+
+        target = QRect(305, 220, 1180, 860)
+        with patch.object(capture, "_x11_window_pid", return_value=os.getpid()), \
+             patch.object(
+                 capture, "detect_window_at_point", return_value=("visible", target)
+             ), patch.object(
+                 capture,
+                 "_window_geometry_from_id",
+                 return_value=QRect(0, 0, 5120, 1440),
+             ):
+            geometry = capture.geometry_for_selected_window("overlay", QPoint(905, 690))
+
+        self.assertEqual(geometry, target)
+
+    def test_foreign_window_id_is_used_directly(self) -> None:
+        """
+        Ensures a normal pick still uses the reported window.
+        """
+
+        import src.capture as capture
+
+        target = QRect(100, 100, 640, 480)
+        with patch.object(capture, "_x11_window_pid", return_value=-1), \
+             patch.object(capture, "_window_geometry_from_id", return_value=target):
+            geometry = capture.geometry_for_selected_window("42", QPoint(200, 200))
+
+        self.assertEqual(geometry, target)
+
+    def test_lookup_skips_hidden_windows_and_takes_the_visible_one(self) -> None:
+        """
+        Ensures the small visible window wins over a minimized maximized one.
+
+        This is the reported case: a minimized full-screen browser sat above the
+        window actually on screen, so window capture returned the whole monitor.
+        """
+
+        import src.capture as capture
+
+        geometries = {
+            "visible": QRect(305, 220, 1180, 860),
+            "minimized": QRect(0, 32, 2560, 1408),
+        }
+        with patch.object(
+            capture, "_x11_stacking_order", return_value=["visible", "minimized"]
+        ), patch.object(
+            capture, "_window_geometry_from_id", side_effect=geometries.get
+        ), patch.object(
+            capture, "_x11_window_pid", return_value=-1
+        ), patch.object(
+            capture, "_x11_current_desktop", return_value=0
+        ), patch.object(
+            capture,
+            "_x11_window_is_pickable",
+            side_effect=lambda window_id, _desktop: window_id != "minimized",
+        ):
+            picked = capture._x11_window_id_at_point(QPoint(905, 690))
+
+        self.assertEqual(picked, "visible")
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required")
+class TestRepeatRegionWiring(unittest.TestCase):
+    """
+    Verifies the repeat button is armed by the time the panel reappears.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """
+        Ensures a Qt application exists.
+        """
+
+        cls._app = ensure_qapp()
+
+    def setUp(self) -> None:
+        """
+        Clears the stored region between tests.
+        """
+
+        import src.capture as capture
+
+        capture._last_capture_region = QRect()
+
+    def test_region_is_stored_before_the_capture_is_handed_on(self) -> None:
+        """
+        Ensures the stored region exists before capture_done runs.
+
+        capture_done drives the whole post-capture chain synchronously,
+        including showing the panel again, and the panel enables its repeat
+        button from the stored region while becoming visible. Emitting the
+        region afterwards left the stored region empty for anything reading it
+        during that chain.
+        """
+
+        from src.capture import RegionCaptureOverlay, has_last_capture_region
+
+        overlay = RegionCaptureOverlay(_pixmap(800, 600), QRect(0, 0, 800, 600))
+        self.addCleanup(overlay.close)
+        overlay.resize(800, 600)
+
+        seen = []
+        overlay.region_selected.connect(lambda _rect: seen.append("region"))
+        overlay.capture_done.connect(
+            lambda _pixmap: seen.append(("capture", has_last_capture_region()))
+        )
+        overlay.region_selected.connect(
+            __import__("src.capture", fromlist=["x"]).remember_capture_region
+        )
+
+        overlay._start_point = QPoint(100, 100)
+        overlay._current_point = QPoint(400, 300)
+        overlay._dragging = True
+
+        from PySide6.QtCore import QPointF
+        from PySide6.QtGui import QMouseEvent
+
+        release = QMouseEvent(
+            QMouseEvent.Type.MouseButtonRelease,
+            QPointF(400, 300),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        overlay.mouseReleaseEvent(release)
+
+        self.assertEqual(seen[0], "region", "region was not stored first")
+        self.assertEqual(seen[1], ("capture", True), "repeat state was stale")
+
+
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required")
 class TestCapturePanelLayout(unittest.TestCase):
     """
     Verifies every capture button stays managed by the wrapping flow layout.
@@ -239,10 +460,10 @@ class TestCapturePanelLayout(unittest.TestCase):
         ]
         self.assertEqual(unmanaged, [], "buttons missing from the flow layout")
 
-    def test_new_capture_buttons_are_flow_candidates(self) -> None:
+    def test_new_capture_button_is_a_flow_candidate(self) -> None:
         """
-        Ensures the two new modes are part of the rebuilt candidate list, not
-        only of the initial construction list.
+        Ensures the new mode is part of the rebuilt candidate list, not only of
+        the initial construction list.
         """
 
         panel = self._panel()
@@ -253,7 +474,6 @@ class TestCapturePanelLayout(unittest.TestCase):
             if item.widget() is not None
         }
         self.assertIn(id(panel.capture_screen_button), managed)
-        self.assertIn(id(panel.capture_last_region_button), managed)
 
     def test_no_button_is_painted_outside_the_panel(self) -> None:
         """

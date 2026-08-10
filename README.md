@@ -176,7 +176,7 @@ Flatpak modules too would be a much larger, slower build.
 - **Auto scroll capture** for long pages on Linux (scrollbar detect + stitch)
 - Post-capture: open editor, copy clipboard, or save to folder
 - **Capture Screen**: captures only the monitor the mouse is on (`Ctrl+Shift+S`) instead of the whole virtual desktop
-- **Same Area**: repeats the region captured last without dragging it again (`Ctrl+Shift+D`) — the fast path when documenting a sequence of steps
+- **Same area**: `Ctrl+Shift+D` repeats the region captured last without dragging it again — a hotkey, no panel button
 - Region overlay shows the **live selection size** and a **magnifier** with the cursor's screen coordinate, for pixel-exact edges
 - Global hotkeys (defaults include `Ctrl+Shift+A/W/F/S/D/V/P/R`; unavailable modes are not registered)
 - Wayland region capture via `grim` + `slurp` when available

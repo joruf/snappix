@@ -403,17 +403,6 @@ class CapturePanel(QWidget):
         )
         button_widgets.append(self.capture_screen_button)
 
-        self.capture_last_region_button = QPushButton("Same Area")
-        self.capture_last_region_button.setObjectName("primaryButton")
-        self.capture_last_region_button.clicked.connect(
-            lambda: self._emit_request_for_mode(CaptureMode.LAST_REGION)
-        )
-        self.capture_last_region_button.setToolTip(
-            "Capture the region used last, without dragging it again."
-        )
-        self.capture_last_region_button.setEnabled(has_last_capture_region())
-        button_widgets.append(self.capture_last_region_button)
-
         self.capture_scroll_button = QPushButton("Scroll")
         self.capture_scroll_button.setObjectName("primaryButton")
         self.capture_scroll_button.clicked.connect(
@@ -509,7 +498,6 @@ class CapturePanel(QWidget):
             self.capture_area_button,
             self.capture_window_button,
             self.capture_screen_button,
-            self.capture_last_region_button,
             self.capture_scroll_button,
             self.capture_video_button,
             self.pick_color_button,
@@ -690,7 +678,6 @@ class CapturePanel(QWidget):
         from src.platform import apply_linux_window_identity, apply_windows_window_icon
 
         super().showEvent(event)
-        self.refresh_last_region_state()
         apply_windows_window_icon(self, self.windowIcon())
         apply_linux_window_identity(
             self,
@@ -698,16 +685,6 @@ class CapturePanel(QWidget):
             wm_instance="snappix",
             wm_class="snappix",
         )
-
-    def refresh_last_region_state(self) -> None:
-        """
-        Enables the repeat button once a region has been captured.
-
-        Returns:
-            None
-        """
-
-        self.capture_last_region_button.setEnabled(has_last_capture_region())
 
     def resizeEvent(self, event) -> None:
         """
@@ -1148,8 +1125,13 @@ class RegionCaptureOverlay(QWidget):
         self._dragging = False
         rect = QRect(self._start_point, self._current_point).normalized()
         if rect.width() > 3 and rect.height() > 3:
-            self.capture_done.emit(self._screenshot.copy(rect))
+            # Remember the region first: capture_done runs the whole post-capture
+            # chain synchronously, including showing the panel again, and the
+            # panel enables its repeat button from the stored region while
+            # becoming visible. Emitting it afterwards left the button disabled
+            # until the panel happened to be shown a second time.
             self.region_selected.emit(rect.translated(self._virtual_geometry.topLeft()))
+            self.capture_done.emit(self._screenshot.copy(rect))
         else:
             self.capture_cancelled.emit()
         self.close()
@@ -2551,11 +2533,14 @@ def _x11_window_id_at_point(
     """
 
     own_pid = os.getpid()
+    current_desktop = _x11_current_desktop()
     for window_id in reversed(_x11_stacking_order()):
         if window_id in exclude_ids:
             continue
         geometry = _window_geometry_from_id(window_id)
         if geometry.isNull() or not geometry.contains(global_pos):
+            continue
+        if not _x11_window_is_pickable(window_id, current_desktop):
             continue
         # Snappix's own capture overlay covers the whole desktop and is listed in
         # the stacking order even though it is click-through, so it would win every
@@ -2710,6 +2695,39 @@ def capture_window_by_selection(snapshot: DesktopSnapshot) -> QPixmap:
     return snapshot.pixmap.copy(local_rect)
 
 
+def geometry_for_selected_window(
+    selected_id: str,
+    cursor_pos: QPoint,
+    *,
+    exclude_hwnds: tuple[int, ...] | list[int] = (),
+) -> QRect:
+    """
+    Returns the geometry to capture for a window picked by ``xdotool``.
+
+    The picking overlay is meant to be click-through, but not every window
+    manager honours the input shape. Muffin hands ``xdotool selectwindow`` the
+    overlay itself, whose geometry is the whole virtual desktop -- so the
+    capture quietly became a full-desktop screenshot even though the highlight
+    frame, which uses the point lookup, had shown the correct window all along.
+
+    Args:
+        selected_id: Window id reported by ``xdotool selectwindow``.
+        cursor_pos: Position that was clicked.
+        exclude_hwnds: Window ids the point lookup must ignore.
+
+    Returns:
+        QRect: Geometry of the window to capture, empty when unknown.
+    """
+
+    if _x11_window_pid(selected_id) == os.getpid():
+        _fallback_id, geometry = detect_window_at_point(
+            cursor_pos,
+            exclude_hwnds=exclude_hwnds,
+        )
+        return geometry
+    return _window_geometry_from_id(selected_id)
+
+
 def _resolve_top_level_window_id(window_id: str) -> str:
     """
     Resolves the top-level parent window id for a hovered child window.
@@ -2772,6 +2790,74 @@ def _get_root_window_id() -> str:
         return match.group(1)
     except Exception:
         return ""
+
+
+def _x11_current_desktop() -> int | None:
+    """
+    Returns the active workspace index.
+
+    Returns:
+        int | None: Workspace index, or None when it cannot be read.
+    """
+
+    try:
+        output = subprocess.run(
+            ["xprop", "-root", "_NET_CURRENT_DESKTOP"],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=0.4,
+        ).stdout
+    except Exception:
+        return None
+    match = re.search(r"=\s*(\d+)", output)
+    return int(match.group(1)) if match else None
+
+
+def _x11_window_is_pickable(window_id: str, current_desktop: int | None) -> bool:
+    """
+    Reports whether a window can be the visible target at a screen point.
+
+    Minimized windows and windows on another workspace stay in
+    ``_NET_CLIENT_LIST_STACKING`` and keep their geometry, and Muffin even keeps
+    them mapped so it can show previews. Without this check the topmost *listed*
+    window wins the hit-test even when the user cannot see it -- picking a
+    maximized minimized browser instead of the small window actually on screen,
+    which then looks like a whole-monitor screenshot.
+
+    Args:
+        window_id: Target window id.
+        current_desktop: Active workspace index, or None when unknown.
+
+    Returns:
+        bool: True when the window is a plausible pick.
+    """
+
+    try:
+        output = subprocess.run(
+            ["xprop", "-id", window_id, "_NET_WM_STATE", "_NET_WM_DESKTOP"],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=0.4,
+        ).stdout
+    except Exception:
+        # No answer: keep the window rather than silently dropping a valid target.
+        return True
+
+    if "_NET_WM_STATE_HIDDEN" in output:
+        return False
+
+    if current_desktop is None:
+        return True
+    desktop_match = re.search(r"_NET_WM_DESKTOP\(CARDINAL\)\s*=\s*(\d+)", output)
+    if not desktop_match:
+        return True
+    desktop = int(desktop_match.group(1))
+    # 0xFFFFFFFF marks a window shown on every workspace.
+    if desktop == 0xFFFFFFFF:
+        return True
+    return desktop == current_desktop
 
 
 def _window_geometry_from_id(window_id: str) -> QRect:
@@ -3687,7 +3773,12 @@ def execute_capture_request(
             if not selected_id:
                 on_cancel()
                 return
-            geometry = _window_geometry_from_id(selected_id)
+
+            geometry = geometry_for_selected_window(
+                selected_id,
+                QCursor.pos(),
+                exclude_hwnds=overlay._own_window_ids(),
+            )
             if geometry.isNull():
                 on_cancel()
                 return

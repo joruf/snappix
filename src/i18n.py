@@ -35,7 +35,6 @@ GERMAN: dict[str, str] = {
     "Capture Fullscreen": "Vollbild aufnehmen",
     "Capture Screen": "Bildschirm aufnehmen",
     "Capture Area": "Bereich aufnehmen",
-    "Same Area": "Gleicher Bereich",
     "Capture Window": "Fenster aufnehmen",
     "Capture Video": "Video aufnehmen",
     "Scroll": "Scrollen",
