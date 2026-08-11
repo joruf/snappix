@@ -4,7 +4,7 @@ Application settings dialog.
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QKeySequence
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -54,6 +54,7 @@ from src.global_hotkeys import GlobalHotkeyManager, hotkey_spec_to_pynput
 from src.i18n import LANGUAGES, normalize_language
 from src.post_capture_service import DEFAULT_FILENAME_TEMPLATE, FILENAME_PLACEHOLDERS
 from src.measurebox.settings import MeasureBoxSettings
+from src.settings_icons import build_settings_icon
 from src.shortcuts import (
     EDITOR_SHORTCUT_DEFINITIONS,
     find_shortcut_conflicts,
@@ -62,6 +63,8 @@ from src.shortcuts import (
     resolved_shortcut_text,
     shortcut_spec_to_sequences,
 )
+
+_SETTINGS_ICON_SIZE = QSize(16, 16)
 
 
 class SettingsDialog(QDialog):
@@ -96,9 +99,22 @@ class SettingsDialog(QDialog):
 
         root_layout = QVBoxLayout(self)
         tabs = QTabWidget(self)
-        tabs.addTab(self._build_general_tab(config), "General")
-        tabs.addTab(self._build_measure_box_tab(config, self._measure_box_settings), "MeasureBox")
-        tabs.addTab(self._build_shortcuts_tab(config), "Editor Shortcuts")
+        tabs.setIconSize(_SETTINGS_ICON_SIZE)
+        tabs.addTab(
+            self._build_general_tab(config),
+            build_settings_icon("tab_general"),
+            "General",
+        )
+        tabs.addTab(
+            self._build_measure_box_tab(config, self._measure_box_settings),
+            build_settings_icon("tab_measure_box"),
+            "MeasureBox",
+        )
+        tabs.addTab(
+            self._build_shortcuts_tab(config),
+            build_settings_icon("tab_shortcuts"),
+            "Editor Shortcuts",
+        )
         root_layout.addWidget(tabs)
 
         if not GlobalHotkeyManager.is_supported():
@@ -121,6 +137,47 @@ class SettingsDialog(QDialog):
         buttons.rejected.connect(self.reject)
         root_layout.addWidget(buttons)
 
+    def _option_label(self, icon_id: str, text: str) -> QWidget:
+        """
+        Builds a form-row label with a descriptive icon beside the text.
+
+        Args:
+            icon_id: Settings icon key.
+            text: Visible option label (kept as plain QLabel text for i18n).
+
+        Returns:
+            QWidget: Icon + text label used as a QFormLayout row label.
+        """
+
+        row = QWidget(self)
+        layout = QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        icon_label = QLabel(row)
+        icon_label.setPixmap(build_settings_icon(icon_id).pixmap(_SETTINGS_ICON_SIZE))
+        icon_label.setFixedSize(_SETTINGS_ICON_SIZE)
+        text_label = QLabel(text, row)
+        layout.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(text_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addStretch(1)
+        return row
+
+    def _decorate_checkbox(self, checkbox: QCheckBox, icon_id: str) -> QCheckBox:
+        """
+        Adds a descriptive icon to a settings checkbox.
+
+        Args:
+            checkbox: Checkbox to decorate.
+            icon_id: Settings icon key.
+
+        Returns:
+            QCheckBox: The same checkbox, for fluent ``addRow`` usage.
+        """
+
+        checkbox.setIcon(build_settings_icon(icon_id))
+        checkbox.setIconSize(_SETTINGS_ICON_SIZE)
+        return checkbox
+
     def _build_general_tab(self, config: AppConfig) -> QWidget:
         """
         Builds the general settings tab.
@@ -141,11 +198,17 @@ class SettingsDialog(QDialog):
             "Register system-wide shortcuts for capture actions."
         )
         self.hotkeys_enabled_checkbox.setChecked(config.hotkeys_enabled)
-        form.addRow("", self.hotkeys_enabled_checkbox)
+        form.addRow(
+            "",
+            self._decorate_checkbox(self.hotkeys_enabled_checkbox, "hotkeys"),
+        )
 
         self.hotkey_region_edit = QLineEdit(config.hotkey_capture_region)
         self.hotkey_region_edit.setPlaceholderText("ctrl+shift+a")
-        form.addRow("Capture area:", self.hotkey_region_edit)
+        form.addRow(
+            self._option_label("capture_area", "Capture area:"),
+            self.hotkey_region_edit,
+        )
 
         from src.paths import supports_window_capture
         from src.video_recorder import has_ffmpeg
@@ -153,27 +216,39 @@ class SettingsDialog(QDialog):
         self.hotkey_window_edit = QLineEdit(config.hotkey_capture_window)
         self.hotkey_window_edit.setPlaceholderText("ctrl+shift+w")
         if supports_window_capture():
-            form.addRow("Capture window:", self.hotkey_window_edit)
+            form.addRow(
+                self._option_label("capture_window", "Capture window:"),
+                self.hotkey_window_edit,
+            )
         else:
             self.hotkey_window_edit.hide()
 
         self.hotkey_fullscreen_edit = QLineEdit(config.hotkey_capture_fullscreen)
         self.hotkey_fullscreen_edit.setPlaceholderText("ctrl+shift+f")
-        form.addRow("Capture fullscreen:", self.hotkey_fullscreen_edit)
+        form.addRow(
+            self._option_label("capture_fullscreen", "Capture fullscreen:"),
+            self.hotkey_fullscreen_edit,
+        )
 
         self.hotkey_screen_edit = QLineEdit(config.hotkey_capture_screen)
         self.hotkey_screen_edit.setPlaceholderText("ctrl+shift+s")
         self.hotkey_screen_edit.setToolTip(
             "Captures only the screen the mouse is on, not every monitor."
         )
-        form.addRow("Capture current screen:", self.hotkey_screen_edit)
+        form.addRow(
+            self._option_label("capture_screen", "Capture current screen:"),
+            self.hotkey_screen_edit,
+        )
 
         self.hotkey_last_region_edit = QLineEdit(config.hotkey_capture_last_region)
         self.hotkey_last_region_edit.setPlaceholderText("ctrl+shift+d")
         self.hotkey_last_region_edit.setToolTip(
             "Repeats the region captured last, without dragging it again."
         )
-        form.addRow("Capture same area:", self.hotkey_last_region_edit)
+        form.addRow(
+            self._option_label("capture_same_area", "Capture same area:"),
+            self.hotkey_last_region_edit,
+        )
 
         self.hotkey_video_edit = QLineEdit(config.hotkey_capture_video)
         self.hotkey_video_edit.setPlaceholderText("ctrl+shift+v")
@@ -184,11 +259,18 @@ class SettingsDialog(QDialog):
         self.hotkey_recording_stop_edit = QLineEdit(config.hotkey_recording_stop)
         self.hotkey_recording_stop_edit.setPlaceholderText("ctrl+shift+r")
         if has_ffmpeg():
-            form.addRow("Capture video:", self.hotkey_video_edit)
             form.addRow(
-                "Pause/resume recording:", self.hotkey_recording_pause_resume_edit
+                self._option_label("capture_video", "Capture video:"),
+                self.hotkey_video_edit,
             )
-            form.addRow("Stop recording:", self.hotkey_recording_stop_edit)
+            form.addRow(
+                self._option_label("pause_resume", "Pause/resume recording:"),
+                self.hotkey_recording_pause_resume_edit,
+            )
+            form.addRow(
+                self._option_label("stop_recording", "Stop recording:"),
+                self.hotkey_recording_stop_edit,
+            )
         else:
             self.hotkey_video_edit.hide()
             self.hotkey_recording_pause_resume_edit.hide()
@@ -202,7 +284,10 @@ class SettingsDialog(QDialog):
         )
         if current_index >= 0:
             self.post_capture_combo.setCurrentIndex(current_index)
-        form.addRow("After capture:", self.post_capture_combo)
+        form.addRow(
+            self._option_label("after_capture", "After capture:"),
+            self.post_capture_combo,
+        )
 
         self.language_combo = QComboBox()
         for language_key, language_label in LANGUAGES.items():
@@ -214,7 +299,10 @@ class SettingsDialog(QDialog):
             "Interface language. Applies to windows opened after the change; "
             "restart Snappix to translate everything."
         )
-        form.addRow("Language:", self.language_combo)
+        form.addRow(
+            self._option_label("language", "Language:"),
+            self.language_combo,
+        )
 
         self.capture_backend_combo = QComboBox()
         for backend_key, backend_label in CAPTURE_BACKENDS.items():
@@ -232,7 +320,10 @@ class SettingsDialog(QDialog):
             "Wayland). Pick 'External tool only' if black captures keep "
             "happening on this machine."
         )
-        form.addRow("Screenshot source:", self.capture_backend_combo)
+        form.addRow(
+            self._option_label("screenshot_source", "Screenshot source:"),
+            self.capture_backend_combo,
+        )
 
         self.editor_last_tab_combo = QComboBox()
         for behavior_key, behavior_label in EDITOR_LAST_TAB_BEHAVIORS.items():
@@ -242,7 +333,10 @@ class SettingsDialog(QDialog):
         )
         if behavior_index >= 0:
             self.editor_last_tab_combo.setCurrentIndex(behavior_index)
-        form.addRow("When last tab closes:", self.editor_last_tab_combo)
+        form.addRow(
+            self._option_label("last_tab", "When last tab closes:"),
+            self.editor_last_tab_combo,
+        )
 
         self.auto_crop_on_shrink_checkbox = QCheckBox(
             "Auto-crop canvas when content shrinks"
@@ -253,7 +347,10 @@ class SettingsDialog(QDialog):
             "stays active."
         )
         self.auto_crop_on_shrink_checkbox.setChecked(bool(config.auto_crop_on_shrink))
-        form.addRow("Canvas:", self.auto_crop_on_shrink_checkbox)
+        form.addRow(
+            self._option_label("canvas", "Canvas:"),
+            self.auto_crop_on_shrink_checkbox,
+        )
 
         self.resize_handle_size_spin = QSpinBox()
         self.resize_handle_size_spin.setRange(6, 24)
@@ -262,7 +359,10 @@ class SettingsDialog(QDialog):
             "Edge length of the eight resize handles shown around selected objects."
         )
         self.resize_handle_size_spin.setValue(normalize_resize_handle_size(config.resize_handle_size))
-        form.addRow("Selection handle size:", self.resize_handle_size_spin)
+        form.addRow(
+            self._option_label("handle_size", "Selection handle size:"),
+            self.resize_handle_size_spin,
+        )
 
         self.resize_handle_position_combo = QComboBox()
         for position_key, position_label in RESIZE_HANDLE_POSITIONS.items():
@@ -275,7 +375,10 @@ class SettingsDialog(QDialog):
         self.resize_handle_position_combo.setToolTip(
             "Placement of resize handles relative to the selection border."
         )
-        form.addRow("Selection handle position:", self.resize_handle_position_combo)
+        form.addRow(
+            self._option_label("handle_position", "Selection handle position:"),
+            self.resize_handle_position_combo,
+        )
 
         save_directory_row = QHBoxLayout()
         initial_save_directory = (
@@ -287,7 +390,10 @@ class SettingsDialog(QDialog):
         browse_button.clicked.connect(self._browse_save_directory)
         save_directory_row.addWidget(self.save_directory_edit, 1)
         save_directory_row.addWidget(browse_button)
-        form.addRow("Save folder:", save_directory_row)
+        form.addRow(
+            self._option_label("save_folder", "Save folder:"),
+            save_directory_row,
+        )
 
         self.filename_template_edit = QLineEdit(
             normalize_filename_template(config.capture_filename_template)
@@ -299,7 +405,10 @@ class SettingsDialog(QDialog):
             f"Placeholders: {placeholder_help}\n"
             "A name that already exists gets a number appended."
         )
-        form.addRow("File name:", self.filename_template_edit)
+        form.addRow(
+            self._option_label("file_name", "File name:"),
+            self.filename_template_edit,
+        )
 
         workspace_directory_row = QHBoxLayout()
         initial_workspace_directory = (
@@ -315,7 +424,10 @@ class SettingsDialog(QDialog):
         workspace_browse_button.clicked.connect(self._browse_workspace_directory)
         workspace_directory_row.addWidget(self.workspace_directory_edit, 1)
         workspace_directory_row.addWidget(workspace_browse_button)
-        form.addRow("Workspace folder:", workspace_directory_row)
+        form.addRow(
+            self._option_label("workspace_folder", "Workspace folder:"),
+            workspace_directory_row,
+        )
 
         layout.addLayout(form)
         layout.addStretch(1)
@@ -361,35 +473,47 @@ class SettingsDialog(QDialog):
             lambda: self.hotkey_measure_box_edit.setText(DEFAULT_HOTKEY_MEASURE_BOX)
         )
         hotkey_row.addWidget(reset_hotkey_button)
-        form.addRow("Start MeasureBox:", hotkey_row)
+        form.addRow(
+            self._option_label("measure_hotkey", "Start MeasureBox:"),
+            hotkey_row,
+        )
 
         line_row = QHBoxLayout()
         self.measure_line_color_button = QPushButton("Choose...")
         self.measure_line_color_button.clicked.connect(self._choose_measure_line_color)
         line_row.addWidget(self.measure_line_color_button)
         line_row.addStretch(1)
-        form.addRow("Line color:", line_row)
+        form.addRow(self._option_label("line_color", "Line color:"), line_row)
 
         fill_row = QHBoxLayout()
         self.measure_fill_color_button = QPushButton("Choose...")
         self.measure_fill_color_button.clicked.connect(self._choose_measure_fill_color)
         fill_row.addWidget(self.measure_fill_color_button)
         fill_row.addStretch(1)
-        form.addRow("Fill color:", fill_row)
+        form.addRow(self._option_label("fill_color", "Fill color:"), fill_row)
 
         self.measure_ruler_checkbox = QCheckBox("Show pixel ruler (px)")
         self.measure_ruler_checkbox.setChecked(measure_box_settings.ruler_enabled)
         self.measure_ruler_checkbox.toggled.connect(self._sync_measure_ruler_outside_enabled)
-        form.addRow("", self.measure_ruler_checkbox)
+        form.addRow(
+            "",
+            self._decorate_checkbox(self.measure_ruler_checkbox, "ruler"),
+        )
 
         self.measure_ruler_outside_checkbox = QCheckBox("Ruler outside rectangle")
         self.measure_ruler_outside_checkbox.setChecked(measure_box_settings.ruler_outside)
         self.measure_ruler_outside_checkbox.setEnabled(measure_box_settings.ruler_enabled)
-        form.addRow("", self.measure_ruler_outside_checkbox)
+        form.addRow(
+            "",
+            self._decorate_checkbox(self.measure_ruler_outside_checkbox, "ruler_outside"),
+        )
 
         self.measure_crosshair_checkbox = QCheckBox("Show Left Shift crosshair")
         self.measure_crosshair_checkbox.setChecked(measure_box_settings.crosshair_enabled)
-        form.addRow("", self.measure_crosshair_checkbox)
+        form.addRow(
+            "",
+            self._decorate_checkbox(self.measure_crosshair_checkbox, "crosshair"),
+        )
 
         layout.addLayout(form)
         layout.addStretch(1)
