@@ -34,6 +34,7 @@ DEFAULT_TOOL_STROKE_WIDTHS: dict[str, int] = {
     "polyline": 3,
     "polygon": 3,
     "bent_arrow": 3,
+    "freehand": 3,
     "callout": 2,
     "text": 2,
 }
@@ -61,6 +62,7 @@ DEFAULT_TOOL_STROKE_STYLES: dict[str, str] = {
     "polyline": "solid",
     "polygon": "solid",
     "bent_arrow": "solid",
+    "freehand": "solid",
 }
 STYLE_AWARE_TOOLS = frozenset(DEFAULT_TOOL_STROKE_STYLES.keys())
 VALID_STROKE_STYLES = frozenset({"solid", "dash", "dot", "dash_dot"})

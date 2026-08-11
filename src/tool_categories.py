@@ -34,6 +34,7 @@ SHARED_SHAPE_TOOL_CATEGORIES: list[ToolCategory] = [
         "Lines",
         [
             (Tool.LINE, "Line"),
+            (Tool.FREEHAND, "Freehand"),
             (Tool.POLYLINE, "Polyline"),
             (Tool.ARROW, "Arrow"),
             (Tool.DOUBLE_ARROW, "Double Arrow"),

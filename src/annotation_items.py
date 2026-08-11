@@ -873,6 +873,10 @@ def annotation_from_item(item: QGraphicsItem) -> AnnotationModel | None:
             "halo": _halo_flag(item),
             "z_index": item.zValue(),
         }
+        if item.is_freehand():
+            # Stored next to the untouched recording, so the slider still works
+            # after saving and reopening.
+            payload["smoothing"] = item.smoothing()
         merge_transform_into_payload(item, payload)
         return AnnotationModel(
             annotation_type=annotation_type,
@@ -1138,6 +1142,12 @@ def _build_annotation_item(
         if len(points) < 2:
             return None
         item = PolyPathItem(annotation.annotation_type, points)
+        if item.is_freehand():
+            # Files written before freehand existed carry no amount; the item
+            # default applies then.
+            item.set_smoothing(
+                annotation.payload.get("smoothing", item.smoothing())
+            )
         item.setPen(apply_stored_pen_style(pen, annotation.payload))
         if annotation.annotation_type == "polygon":
             item.setBrush(fill)

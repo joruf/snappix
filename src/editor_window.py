@@ -111,6 +111,7 @@ from src.annotation_shapes import TEXT_STYLE_BOX, TEXT_STYLE_BUBBLE, TEXT_STYLE_
 from src.clipboard_json import get_json_clipboard_data, set_json_clipboard_data
 from src.history_mixin import EditorHistoryMixin
 from src.shortcut_registry_mixin import ShortcutRegistryMixin
+from src.freehand import clamp_smoothing
 from src.editor_canvas import (
     ERASE_MODE_FILL,
     ERASE_MODE_TRANSPARENT,
@@ -164,6 +165,7 @@ _SELECTION_TYPE_LABELS: dict[str, str] = {
     "arrow": "Arrow",
     "double_arrow": "Double Arrow",
     "polyline": "Polyline",
+    "freehand": "Freehand",
     "polygon": "Polygon",
     "bent_arrow": "Bent Arrow",
     "callout": "Callout",
@@ -184,7 +186,7 @@ _TOOL_CATEGORY_TOOLTIPS: dict[str, str] = {
     "Select": "Selection tools: pick annotations or pixel regions on the canvas.",
     "Paint": "Paint tools: brush, eraser, fill, and screen color picker.",
     "Shapes": "Shape tools: rectangles, ellipses, triangles, stars, and polygons.",
-    "Lines": "Line tools: straight lines, polylines, and arrows.",
+    "Lines": "Line tools: freehand strokes, straight lines, polylines, and arrows.",
     "Marks": "Mark tools: cross, checkmark, spotlight, and numbered steps.",
     "Text": "Text tools: plain text and callout bubbles.",
     "Image": "Image tools: background fill, blur, OCR, and crop.",
@@ -217,6 +219,7 @@ _COLOR_TARGETS_BY_SELECTION: dict[str, frozenset[str]] = {
     "arrow": _COLOR_TARGETS_STROKE,
     "double_arrow": _COLOR_TARGETS_STROKE,
     "polyline": _COLOR_TARGETS_STROKE,
+    "freehand": _COLOR_TARGETS_STROKE,
     "bent_arrow": _COLOR_TARGETS_STROKE,
     "text": _COLOR_TARGETS_TEXT,
     "callout": _COLOR_TARGETS_TEXT,
@@ -266,6 +269,7 @@ _SHAPE_THICKNESS_SELECTION_TYPES = frozenset(
         "polyline",
         "polygon",
         "bent_arrow",
+        "freehand",
     }
 )
 _SHAPE_STYLE_SELECTION_TYPES = frozenset(STYLE_AWARE_TOOLS)
@@ -927,6 +931,24 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._configure_compact_toolbar_height(self.style_radius_label, 22)
         shape_widgets.append(self.style_radius_label)
 
+        smoothing_caption = self._create_toolbar_label("Smoothing")
+        shape_widgets.append(smoothing_caption)
+        self.style_smoothing_slider = QSlider(Qt.Orientation.Horizontal)
+        self.style_smoothing_slider.setRange(0, 100)
+        self.style_smoothing_slider.setFixedWidth(72)
+        self.style_smoothing_slider.setToolTip(
+            "Rounds the corners of the selected freehand stroke. The recorded "
+            "stroke is kept, so this can be moved back and forth freely."
+        )
+        self.style_smoothing_slider.valueChanged.connect(self._style_smoothing_preview)
+        self.style_smoothing_slider.sliderReleased.connect(self._style_smoothing_committed)
+        self._configure_compact_toolbar_height(self.style_smoothing_slider, 22)
+        shape_widgets.append(self.style_smoothing_slider)
+        self.style_smoothing_label = QLabel("0")
+        self.style_smoothing_label.setMinimumWidth(20)
+        self._configure_compact_toolbar_height(self.style_smoothing_label, 22)
+        shape_widgets.append(self.style_smoothing_label)
+
         self.style_halo_check = QCheckBox("Halo")
         self.style_halo_check.setChecked(self.canvas.annotation_halo())
         self.style_halo_check.setToolTip(
@@ -942,6 +964,11 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             "thickness": [thickness_caption, self.style_thickness_slider, self.style_thickness_label],
             "style": [style_caption, self.style_stroke_style_combo],
             "radius": [radius_caption, self.style_radius_slider, self.style_radius_label],
+            "smoothing": [
+                smoothing_caption,
+                self.style_smoothing_slider,
+                self.style_smoothing_label,
+            ],
         }
 
         self._color_target_widgets = {
@@ -1264,6 +1291,8 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             targets.add("thickness")
         if resolved in _SHAPE_STYLE_SELECTION_TYPES:
             targets.add("style")
+        if resolved == "freehand":
+            targets.add("smoothing")
         if resolved in _SHAPE_RADIUS_SELECTION_TYPES:
             targets.add("radius")
         return frozenset(targets)
@@ -2517,6 +2546,14 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             self.style_radius_slider.blockSignals(False)
             self.style_radius_label.setText(f"{self.style_radius_slider.value()}°")
 
+        smoothing = payload.get("smoothing")
+        if isinstance(smoothing, (int, float)) and selection_type == "freehand":
+            percent = int(round(clamp_smoothing(float(smoothing)) * 100))
+            self.style_smoothing_slider.blockSignals(True)
+            self.style_smoothing_slider.setValue(percent)
+            self.style_smoothing_slider.blockSignals(False)
+            self.style_smoothing_label.setText(str(percent))
+
         halo = payload.get("halo")
         if isinstance(halo, bool) and hasattr(self, "style_halo_check"):
             self.style_halo_check.blockSignals(True)
@@ -2545,6 +2582,11 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.style_radius_slider.setValue(0)
         self.style_radius_slider.blockSignals(False)
         self.style_radius_label.setText("0°")
+        if hasattr(self, "style_smoothing_slider"):
+            self.style_smoothing_slider.blockSignals(True)
+            self.style_smoothing_slider.setValue(0)
+            self.style_smoothing_slider.blockSignals(False)
+            self.style_smoothing_label.setText("0")
         if hasattr(self, "style_halo_check"):
             # Not a neutral placeholder like the others: with nothing selected
             # this checkbox states what the next annotation will look like.
@@ -2592,6 +2634,35 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             update_active_style=False,
         )
         self._set_next_history_label("Change line style")
+        self._push_history_state()
+
+    def _style_smoothing_preview(self, value: int) -> None:
+        """
+        Shows the smoothing result live while the slider is being dragged.
+
+        No history entry here on purpose: unlike the thickness slider, this one
+        is meant to be swept back and forth to find the right amount, and one
+        undo step per slider pixel would bury the rest of the history.
+
+        Args:
+            value: Slider position from 0 to 100.
+
+        Returns:
+            None
+        """
+
+        self.style_smoothing_label.setText(str(int(value)))
+        self.canvas.set_freehand_smoothing(float(value) / 100.0)
+
+    def _style_smoothing_committed(self) -> None:
+        """
+        Writes one history entry once the slider is released.
+
+        Returns:
+            None
+        """
+
+        self._set_next_history_label("Change smoothing")
         self._push_history_state()
 
     def _style_halo_toggled(self, checked: bool) -> None:
@@ -3414,6 +3485,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             Tool.STAR,
             Tool.POLYGON,
             Tool.LINE,
+            Tool.FREEHAND,
             Tool.POLYLINE,
             Tool.ARROW,
             Tool.DOUBLE_ARROW,
@@ -4298,6 +4370,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             Tool.ARROW: "Draw arrow",
             Tool.DOUBLE_ARROW: "Draw double arrow",
             Tool.BENT_ARROW: "Draw bent arrow",
+            Tool.FREEHAND: "Draw freehand",
             Tool.SPOTLIGHT: "Draw spotlight",
             Tool.CROSS: "Draw cross",
             Tool.CHECKMARK: "Draw checkmark",

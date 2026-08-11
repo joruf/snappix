@@ -96,6 +96,7 @@ from src.annotation_shapes import (
     apply_text_item_font,
 )
 from src.annotation_style_apply import apply_style_to_annotation_item
+from src.freehand import FREEHAND_MIN_POINT_DISTANCE, should_append_point
 from src.crash_log import breadcrumb
 from src.shape_items import (
     PATH_SHAPE_KINDS,
@@ -173,6 +174,7 @@ class Tool:
     ARROW = "arrow"
     DOUBLE_ARROW = "double_arrow"
     POLYLINE = "polyline"
+    FREEHAND = "freehand"
     POLYGON = "polygon"
     BENT_ARROW = "bent_arrow"
     CALLOUT = "callout"
@@ -831,6 +833,8 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             payload["fill_rgba"] = color_to_list(item.brush().color())
             payload["stroke_width"] = pen_stroke_width(item.pen())
             payload["stroke_style"] = stroke_style_from_pen(item.pen())
+            if getattr(item, "is_freehand", None) is not None and item.is_freehand():
+                payload["smoothing"] = item.smoothing()
         elif annotation_type == "text":
             if isinstance(item, StyledTextItem):
                 payload["text_rgba"] = color_to_list(item._text_color)
@@ -963,6 +967,54 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         painter.drawEllipse(15, 16, 5, 5)
         painter.end()
         return QCursor(pixmap, 8, 4)
+
+    def selected_freehand_items(self) -> list:
+        """
+        Returns the freehand strokes in the current selection.
+
+        Returns:
+            list: Selected freehand items, empty when none are selected.
+        """
+
+        return [
+            item
+            for item in self._scene.selectedItems()
+            if getattr(item, "is_freehand", None) is not None and item.is_freehand()
+        ]
+
+    def selected_freehand_smoothing(self) -> float | None:
+        """
+        Returns the smoothing amount shared by the selected strokes.
+
+        Returns:
+            float | None: Amount, or None when nothing freehand is selected.
+        """
+
+        items = self.selected_freehand_items()
+        if not items:
+            return None
+        return items[0].smoothing()
+
+    def set_freehand_smoothing(self, amount: float) -> bool:
+        """
+        Applies a smoothing amount to every selected freehand stroke.
+
+        The recorded points are untouched, so this is a display change that can
+        be repeated in either direction without losing detail.
+
+        Args:
+            amount: Smoothing amount between 0 and 1.
+
+        Returns:
+            bool: True when at least one stroke changed.
+        """
+
+        changed = False
+        for item in self.selected_freehand_items():
+            before = item.smoothing()
+            item.set_smoothing(amount)
+            changed = changed or item.smoothing() != before
+        return changed
 
     def set_style(
         self,
@@ -1413,6 +1465,11 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             self._clear_resize_overlay()
             self._sample_color_at(scene_pos)
             return
+        if self._tool == Tool.FREEHAND:
+            self._clear_resize_overlay()
+            self._begin_freehand_stroke(scene_pos)
+            event.accept()
+            return
         if self._tool in {Tool.BRUSH, Tool.ERASER}:
             self._clear_resize_overlay()
             self._brush_painting = True
@@ -1709,6 +1766,15 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             current = self.mapToScene(event.position().toPoint())
             self._update_path_preview(current)
             return
+        if self._tool == Tool.FREEHAND and self._poly_draw_points:
+            if not (event.buttons() & Qt.MouseButton.LeftButton):
+                # Button state lost without a clean release -- commit safely.
+                self._finalize_poly_draw()
+                event.accept()
+                return
+            self._extend_freehand_stroke(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
         if self._tool in POLY_DRAW_TOOLS and self._poly_draw_points:
             current = self.mapToScene(event.position().toPoint())
             self._update_poly_preview(current)
@@ -1808,6 +1874,10 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 Tool.DOUBLE_ARROW: "Draw double arrow",
             }
             self._emit_content_changed(draw_names.get(self._tool, "Draw annotation"))
+            return
+        if event.button() == Qt.MouseButton.LeftButton and self._tool == Tool.FREEHAND:
+            self._finalize_poly_draw()
+            event.accept()
             return
         if event.button() == Qt.MouseButton.LeftButton and self._tool in {Tool.BRUSH, Tool.ERASER}:
             self._finish_brush_stroke(commit=self._brush_painting and self._brush_stroke_dirty)
@@ -3097,6 +3167,58 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             return
         self.set_pixel_selection_path(path, add=add)
 
+    def _begin_freehand_stroke(self, scene_pos: QPointF) -> None:
+        """
+        Starts recording a freehand stroke at the press position.
+
+        Reuses the multi-point preview machinery of the poly tools; only the
+        trigger differs -- a drag instead of one click per vertex.
+
+        Args:
+            scene_pos: Press position in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        self._poly_draw_points = [QPointF(scene_pos)]
+        self._poly_preview_item = PolyPathItem(Tool.FREEHAND, self._poly_draw_points)
+        self._poly_preview_item.setPen(create_pen(self._style))
+        self._poly_preview_item.setBrush(QColor(0, 0, 0, 0))
+        self._poly_preview_item.setFlag(
+            QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+            False,
+        )
+        self._scene.addItem(self._poly_preview_item)
+
+    def _extend_freehand_stroke(self, scene_pos: QPointF) -> None:
+        """
+        Appends one sampled position to the stroke being drawn.
+
+        Positions closer than one step to their predecessor are dropped: a drag
+        reports far more positions than a stroke needs, and recording all of
+        them bloats the annotation without adding shape.
+
+        Args:
+            scene_pos: Sampled position in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        if not self._poly_draw_points:
+            return
+        recorded = [(point.x(), point.y()) for point in self._poly_draw_points]
+        if not should_append_point(
+            recorded,
+            (scene_pos.x(), scene_pos.y()),
+            min_distance=FREEHAND_MIN_POINT_DISTANCE,
+        ):
+            return
+        self._poly_draw_points.append(QPointF(scene_pos))
+        if self._poly_preview_item is not None:
+            self._poly_preview_item.set_points(self._poly_draw_points)
+
     def _append_poly_draw_point(self, scene_pos: QPointF) -> None:
         """
         Adds one vertex while drawing a polyline, polygon, or bent arrow.
@@ -3196,6 +3318,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self._select_annotation_item(item)
         draw_names = {
             Tool.POLYLINE: "Draw polyline",
+            Tool.FREEHAND: "Draw freehand",
             Tool.POLYGON: "Draw polygon",
             Tool.BENT_ARROW: "Draw bent arrow",
         }

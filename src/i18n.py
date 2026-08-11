@@ -113,6 +113,7 @@ GERMAN: dict[str, str] = {
     "Presentation...": "Präsentation …",
     "Presentation Frame": "Präsentationsrahmen",
     "Thickness": "Stärke",
+    "Smoothing": "Glättung",
     "Hard": "Härte",
     "Radius": "Radius",
     "Border": "Rand",

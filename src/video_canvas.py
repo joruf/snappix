@@ -45,6 +45,12 @@ from src.annotation_shapes import (
 )
 from src.annotation_style_apply import apply_style_to_annotation_item
 from src.draw_style_defaults import create_default_style_state
+from src.freehand import (
+    FREEHAND_MIN_POINT_DISTANCE,
+    SMOOTHING_DEFAULT,
+    should_append_point,
+)
+from src.shape_items import SHAPE_POLY_TYPES
 from src.crop_item import CropSelectionItem
 from src.geometry_utils import union_rect
 from src.editor_canvas import (
@@ -83,6 +89,7 @@ _DRAW_ACTION_LABELS: dict[str, str] = {
     Tool.POLYGON: "Draw polygon",
     Tool.LINE: "Draw line",
     Tool.POLYLINE: "Draw polyline",
+    Tool.FREEHAND: "Draw freehand",
     Tool.ARROW: "Draw arrow",
     Tool.DOUBLE_ARROW: "Draw double arrow",
     Tool.BENT_ARROW: "Draw bent arrow",
@@ -187,11 +194,15 @@ def build_annotation_item(annotation: VideoAnnotationModel) -> QGraphicsItem | N
         item.setPos(annotation.x, annotation.y)
         _configure_video_annotation_item(item, annotation)
         return item
-    if annotation.annotation_type in POLY_DRAW_TOOLS:
+    if annotation.annotation_type in SHAPE_POLY_TYPES:
         points = points_from_payload(annotation.payload)
         if len(points) < 2:
             return None
         item = PolyPathItem(annotation.annotation_type, points)
+        if item.is_freehand():
+            # Missing on annotations written before freehand existed; the item
+            # default applies then.
+            item.set_smoothing(annotation.payload.get("smoothing", item.smoothing()))
         item.setPen(pen)
         item.setBrush(style.fill_color if annotation.annotation_type == Tool.POLYGON else QColor(0, 0, 0, 0))
         _configure_video_annotation_item(item, annotation)
@@ -610,6 +621,50 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             if emit_history:
                 self._last_action_label = "Change rectangle radius"
                 self.content_changed.emit()
+
+    def set_freehand_smoothing(self, amount: float) -> bool:
+        """
+        Applies a smoothing amount to every selected freehand stroke.
+
+        Display only: the recorded points stay untouched, so the slider can be
+        swept back and forth without the stroke losing detail. Models are
+        written by :meth:`commit_freehand_smoothing` once the drag ends.
+
+        Args:
+            amount: Smoothing amount between 0 and 1.
+
+        Returns:
+            bool: True when at least one stroke changed.
+        """
+
+        changed = False
+        for item in self._selected_annotation_items():
+            if bool(item.data(ITEM_ROLE_LOCKED) or False):
+                continue
+            if getattr(item, "is_freehand", None) is None or not item.is_freehand():
+                continue
+            before = item.smoothing()
+            item.set_smoothing(amount)
+            changed = changed or item.smoothing() != before
+        return changed
+
+    def commit_freehand_smoothing(self) -> None:
+        """
+        Writes the previewed smoothing amount into the annotation models.
+
+        Returns:
+            None
+        """
+
+        has_freehand = any(
+            getattr(item, "is_freehand", None) is not None and item.is_freehand()
+            for item in self._selected_annotation_items()
+        )
+        if not has_freehand:
+            return
+        self._sync_visible_items_to_models()
+        self._last_action_label = "Change smoothing"
+        self.content_changed.emit()
 
     def consume_last_action_label(self) -> str:
         """
@@ -1268,6 +1323,11 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 )
             return
 
+        if self._tool == Tool.FREEHAND:
+            self._begin_freehand_stroke(scene_pos)
+            event.accept()
+            return
+
         if self._tool in POLY_DRAW_TOOLS:
             self._append_poly_point(scene_pos)
             return
@@ -1291,6 +1351,15 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         Returns:
             None
         """
+
+        if self._tool == Tool.FREEHAND and self._poly_points:
+            if not (event.buttons() & Qt.MouseButton.LeftButton):
+                self._finalize_poly_draw()
+                event.accept()
+                return
+            self._extend_freehand_stroke(self.mapToScene(event.position().toPoint()))
+            event.accept()
+            return
 
         if self._tool in POLY_DRAW_TOOLS and self._poly_points:
             scene_pos = self.mapToScene(event.position().toPoint())
@@ -1317,6 +1386,11 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         Returns:
             None
         """
+
+        if event.button() == Qt.MouseButton.LeftButton and self._tool == Tool.FREEHAND:
+            self._finalize_poly_draw()
+            event.accept()
+            return
 
         if self._drag_start is None:
             super().mouseReleaseEvent(event)
@@ -1528,6 +1602,51 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self.annotation_created.emit(annotation)
         self.content_changed.emit()
 
+    def _begin_freehand_stroke(self, scene_pos) -> None:
+        """
+        Starts recording a freehand stroke on the video canvas.
+
+        Args:
+            scene_pos: Press position in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        self._poly_points = [scene_pos]
+        self._poly_preview = PolyPathItem(Tool.FREEHAND, self._poly_points)
+        self._poly_preview.setPen(create_pen(self._style))
+        self._poly_preview.setBrush(QColor(0, 0, 0, 0))
+        self._poly_preview.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
+        self._poly_preview.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
+        # Stay above the video surface and finished annotations while drawing.
+        self._poly_preview.setZValue(50.0)
+        self._scene.addItem(self._poly_preview)
+
+    def _extend_freehand_stroke(self, scene_pos) -> None:
+        """
+        Appends one sampled position to the stroke being drawn.
+
+        Args:
+            scene_pos: Sampled position in scene coordinates.
+
+        Returns:
+            None
+        """
+
+        if not self._poly_points:
+            return
+        recorded = [(point.x(), point.y()) for point in self._poly_points]
+        if not should_append_point(
+            recorded,
+            (scene_pos.x(), scene_pos.y()),
+            min_distance=FREEHAND_MIN_POINT_DISTANCE,
+        ):
+            return
+        self._poly_points.append(scene_pos)
+        if self._poly_preview is not None:
+            self._poly_preview.set_points(self._poly_points)
+
     def _append_poly_point(self, scene_pos) -> None:
         """
         Adds one vertex while drawing a polyline, polygon, or bent arrow.
@@ -1623,7 +1742,11 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             bounds.y(),
             bounds.width(),
             bounds.height(),
-            payload={"points": points_to_payload(points)},
+            payload=(
+                {"points": points_to_payload(points), "smoothing": SMOOTHING_DEFAULT}
+                if kind == Tool.FREEHAND
+                else {"points": points_to_payload(points)}
+            ),
         )
 
     def _sync_visible_items_to_models(self) -> bool:
@@ -2104,7 +2227,7 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             if annotation.annotation_id not in selected_ids:
                 continue
             payload = copy.deepcopy(annotation.payload)
-            if annotation.annotation_type in POLY_DRAW_TOOLS:
+            if annotation.annotation_type in SHAPE_POLY_TYPES:
                 points = points_from_payload(payload)
                 payload["points"] = points_to_payload(
                     [QPointF(point.x() + 16.0, point.y() + 16.0) for point in points]
@@ -2269,7 +2392,7 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         for annotation in self._annotations:
             if annotation.annotation_id not in selected_ids:
                 continue
-            if annotation.annotation_type in POLY_DRAW_TOOLS:
+            if annotation.annotation_type in SHAPE_POLY_TYPES:
                 points = points_from_payload(annotation.payload)
                 if len(points) < 2:
                     continue

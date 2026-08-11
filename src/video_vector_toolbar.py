@@ -41,6 +41,7 @@ from src.annotation_items import (
     STROKE_STYLE_SOLID,
     clamp_corner_radius_degrees,
 )
+from src.freehand import clamp_smoothing
 from src.editor_canvas import Tool
 from src.flow_layout import FlowLayoutWidget
 from src.theme import color_preview_button_stylesheet, palette_button_stylesheet
@@ -94,6 +95,7 @@ _COLOR_TARGETS_BY_SELECTION: dict[str, frozenset[str]] = {
     "arrow": _COLOR_TARGETS_STROKE,
     "double_arrow": _COLOR_TARGETS_STROKE,
     "polyline": _COLOR_TARGETS_STROKE,
+    "freehand": _COLOR_TARGETS_STROKE,
     "bent_arrow": _COLOR_TARGETS_STROKE,
     "text": _COLOR_TARGETS_TEXT,
     "callout": _COLOR_TARGETS_TEXT,
@@ -120,10 +122,12 @@ _SHAPE_THICKNESS_SELECTION_TYPES = frozenset(
         "polyline",
         "polygon",
         "bent_arrow",
+        "freehand",
     }
 )
 _SHAPE_STYLE_SELECTION_TYPES = frozenset(STYLE_AWARE_TOOLS)
 _SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect", "triangle"})
+_SHAPE_SMOOTHING_SELECTION_TYPES = frozenset({"freehand"})
 
 _LOCKABLE_TOOLS = frozenset(
     {
@@ -133,6 +137,7 @@ _LOCKABLE_TOOLS = frozenset(
         Tool.STAR,
         Tool.POLYGON,
         Tool.LINE,
+        Tool.FREEHAND,
         Tool.POLYLINE,
         Tool.ARROW,
         Tool.DOUBLE_ARROW,
@@ -153,6 +158,7 @@ _ONE_SHOT_ACTIONS: dict[str, str] = {
     Tool.STAR: "Draw star",
     Tool.POLYGON: "Draw polygon",
     Tool.LINE: "Draw line",
+    Tool.FREEHAND: "Draw freehand",
     Tool.POLYLINE: "Draw polyline",
     Tool.ARROW: "Draw arrow",
     Tool.DOUBLE_ARROW: "Draw double arrow",
@@ -372,6 +378,22 @@ class VideoVectorToolbar:
         self.style_radius_label.setMinimumWidth(32)
         shape_widgets.append(self.style_radius_label)
 
+        smoothing_caption = QLabel("Smoothing")
+        shape_widgets.append(smoothing_caption)
+        self.style_smoothing_slider = QSlider(Qt.Orientation.Horizontal)
+        self.style_smoothing_slider.setRange(0, 100)
+        self.style_smoothing_slider.setFixedWidth(72)
+        self.style_smoothing_slider.setToolTip(
+            "Rounds the corners of the selected freehand stroke. The recorded "
+            "stroke is kept, so this can be moved back and forth freely."
+        )
+        self.style_smoothing_slider.valueChanged.connect(self._style_smoothing_preview)
+        self.style_smoothing_slider.sliderReleased.connect(self._style_smoothing_committed)
+        shape_widgets.append(self.style_smoothing_slider)
+        self.style_smoothing_label = QLabel("0")
+        self.style_smoothing_label.setMinimumWidth(20)
+        shape_widgets.append(self.style_smoothing_label)
+
         self.style_halo_check = QCheckBox("Halo")
         self.style_halo_check.setToolTip(
             "Draw a contrasting outline behind the selected annotation so it stays "
@@ -385,6 +407,11 @@ class VideoVectorToolbar:
             "thickness": [thickness_caption, self.style_thickness_slider, self.style_thickness_label],
             "style": [style_caption, self.style_stroke_style_combo],
             "radius": [radius_caption, self.style_radius_slider, self.style_radius_label],
+            "smoothing": [
+                smoothing_caption,
+                self.style_smoothing_slider,
+                self.style_smoothing_label,
+            ],
         }
 
         self._color_target_widgets = {
@@ -492,6 +519,7 @@ class VideoVectorToolbar:
             _SHAPE_THICKNESS_SELECTION_TYPES
             | _SHAPE_STYLE_SELECTION_TYPES
             | _SHAPE_RADIUS_SELECTION_TYPES
+            | _SHAPE_SMOOTHING_SELECTION_TYPES
         )
         if self._selection_type in shape_targets:
             self._sync_style_shape_controls(payload)
@@ -524,6 +552,17 @@ class VideoVectorToolbar:
                 self.style_stroke_style_combo.blockSignals(True)
                 self.style_stroke_style_combo.setCurrentIndex(index)
                 self.style_stroke_style_combo.blockSignals(False)
+
+        smoothing = payload.get("smoothing")
+        if (
+            isinstance(smoothing, (int, float))
+            and self._selection_type in _SHAPE_SMOOTHING_SELECTION_TYPES
+        ):
+            percent = int(round(clamp_smoothing(float(smoothing)) * 100))
+            self.style_smoothing_slider.blockSignals(True)
+            self.style_smoothing_slider.setValue(percent)
+            self.style_smoothing_slider.blockSignals(False)
+            self.style_smoothing_label.setText(str(percent))
 
         corner_radius = payload.get("corner_radius")
         if isinstance(corner_radius, (int, float)) and self._selection_type in _SHAPE_RADIUS_SELECTION_TYPES:
@@ -619,6 +658,33 @@ class VideoVectorToolbar:
             apply_to_selection=True,
             update_default=False,
         )
+
+    def _style_smoothing_preview(self, value: int) -> None:
+        """
+        Shows the smoothing result live while the slider is being dragged.
+
+        No history entry here on purpose: the slider is meant to be swept back
+        and forth, and one undo step per slider pixel would bury the rest.
+
+        Args:
+            value: Slider position from 0 to 100.
+
+        Returns:
+            None
+        """
+
+        self.style_smoothing_label.setText(str(int(value)))
+        self._canvas.set_freehand_smoothing(float(value) / 100.0)
+
+    def _style_smoothing_committed(self) -> None:
+        """
+        Writes the amount back to the annotation model once the slider is released.
+
+        Returns:
+            None
+        """
+
+        self._canvas.commit_freehand_smoothing()
 
     def show_tools_reference(self) -> None:
         """

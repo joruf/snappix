@@ -174,6 +174,18 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
         ),
     ),
     ToolHelpEntry(
+        tool=Tool.FREEHAND,
+        name="Freehand",
+        tooltip_blurb="draw by dragging; smoothing slider rounds the corners",
+        description=(
+            "Draws a free stroke while you drag, and keeps it as an object you "
+            "can select, move, and delete like any other annotation. "
+            "Select a stroke to get a Smoothing slider in the Edit panel: it "
+            "rounds the corners live and can be moved back and forth at any "
+            "time, because the recorded stroke is never overwritten."
+        ),
+    ),
+    ToolHelpEntry(
         tool=Tool.POLYLINE,
         name="Polyline",
         tooltip_blurb="click points for a bent path; Enter/double-click finishes",

@@ -89,6 +89,7 @@ Startup:
 | `src/cli.py` | Non-GUI commands |
 | `src/autostart.py` | XDG autostart `.desktop` |
 | `src/tool_reference.py` / `tool_reference_dialog.py` | In-app tools help |
+| `src/freehand.py` | Freehand point thinning while drawing and Chaikin smoothing for display |
 | `src/document_scale.py` | Scaling a document: image plus every annotation's geometry, stroke, and font |
 | `src/drag_export.py` | Session temp directory, `text/uri-list` payloads, and the drag source |
 | `src/i18n.py` / `src/i18n_widgets.py` | Language state and dictionary (Qt-free) / widget-tree translation |
@@ -367,7 +368,8 @@ them the video footer would render an empty summary.
 | `select` | Move / select annotations |
 | `select_rect` / `select_ellipse` / `select_path` | Pixel selection shapes / lasso |
 | `magic_wand` | Color-based pixel selection |
-| `brush` / `eraser` | Soft freehand paint / erase |
+| `freehand` | Drag-drawn vector stroke; raw points in `payload["points"]`, `payload["smoothing"]` applied for display only |
+| `brush` / `eraser` | Soft freehand paint / erase (raster, not selectable) |
 | `bucket` | Fill active pixel selection |
 | `eyedropper` | Sample border or fill color |
 | `rect` / `ellipse` / `line` / `arrow` | Vector annotations |

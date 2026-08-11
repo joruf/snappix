@@ -20,6 +20,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QGraphicsItem, QGraphicsPathItem, QStyleOptionGraphicsItem, QWidget
 
 from src.color_contrast import halo_color_for, halo_pen_width
+from src.freehand import SMOOTHING_DEFAULT, clamp_smoothing, smooth_points
 from src.qt_safety import safe_bounding_rect, safe_paint, safe_shape
 
 # Rect-like annotation types that store AABB geometry (x, y, width, height).
@@ -47,7 +48,12 @@ SHAPE_RADIUS_TYPES = frozenset({"rect", "triangle"})
 SHAPE_LINE_TYPES = frozenset({"line", "arrow", "double_arrow"})
 
 # Multi-point path annotation types (points stored in payload).
-SHAPE_POLY_TYPES = frozenset({"polyline", "polygon", "bent_arrow"})
+SHAPE_POLY_TYPES = frozenset({"polyline", "polygon", "bent_arrow", "freehand"})
+
+# Freehand strokes record hundreds of points, so they behave differently from
+# the click-placed poly shapes: no per-vertex handles, and the displayed path is
+# a smoothed copy while the recorded points stay untouched.
+SHAPE_FREEHAND_TYPE = "freehand"
 
 # Vertex handles shown on a selected multi-point shape. The grab padding is
 # what makes them practical to hit with a mouse at 100% zoom.
@@ -1033,7 +1039,50 @@ class PolyPathItem(HaloMixin, QGraphicsPathItem):
         self._points: list[QPointF] = [QPointF(point) for point in (points or [])]
         self._active_vertex: int | None = None
         self._vertex_drag_origin: QPointF | None = None
+        self._smoothing = SMOOTHING_DEFAULT if kind == SHAPE_FREEHAND_TYPE else 0.0
         self._rebuild_path()
+
+    def is_freehand(self) -> bool:
+        """
+        Reports whether this item is a recorded freehand stroke.
+
+        Returns:
+            bool: True for freehand strokes.
+        """
+
+        return self._shape_kind == SHAPE_FREEHAND_TYPE
+
+    def smoothing(self) -> float:
+        """
+        Returns the current smoothing amount.
+
+        Returns:
+            float: Amount between 0 and 1.
+        """
+
+        return self._smoothing
+
+    def set_smoothing(self, amount: float) -> None:
+        """
+        Sets how strongly the recorded points are smoothed for display.
+
+        The points themselves are never modified, so the amount can be raised
+        and lowered any number of times without the stroke losing detail.
+
+        Args:
+            amount: Smoothing amount between 0 and 1.
+
+        Returns:
+            None
+        """
+
+        resolved = clamp_smoothing(amount)
+        if resolved == self._smoothing:
+            return
+        self.prepareGeometryChange()
+        self._smoothing = resolved
+        self._rebuild_path()
+        self.update()
 
     def shape_kind(self) -> str:
         """
@@ -1054,6 +1103,22 @@ class PolyPathItem(HaloMixin, QGraphicsPathItem):
         """
 
         return [QPointF(point) for point in self._points]
+
+    def display_points(self) -> list[QPointF]:
+        """
+        Returns the points actually drawn, smoothing applied for freehand.
+
+        Returns:
+            list[QPointF]: Display vertices; the recorded points stay untouched.
+        """
+
+        if not self.is_freehand() or self._smoothing <= 0.0 or len(self._points) < 3:
+            return [QPointF(point) for point in self._points]
+        smoothed = smooth_points(
+            [(point.x(), point.y()) for point in self._points],
+            self._smoothing,
+        )
+        return [QPointF(x, y) for x, y in smoothed]
 
     def set_points(self, points: Sequence[QPointF]) -> None:
         """
@@ -1080,7 +1145,7 @@ class PolyPathItem(HaloMixin, QGraphicsPathItem):
         """
 
         closed = self._shape_kind == "polygon"
-        path = build_points_path(self._points, closed=closed)
+        path = build_points_path(self.display_points(), closed=closed)
         if self._shape_kind == "bent_arrow" and len(self._points) >= 2:
             tip = self._points[-1]
             previous = self._points[-2]
@@ -1116,7 +1181,8 @@ class PolyPathItem(HaloMixin, QGraphicsPathItem):
             QRectF: Bounds including handle overhang.
         """
 
-        margin = VERTEX_HANDLE_PX + self._halo_extra_margin()
+        handle_overhang = 0.0 if self.is_freehand() else VERTEX_HANDLE_PX
+        margin = handle_overhang + self._halo_extra_margin()
         return super().boundingRect().adjusted(-margin, -margin, margin, margin)
 
     def vertex_at(self, local_pos: QPointF) -> int | None:
@@ -1130,6 +1196,10 @@ class PolyPathItem(HaloMixin, QGraphicsPathItem):
             int | None: Vertex index, or None when no handle was hit.
         """
 
+        if self.is_freehand():
+            # A recorded stroke carries hundreds of points; per-vertex handles
+            # would bury the stroke and no single point is meaningful to drag.
+            return None
         reach = VERTEX_HANDLE_PX + VERTEX_GRAB_PADDING_PX
         for index, point in enumerate(self._points):
             if abs(point.x() - local_pos.x()) <= reach and abs(point.y() - local_pos.y()) <= reach:
@@ -1198,7 +1268,7 @@ class PolyPathItem(HaloMixin, QGraphicsPathItem):
             painter.drawPath(self.path())
             painter.restore()
         super().paint(painter, option, widget)
-        if not self.isSelected() or not self._points:
+        if not self.isSelected() or not self._points or self.is_freehand():
             return
 
         painter.save()

@@ -5,7 +5,7 @@ Vector tool icons for Snappix editor toolbars.
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QSize
-from PySide6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PySide6.QtGui import QPainterPath, QBrush, QColor, QIcon, QPainter, QPen, QPixmap, QPolygonF
 
 from src.editor_canvas import Tool
 from src.theme import get_editor_accent_colors
@@ -120,6 +120,12 @@ def build_tool_icon(tool: str, *, locked: bool = False) -> QIcon:
                 ]
             )
         )
+    elif tool == Tool.FREEHAND:
+        painter.setPen(stroke_pen)
+        stroke = QPainterPath(QPointF(3.0, 12.0))
+        stroke.cubicTo(5.5, 3.0, 8.0, 16.0, 11.0, 8.0)
+        stroke.cubicTo(12.5, 4.0, 14.0, 6.0, 15.0, 10.0)
+        painter.drawPath(stroke)
     elif tool == Tool.ARROW:
         painter.setPen(accent_pen)
         painter.drawLine(3, 14, 13, 5)
