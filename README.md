@@ -67,6 +67,14 @@ On first run Snappix:
 2. Creates `.venv` and installs PySide6 / Pillow / requests / pynput
 3. Tries to install **ffmpeg** and **tesseract** via `winget` when available
 
+**OCR without administrator rights:** the Tesseract package in `winget` installs machine-wide and prompts for elevation, which blocks accounts that do not have it. Snappix therefore treats OCR as optional and never installs it behind your back. To add it for your account only, with no prompt:
+
+```bat
+install.bat --install-ocr
+```
+
+That downloads the official installer and unpacks it into `.snappix-runtime\tesseract` inside the project folder. Nothing is written outside your user profile, `PATH` is untouched, and Snappix finds it automatically.
+
 If `winget` is missing or blocked, install tools yourself (then restart the terminal / Snappix):
 
 ```bat

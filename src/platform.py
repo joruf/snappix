@@ -156,6 +156,58 @@ def _parse_grim_selection_size(selection: str) -> tuple[int, int]:
         return (0, 0)
 
 
+def resolve_tesseract_path() -> str | None:
+    """
+    Resolves the tesseract executable for the current machine.
+
+    Prefers ``PATH``, then Snappix's own per-user copy, then the usual Windows
+    install locations. The private copy matters on Windows accounts without
+    administrator rights: the machine-wide installers cannot run there, so a
+    Tesseract inside the project runtime folder is the only one available.
+
+    Returns:
+        str | None: Path to tesseract, or None when nothing was found.
+    """
+
+    found = which("tesseract")
+    if found:
+        return found
+
+    from pathlib import Path
+
+    from src.paths import is_windows
+
+    if not is_windows():
+        return None
+
+    from src.tesseract_setup import bundled_tesseract_exe
+
+    candidates: list[Path] = [bundled_tesseract_exe(Path(__file__).resolve().parent.parent)]
+
+    local_app = Path(os.environ.get("LOCALAPPDATA", ""))
+    program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+    program_files_x86 = Path(
+        os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
+    )
+
+    candidates.append(local_app / "Microsoft" / "WinGet" / "Links" / "tesseract.exe")
+    winget_packages = local_app / "Microsoft" / "WinGet" / "Packages"
+    if winget_packages.is_dir():
+        for package_dir in winget_packages.glob("UB-Mannheim.TesseractOCR*"):
+            candidates.extend(package_dir.glob("**/tesseract.exe"))
+
+    for base in (program_files, program_files_x86, local_app / "Programs"):
+        candidates.append(base / "Tesseract-OCR" / "tesseract.exe")
+
+    for candidate in candidates:
+        try:
+            if candidate.is_file():
+                return str(candidate)
+        except OSError:
+            continue
+    return None
+
+
 def has_tesseract() -> bool:
     """
     Checks whether the tesseract OCR binary is available.
@@ -164,7 +216,7 @@ def has_tesseract() -> bool:
         bool: True when tesseract exists.
     """
 
-    return which("tesseract") is not None
+    return resolve_tesseract_path() is not None
 
 
 def _resolve_x11_display_ptr(window_handle) -> tuple[object, bool]:

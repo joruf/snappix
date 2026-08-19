@@ -16,7 +16,7 @@ if not defined BOOTSTRAP_PY (
 
 if defined BOOTSTRAP_PY (
     echo Snappix: installing with "%BOOTSTRAP_PY%"...
-    "%BOOTSTRAP_PY%" "%cd%\install_dependencies.py"
+    "%BOOTSTRAP_PY%" "%cd%\install_dependencies.py" %*
     exit /b %ERRORLEVEL%
 )
 
@@ -64,7 +64,7 @@ set "UV_CACHE_DIR=%RUNTIME_DIR%\cache"
 set "UV_PYTHON_INSTALL_DIR=%RUNTIME_DIR%\python"
 "%UV_EXE%" python install 3.12
 if errorlevel 1 exit /b 1
-"%UV_EXE%" run --python 3.12 --no-project python install_dependencies.py
+"%UV_EXE%" run --python 3.12 --no-project python install_dependencies.py %*
 if errorlevel 1 exit /b 1
 echo Snappix: install complete. Start with Snappix.bat
 exit /b 0

@@ -56,5 +56,5 @@ export UV_CACHE_DIR="$RUNTIME_DIR/cache"
 export UV_PYTHON_INSTALL_DIR="$RUNTIME_DIR/python"
 
 "$UV_BIN" python install 3.12
-"$UV_BIN" run --python 3.12 --no-project python install_dependencies.py
+"$UV_BIN" run --python 3.12 --no-project python install_dependencies.py "$@"
 echo "Snappix: install complete. Start with ./snappix.sh"

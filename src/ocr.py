@@ -8,7 +8,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from src.platform import has_tesseract
+from src.platform import resolve_tesseract_path
 
 
 def extract_text_from_png_bytes(png_bytes: bytes, language: str = "eng") -> str:
@@ -23,8 +23,15 @@ def extract_text_from_png_bytes(png_bytes: bytes, language: str = "eng") -> str:
         str: Recognized text or empty string on failure.
     """
 
-    if not has_tesseract() or not png_bytes:
+    executable = resolve_tesseract_path()
+    if executable is None or not png_bytes:
         return ""
+
+    # A Tesseract that Snappix installed for the current user sits outside its
+    # original location and cannot find its language files on its own.
+    from src.tesseract_setup import tesseract_environment
+
+    environment = tesseract_environment(Path(__file__).resolve().parent.parent)
 
     with tempfile.TemporaryDirectory(prefix="snappix-ocr-") as temp_dir:
         input_path = Path(temp_dir) / "input.png"
@@ -33,7 +40,7 @@ def extract_text_from_png_bytes(png_bytes: bytes, language: str = "eng") -> str:
         try:
             subprocess.run(
                 [
-                    "tesseract",
+                    executable,
                     str(input_path),
                     str(output_base),
                     "-l",
@@ -44,6 +51,7 @@ def extract_text_from_png_bytes(png_bytes: bytes, language: str = "eng") -> str:
                 capture_output=True,
                 check=True,
                 timeout=60,
+                env=environment,
             )
         except (OSError, subprocess.SubprocessError):
             return ""

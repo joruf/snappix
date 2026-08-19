@@ -18,9 +18,11 @@ from src.install_manifest import (
     record_system_packages_installed,
 )
 
+# Tesseract is not listed here on purpose: its winget package installs
+# machine-wide and prompts for administrator rights. src/tesseract_setup.py
+# installs it for the current user instead, without any prompt.
 WINDOWS_WINGET_PACKAGES: dict[str, str] = {
     "ffmpeg": "Gyan.FFmpeg",
-    "tesseract": "UB-Mannheim.TesseractOCR",
 }
 
 REQUIRED_SYSTEM_PACKAGE_MAP: dict[str, list[str]] = {
@@ -103,9 +105,11 @@ def detect_missing_system_dependencies() -> list[str]:
 
     missing: list[str] = []
     if is_windows():
-        # Qt ships with PySide6 wheels on Windows; no xcb/xdotool.
-        if which("tesseract") is None:
-            missing.append("tesseract")
+        # Qt ships with PySide6 wheels on Windows; no xcb/xdotool. Tesseract is
+        # deliberately absent here: the machine-wide installer behind the winget
+        # package needs administrator rights, so requiring it locked out every
+        # account that does not have them. OCR is offered separately, per user,
+        # via --install-ocr.
         return missing
     if find_library("xcb-cursor") is None:
         missing.append("xcb-cursor")
@@ -373,6 +377,57 @@ def _install_windows_winget_packages(project_dir: Path, keys: list[str]) -> int:
     return 0
 
 
+def _report_windows_ocr_state(project_dir: Path) -> None:
+    """
+    Reports whether OCR is available and how to add it without elevation.
+
+    Args:
+        project_dir: Project root directory.
+
+    Returns:
+        None
+    """
+
+    from src.platform import has_tesseract
+
+    if has_tesseract():
+        return
+    print(
+        "Snappix installer: OCR (text recognition) is optional and not installed. "
+        "To add it for your account only, without administrator rights, run: "
+        "install.bat --install-ocr"
+    )
+
+
+def install_ocr_for_current_user(project_dir: Path) -> int:
+    """
+    Installs Tesseract for the current user, without administrator rights.
+
+    Args:
+        project_dir: Project root directory.
+
+    Returns:
+        int: 0 on success, 1 when OCR remains unavailable.
+    """
+
+    from src.paths import is_windows
+    from src.platform import has_tesseract
+
+    if has_tesseract():
+        print("Snappix installer: OCR is already available.")
+        return 0
+    if not is_windows():
+        print(
+            "Snappix installer: install tesseract with your package manager, "
+            "for example `sudo apt install tesseract-ocr`."
+        )
+        return 1
+
+    from src.tesseract_setup import install_for_current_user
+
+    return 0 if install_for_current_user(project_dir) else 1
+
+
 def install_system_dependencies(project_dir: Path) -> int:
     """
     Installs OS runtime packages required for Qt and capture tools.
@@ -398,6 +453,7 @@ def install_system_dependencies(project_dir: Path) -> int:
         needed = [*missing, *recommended_missing]
         if not needed:
             print("Snappix installer: required tools are present")
+            _report_windows_ocr_state(project_dir)
             return 0
         print(
             "Snappix installer: detecting missing Windows tools: "
@@ -419,6 +475,7 @@ def install_system_dependencies(project_dir: Path) -> int:
                 + ", ".join(still_recommended)
                 + ". Video recording may be limited until ffmpeg is installed."
             )
+        _report_windows_ocr_state(project_dir)
         return 0
 
     if missing:
@@ -744,6 +801,9 @@ def main() -> int:
     """
 
     project_dir = Path(__file__).resolve().parent
+
+    if "--install-ocr" in sys.argv:
+        return install_ocr_for_current_user(project_dir)
 
     install_system_only = "--install-system-deps-only" in sys.argv
     if install_system_only:

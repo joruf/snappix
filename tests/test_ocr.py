@@ -17,7 +17,7 @@ class TestOcr(unittest.TestCase):
     Verifies OCR wrapper behavior around Tesseract.
     """
 
-    @patch("src.ocr.has_tesseract", return_value=False)
+    @patch("src.ocr.resolve_tesseract_path", return_value=None)
     def test_extract_text_returns_empty_without_tesseract(self, _mock_tesseract: MagicMock) -> None:
         """
         Ensures OCR returns empty string when tesseract is unavailable.
@@ -25,7 +25,7 @@ class TestOcr(unittest.TestCase):
 
         self.assertEqual(extract_text_from_png_bytes(b"png"), "")
 
-    @patch("src.ocr.has_tesseract", return_value=True)
+    @patch("src.ocr.resolve_tesseract_path", return_value="tesseract")
     def test_extract_text_returns_empty_for_empty_input(self, _mock_tesseract: MagicMock) -> None:
         """
         Ensures empty PNG input yields empty output.
@@ -34,7 +34,7 @@ class TestOcr(unittest.TestCase):
         self.assertEqual(extract_text_from_png_bytes(b""), "")
 
     @patch("src.ocr.subprocess.run")
-    @patch("src.ocr.has_tesseract", return_value=True)
+    @patch("src.ocr.resolve_tesseract_path", return_value="tesseract")
     def test_extract_text_reads_tesseract_output(
         self,
         _mock_tesseract: MagicMock,
@@ -54,7 +54,7 @@ class TestOcr(unittest.TestCase):
         self.assertEqual(text, "Hello OCR")
 
     @patch("src.ocr.subprocess.run")
-    @patch("src.ocr.has_tesseract", return_value=True)
+    @patch("src.ocr.resolve_tesseract_path", return_value="tesseract")
     def test_extract_text_handles_subprocess_failure(
         self,
         _mock_tesseract: MagicMock,
