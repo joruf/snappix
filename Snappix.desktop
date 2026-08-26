@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Snappix
+GenericName=Screenshot and annotation
+Comment=Capture, annotate and record the screen
+Comment[de]=Bildschirm aufnehmen, beschriften und als Video mitschneiden
+# %k is this .desktop file, so ./run.py is always the one in the same folder.
+Exec=/bin/bash -c "cd \\$(dirname \\$(readlink -f \\$0)) && exec python3 ./run.py" %k
+Icon=snappix
+Terminal=false
+Categories=Graphics;Utility;
+Keywords=screenshot;annotate;record;capture;Bildschirmfoto;
+StartupNotify=true
+StartupWMClass=snappix
