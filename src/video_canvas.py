@@ -974,6 +974,38 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         self._player.pause()
 
+    def shutdown_playback(self) -> None:
+        """
+        Releases the audio device and media source before the widget dies.
+
+        Nothing stops the player on its own, so quitting Snappix tore the
+        process down while GStreamer still held an open PulseAudio stream. That
+        abrupt teardown is what produced the click on exit. Muting first, then
+        stopping, then dropping the source lets the backend close the stream in
+        order instead.
+
+        Safe to call more than once.
+
+        Returns:
+            None
+        """
+
+        player = getattr(self, "_player", None)
+        audio_output = getattr(self, "_audio_output", None)
+        if audio_output is not None:
+            try:
+                audio_output.setMuted(True)
+            except RuntimeError:
+                pass
+        if player is None:
+            return
+        try:
+            player.stop()
+            player.setSource(QUrl())
+        except RuntimeError:
+            # The C++ object is already gone; nothing left to release.
+            pass
+
     def _on_position_changed(self, ms: int) -> None:
         """
         Handles player position updates.

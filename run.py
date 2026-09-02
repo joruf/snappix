@@ -3383,6 +3383,7 @@ class AppController:
         """
 
         self._is_quitting = True
+        self._release_video_playback()
         if hasattr(self, "_measure_box_session"):
             self._measure_box_session.stop()
         self._save_editor_session()
@@ -3395,6 +3396,27 @@ class AppController:
         self.capture_panel.close()
         self.tray_icon.hide()
         self.app.quit()
+
+    def _release_video_playback(self) -> None:
+        """
+        Releases the audio device held by every open video tab.
+
+        Done before anything else in the quit path: a video tab keeps a
+        PulseAudio stream open through QMediaPlayer, and letting the process
+        die with that stream still open produced an audible click on exit.
+
+        Returns:
+            None
+        """
+
+        for index in range(self.editor_tabs.count()):
+            tab = self.editor_tabs.widget(index)
+            release = getattr(tab, "shutdown_playback", None)
+            if callable(release):
+                try:
+                    release()
+                except RuntimeError:
+                    continue
 
     def check_for_updates(self) -> None:
         """

@@ -1603,7 +1603,24 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         if autosave_timer:
             self.killTimer(autosave_timer)
             self._autosave_timer = 0
+        self.shutdown_playback()
         super().closeEvent(event)
+
+    def shutdown_playback(self) -> None:
+        """
+        Releases the audio device this tab holds.
+
+        Called before the tab is destroyed and again from the quit path, so no
+        open audio stream is left for the process teardown to cut off.
+
+        Returns:
+            None
+        """
+
+        canvas = getattr(self, "canvas", None)
+        release = getattr(canvas, "shutdown_playback", None)
+        if callable(release):
+            release()
 
     def save_project(self) -> None:
         """
