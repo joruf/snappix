@@ -163,8 +163,14 @@ def probe_video_file(path: str | Path) -> VideoFileProbe | None:
     if not resolved.is_file():
         return None
 
+    from src.ffmpeg_setup import resolve_ffprobe_path
+
+    ffprobe = resolve_ffprobe_path()
+    if ffprobe is None:
+        return None
+
     command = [
-        "ffprobe",
+        ffprobe,
         "-v",
         "error",
         "-select_streams",

@@ -18,12 +18,12 @@ from src.install_manifest import (
     record_system_packages_installed,
 )
 
-# Tesseract is not listed here on purpose: its winget package installs
-# machine-wide and prompts for administrator rights. src/tesseract_setup.py
-# installs it for the current user instead, without any prompt.
-WINDOWS_WINGET_PACKAGES: dict[str, str] = {
-    "ffmpeg": "Gyan.FFmpeg",
-}
+# Deliberately empty: both Windows tools used to come from winget, whose
+# packages install machine-wide and prompt for administrator rights -- which
+# simply fails on accounts that do not have them. src/ffmpeg_setup.py and
+# src/tesseract_setup.py install them for the current user instead, and only
+# when the user asks for it.
+WINDOWS_WINGET_PACKAGES: dict[str, str] = {}
 
 REQUIRED_SYSTEM_PACKAGE_MAP: dict[str, list[str]] = {
     "apt-get": [
@@ -399,6 +399,57 @@ def _report_windows_ocr_state(project_dir: Path) -> None:
     )
 
 
+def _report_windows_ffmpeg_state(project_dir: Path) -> None:
+    """
+    Reports whether video support is available and how to add it.
+
+    Args:
+        project_dir: Project root directory.
+
+    Returns:
+        None
+    """
+
+    from src.video_recorder import has_ffmpeg
+
+    if has_ffmpeg():
+        return
+    print(
+        "Snappix installer: ffmpeg is missing, so video recording and MP4/GIF "
+        "export are unavailable. To add it for your account only, without "
+        "administrator rights, run: install.bat --install-ffmpeg"
+    )
+
+
+def install_ffmpeg_for_current_user(project_dir: Path) -> int:
+    """
+    Unpacks ffmpeg for the current user, without administrator rights.
+
+    Args:
+        project_dir: Project root directory.
+
+    Returns:
+        int: 0 on success, 1 when ffmpeg remains unavailable.
+    """
+
+    from src.paths import is_windows
+    from src.video_recorder import has_ffmpeg
+
+    if has_ffmpeg():
+        print("Snappix installer: ffmpeg is already available.")
+        return 0
+    if not is_windows():
+        print(
+            "Snappix installer: install ffmpeg with your package manager, "
+            "for example `sudo apt install ffmpeg`."
+        )
+        return 1
+
+    from src.ffmpeg_setup import install_for_current_user
+
+    return 0 if install_for_current_user(project_dir) else 1
+
+
 def install_ocr_for_current_user(project_dir: Path) -> int:
     """
     Installs Tesseract for the current user, without administrator rights.
@@ -454,12 +505,14 @@ def install_system_dependencies(project_dir: Path) -> int:
         if not needed:
             print("Snappix installer: required tools are present")
             _report_windows_ocr_state(project_dir)
+            _report_windows_ffmpeg_state(project_dir)
             return 0
         print(
             "Snappix installer: detecting missing Windows tools: "
             + ", ".join(needed)
         )
-        winget_code = _install_windows_winget_packages(project_dir, needed)
+        # No automatic install here on purpose: everything that could be
+        # installed machine-wide would ask for administrator rights.
         still_required = detect_missing_system_dependencies()
         if still_required:
             print(
@@ -467,7 +520,6 @@ def install_system_dependencies(project_dir: Path) -> int:
                 + ", ".join(still_required)
             )
             return 1
-        del winget_code
         still_recommended = detect_missing_recommended_dependencies()
         if still_recommended:
             print(
@@ -476,6 +528,7 @@ def install_system_dependencies(project_dir: Path) -> int:
                 + ". Video recording may be limited until ffmpeg is installed."
             )
         _report_windows_ocr_state(project_dir)
+        _report_windows_ffmpeg_state(project_dir)
         return 0
 
     if missing:
@@ -804,6 +857,9 @@ def main() -> int:
 
     if "--install-ocr" in sys.argv:
         return install_ocr_for_current_user(project_dir)
+
+    if "--install-ffmpeg" in sys.argv:
+        return install_ffmpeg_for_current_user(project_dir)
 
     install_system_only = "--install-system-deps-only" in sys.argv
     if install_system_only:

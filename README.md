@@ -67,6 +67,14 @@ On first run Snappix:
 2. Creates `.venv` and installs PySide6 / Pillow / requests / pynput
 3. Tries to install **ffmpeg** and **tesseract** via `winget` when available
 
+**ffmpeg without administrator rights:** the same applies to video recording and MP4/GIF export. Snappix no longer installs anything machine-wide, so setup never prompts. To add ffmpeg for your account only:
+
+```bat
+install.bat --install-ffmpeg
+```
+
+That unpacks a portable build into `.snappix-runtime\ffmpeg` — a plain ZIP, so no installer runs and nobody is prompted, administrator or not. Maintainers can pre-fetch the archive with `python scripts/fetch_ffmpeg_windows.py` (it lands in `vendor/`, which is git-ignored) to make the install work offline.
+
 **OCR without administrator rights:** the Tesseract package in `winget` installs machine-wide and prompts for elevation, which blocks accounts that do not have it. Snappix therefore treats OCR as optional and never installs it behind your back. To add it for your account only, with no prompt:
 
 ```bat

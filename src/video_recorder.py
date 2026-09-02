@@ -55,7 +55,13 @@ def resolve_ffmpeg_path() -> str | None:
     if not is_windows():
         return None
 
-    candidates: list[Path] = []
+    from src.ffmpeg_setup import bundled_ffmpeg_dir
+
+    # Snappix's own copy first: on an account without administrator rights it is
+    # the only ffmpeg that can exist, and it is never on PATH.
+    candidates: list[Path] = [
+        bundled_ffmpeg_dir(Path(__file__).resolve().parent.parent) / "ffmpeg.exe"
+    ]
     local_app = Path(os.environ.get("LOCALAPPDATA", ""))
     program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
     program_files_x86 = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
