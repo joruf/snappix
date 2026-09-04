@@ -28,6 +28,13 @@ ASPECT_LOCK_MODIFIERS = (
 )
 
 
+# Crop presentation metrics.
+CROP_BRACKET_LENGTH = 18.0
+CROP_BRACKET_WIDTH = 3.0
+CROP_READOUT_PADDING = 6.0
+CROP_READOUT_GAP = 6.0
+
+
 def aspect_lock_requested(modifiers) -> bool:
     """
     Reports whether the pressed modifiers ask for a proportional resize.
@@ -94,6 +101,8 @@ class CropSelectionItem(QGraphicsRectItem):
         self._line_p1 = QPointF(0.0, 0.0)
         self._line_p2 = QPointF(max(rect.width(), 1.0), max(rect.height(), 1.0))
         self.on_geometry_changed: Callable[[], None] | None = None
+        self._crop_presentation = False
+        self._fixed_aspect_ratio: float | None = None
 
         border_pen = QPen(QColor(52, 152, 219, 230), 2.0, Qt.PenStyle.DashLine)
         self.setPen(border_pen)
@@ -375,6 +384,9 @@ class CropSelectionItem(QGraphicsRectItem):
             painter.drawRect(self.rect())
         painter.restore()
 
+        if self._crop_presentation and self._frame_mode == FRAME_MODE_RECT:
+            self._paint_crop_guides(painter)
+
         if not self.isSelected() and not self._always_show_handles:
             return
         painter.save()
@@ -382,6 +394,101 @@ class CropSelectionItem(QGraphicsRectItem):
         painter.setBrush(QColor(20, 20, 20, 220))
         for handle in self._handle_rects().values():
             painter.drawRect(handle)
+        painter.restore()
+
+    def _paint_crop_guides(self, painter: QPainter) -> None:
+        """
+        Draws the thirds grid, corner brackets, and the live pixel size.
+
+        The grid divides the frame into nine equal parts: it is the composition
+        aid the frame is judged against, so it belongs inside the kept area
+        rather than around it. The size readout answers the other question that
+        always comes up -- how many pixels will actually remain.
+
+        Args:
+            painter: Active painter.
+
+        Returns:
+            None
+        """
+
+        rect = self.rect()
+        if rect.width() <= 0.0 or rect.height() <= 0.0:
+            return
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+        # Thirds grid: faint, so it guides without competing with the picture.
+        painter.setPen(QPen(QColor(255, 255, 255, 110), 1.0))
+        for step in (1, 2):
+            x = rect.left() + (rect.width() * step / 3.0)
+            y = rect.top() + (rect.height() * step / 3.0)
+            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+
+        # Corner brackets: they mark the corners even where the thin border sits
+        # on a light part of the picture.
+        bracket = min(CROP_BRACKET_LENGTH, rect.width() / 3.0, rect.height() / 3.0)
+        painter.setPen(QPen(QColor(255, 255, 255, 245), CROP_BRACKET_WIDTH))
+        for corner_x, corner_y, step_x, step_y in (
+            (rect.left(), rect.top(), 1.0, 1.0),
+            (rect.right(), rect.top(), -1.0, 1.0),
+            (rect.left(), rect.bottom(), 1.0, -1.0),
+            (rect.right(), rect.bottom(), -1.0, -1.0),
+        ):
+            painter.drawLine(
+                QPointF(corner_x, corner_y),
+                QPointF(corner_x + (bracket * step_x), corner_y),
+            )
+            painter.drawLine(
+                QPointF(corner_x, corner_y),
+                QPointF(corner_x, corner_y + (bracket * step_y)),
+            )
+
+        painter.restore()
+        self._paint_size_readout(painter, rect)
+
+    def _paint_size_readout(self, painter: QPainter, rect: QRectF) -> None:
+        """
+        Draws the resulting pixel size next to the frame.
+
+        Placed just outside the frame so it never covers the content being
+        judged, and pulled inside when the frame sits against the picture edge.
+
+        Args:
+            painter: Active painter.
+            rect: Frame rectangle in item coordinates.
+
+        Returns:
+            None
+        """
+
+        label = f"{int(round(rect.width()))} x {int(round(rect.height()))} px"
+        metrics = painter.fontMetrics()
+        box = QRectF(
+            0.0,
+            0.0,
+            metrics.horizontalAdvance(label) + (CROP_READOUT_PADDING * 2),
+            metrics.height() + 6.0,
+        )
+        box.moveLeft(rect.left())
+        box.moveTop(rect.top() - CROP_READOUT_GAP - box.height())
+        # Room is decided in scene terms: the item's own rectangle always starts
+        # at zero, so measuring against that would push the readout inside the
+        # frame every single time -- straight over the content being judged.
+        scene_top = self.pos().y() + rect.top()
+        if scene_top - CROP_READOUT_GAP - box.height() < 0.0:
+            box.moveTop(rect.bottom() + CROP_READOUT_GAP)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(20, 20, 20, 215))
+        painter.drawRoundedRect(box, 3.0, 3.0)
+        painter.setPen(QColor(240, 240, 240, 245))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawText(box, Qt.AlignmentFlag.AlignCenter, label)
         painter.restore()
 
     def set_always_show_handles(self, enabled: bool) -> None:
@@ -436,6 +543,11 @@ class CropSelectionItem(QGraphicsRectItem):
         """
 
         path = QPainterPath()
+        # Winding, not the default odd-even: the handles sit *inside* the frame,
+        # and with odd-even every handle rectangle would cancel against the
+        # interior rectangle added below -- turning each handle into a hole in
+        # the hit area, so grabbing one fell through to the picture underneath.
+        path.setFillRule(Qt.FillRule.WindingFill)
         for handle in self._handle_rects().values():
             path.addRect(handle)
 
@@ -477,6 +589,103 @@ class CropSelectionItem(QGraphicsRectItem):
         inner = QPainterPath()
         inner.addRect(rect.adjusted(tolerance, tolerance, -tolerance, -tolerance))
         return path.united(border.subtracted(inner))
+
+    def set_crop_presentation(self, enabled: bool) -> None:
+        """
+        Switches the frame to the presentation used while cropping.
+
+        The same item also serves as the resize overlay for annotations, where a
+        tinted interior is the point. While cropping it is the opposite: the
+        interior must stay completely unobstructed, because it is the part of
+        the picture being judged.
+
+        Args:
+            enabled: True to draw the crop presentation.
+
+        Returns:
+            None
+        """
+
+        enabled = bool(enabled)
+        if enabled == self._crop_presentation:
+            return
+        self._crop_presentation = enabled
+        if enabled:
+            self.setBrush(Qt.BrushStyle.NoBrush)
+            self.setPen(QPen(QColor(255, 255, 255, 235), 1.0))
+        else:
+            self.setBrush(QColor(52, 152, 219, 48))
+            self.setPen(QPen(QColor(52, 152, 219, 230), 2.0, Qt.PenStyle.DashLine))
+        self.prepareGeometryChange()
+        self.update()
+
+    def crop_presentation(self) -> bool:
+        """
+        Reports whether the crop presentation is active.
+
+        Returns:
+            bool: True while cropping.
+        """
+
+        return self._crop_presentation
+
+    def set_fixed_aspect_ratio(self, ratio: float | None) -> None:
+        """
+        Constrains every resize to one width-to-height ratio.
+
+        Unlike the modifier-held lock, this stays in force until it is cleared,
+        which is what a chosen ratio preset has to do.
+
+        Args:
+            ratio: Width divided by height, or None for a free frame.
+
+        Returns:
+            None
+        """
+
+        if ratio is None:
+            self._fixed_aspect_ratio = None
+            return
+        try:
+            resolved = float(ratio)
+        except (TypeError, ValueError):
+            return
+        if resolved <= 0.0:
+            return
+        self._fixed_aspect_ratio = resolved
+        self._apply_fixed_aspect_ratio()
+
+    def fixed_aspect_ratio(self) -> float | None:
+        """
+        Returns the ratio every resize is constrained to.
+
+        Returns:
+            float | None: Ratio, or None when the frame is free.
+        """
+
+        return self._fixed_aspect_ratio
+
+    def _apply_fixed_aspect_ratio(self) -> None:
+        """
+        Reshapes the frame to the fixed ratio, keeping it inside its bounds.
+
+        The height follows the width, so choosing a ratio never widens the
+        frame past the picture edge it was already touching.
+
+        Returns:
+            None
+        """
+
+        ratio = self._fixed_aspect_ratio
+        if ratio is None:
+            return
+        rect = self.rect()
+        if rect.width() <= 0.0 or rect.height() <= 0.0:
+            return
+        self.prepareGeometryChange()
+        self.setRect(QRectF(rect.x(), rect.y(), rect.width(), rect.width() / ratio))
+        self._notify_geometry_changed()
+        self.update()
 
     def set_aspect_ratio_lock_enabled(self, enabled: bool) -> None:
         """
@@ -568,6 +777,11 @@ class CropSelectionItem(QGraphicsRectItem):
                 self._aspect_ratio_lock_enabled
                 and aspect_lock_requested(event.modifiers())
             )
+            if self._fixed_aspect_ratio is not None:
+                # A chosen preset outranks the modifier: it holds for the whole
+                # drag rather than only while a key is down.
+                self._resize_aspect_ratio = self._fixed_aspect_ratio
+                lock_aspect_ratio = True
             self._resize_from_handle(
                 self._active_handle,
                 event.scenePos(),

@@ -274,6 +274,20 @@ _SHAPE_THICKNESS_SELECTION_TYPES = frozenset(
 )
 _SHAPE_STYLE_SELECTION_TYPES = frozenset(STYLE_AWARE_TOOLS)
 _SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect", "triangle"})
+
+# Sentinel meaning "whatever the picture's own ratio is", resolved when chosen.
+CROP_RATIO_ORIGINAL = -1.0
+
+# Ratio presets for the crop frame, in the order they are offered.
+CROP_RATIO_PRESETS: tuple[tuple[str, float | None], ...] = (
+    ("Free", None),
+    ("Original", CROP_RATIO_ORIGINAL),
+    ("1:1", 1.0),
+    ("4:3", 4.0 / 3.0),
+    ("3:2", 3.0 / 2.0),
+    ("16:9", 16.0 / 9.0),
+    ("9:16", 9.0 / 16.0),
+)
 # Tools that edit existing content: Style colors follow the selection, not the tool.
 _COLOR_SELECTION_CONTEXT_TOOLS = frozenset(
     {
@@ -2145,6 +2159,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._configure_menu_tool_button(eyedropper_button)
 
         self._setup_blur_tool_option_menu()
+        self._setup_crop_tool_option_menu()
 
     def _setup_stroke_width_tool_menus(self) -> None:
         """
@@ -3125,6 +3140,69 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         blur_button = self._tool_buttons[Tool.BLUR]
         blur_button.setMenu(blur_menu)
         self._configure_menu_tool_button(blur_button)
+
+    def _setup_crop_tool_option_menu(self) -> None:
+        """
+        Attaches the crop ratio presets to the Crop tool button.
+
+        A fixed ratio is the common case when a crop has to match a target --
+        a thumbnail, a slide, a print size -- and holding a modifier through the
+        whole drag is both awkward and easy to lose halfway.
+
+        Returns:
+            None
+        """
+
+        crop_menu = QMenu(self)
+        self._crop_ratio_group = QActionGroup(self)
+        self._crop_ratio_group.setExclusive(True)
+
+        for label, ratio in CROP_RATIO_PRESETS:
+            action = QAction(label, crop_menu)
+            action.setCheckable(True)
+            action.setChecked(ratio is None)
+            action.setData(ratio)
+            action.setToolTip(
+                "Let the frame take any shape."
+                if ratio is None
+                else f"Hold the frame at {label}."
+            )
+            action.triggered.connect(
+                lambda _checked=False, value=ratio: self._crop_ratio_chosen(value)
+            )
+            self._crop_ratio_group.addAction(action)
+            crop_menu.addAction(action)
+
+        crop_button = self._tool_buttons.get(Tool.CROP)
+        if crop_button is None:
+            return
+        crop_button.setMenu(crop_menu)
+        self._configure_menu_tool_button(crop_button)
+
+    def _crop_ratio_chosen(self, ratio: float | None) -> None:
+        """
+        Applies one ratio preset to the crop frame.
+
+        Args:
+            ratio: Width divided by height, or None for a free frame.
+
+        Returns:
+            None
+        """
+
+        if ratio is None:
+            self.canvas.set_crop_aspect_ratio(None)
+            self.statusBar().showMessage("Crop ratio: free", 3000)
+            return
+
+        resolved = ratio
+        if ratio == CROP_RATIO_ORIGINAL:
+            document = self.canvas.document_rect()
+            if document.height() <= 0:
+                return
+            resolved = document.width() / document.height()
+        self.canvas.set_crop_aspect_ratio(resolved)
+        self.statusBar().showMessage(f"Crop ratio: {resolved:.3f}", 3000)
 
     def _popup_pixel_tool_options(self, tool: str) -> None:
         """

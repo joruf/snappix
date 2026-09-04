@@ -208,6 +208,11 @@ DRAG_RECT_TOOLS = frozenset(
 )
 DRAG_LINE_TOOLS = frozenset({Tool.LINE, Tool.ARROW, Tool.DOUBLE_ARROW})
 POLY_DRAW_TOOLS = frozenset({Tool.POLYLINE, Tool.POLYGON, Tool.BENT_ARROW})
+
+# How strongly the area outside the crop frame is dimmed. Strong enough that the
+# kept area reads as the picture and the rest as discarded, light enough that
+# what is being cut away stays recognizable.
+CROP_SHADE_ALPHA = 165
 DRAG_SHAPE_TOOLS = DRAG_RECT_TOOLS | DRAG_LINE_TOOLS
 
 
@@ -297,6 +302,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self._start_scene_pos = QPointF()
         self._preview_item: QGraphicsItem | None = None
         self._crop_item: CropSelectionItem | None = None
+        self._crop_aspect_ratio: float | None = None
         self._crop_shade_item: QGraphicsPathItem | None = None
         self._resize_overlay_item: CropSelectionItem | None = None
         self._resize_overlay_target: QGraphicsItem | None = None
@@ -1821,6 +1827,8 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 self._preview_item = None
                 if crop_rect.width() > 2 and crop_rect.height() > 2:
                     self._crop_item = CropSelectionItem(crop_rect)
+                    self._crop_item.set_crop_presentation(True)
+                    self._crop_item.set_always_show_handles(True)
                     self._crop_item.set_aspect_ratio_lock_enabled(True)
                     self._crop_item.on_geometry_changed = self._update_crop_shade
                     self._scene.addItem(self._crop_item)
@@ -2260,9 +2268,15 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         )
 
         crop_rect_int = crop_rect.toAlignedRect()
-        background_color = self._background_base_color()
         expanded = QImage(crop_rect_int.size(), QImage.Format.Format_ARGB32)
-        expanded.fill(background_color)
+        if source_screenshot.hasAlphaChannel():
+            # The fill sits *under* the picture, so any opaque colour would show
+            # through every see-through area -- turning a background cleared
+            # with the wand back into solid white. A picture that carries
+            # transparency has to keep it, including in any margin the crop adds.
+            expanded.fill(Qt.GlobalColor.transparent)
+        else:
+            expanded.fill(self._background_base_color())
         painter = QPainter(expanded)
         source_offset_x = -crop_rect_int.x()
         source_offset_y = -crop_rect_int.y()
@@ -2339,6 +2353,65 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             annotation.width,
             annotation.height,
         ).normalized()
+
+    def set_crop_aspect_ratio(self, ratio: float | None) -> None:
+        """
+        Constrains the crop frame to one width-to-height ratio.
+
+        Applies to the frame on screen and to every frame created afterwards,
+        so the choice survives switching tools and back.
+
+        Args:
+            ratio: Width divided by height, or None for a free frame.
+
+        Returns:
+            None
+        """
+
+        self._crop_aspect_ratio = None if ratio is None else float(ratio)
+        if self._crop_item is not None:
+            self._crop_item.set_fixed_aspect_ratio(self._crop_aspect_ratio)
+            self._clamp_crop_to_document()
+            self._update_crop_shade()
+
+    def crop_aspect_ratio(self) -> float | None:
+        """
+        Returns the ratio the crop frame is constrained to.
+
+        Returns:
+            float | None: Ratio, or None when the frame is free.
+        """
+
+        return self._crop_aspect_ratio
+
+    def _clamp_crop_to_document(self) -> None:
+        """
+        Keeps the crop frame inside the picture.
+
+        A ratio change can push the frame over an edge; cropping outside the
+        document would add empty pixels instead of removing any.
+
+        Returns:
+            None
+        """
+
+        if self._crop_item is None:
+            return
+        document = QRectF(self.document_rect())
+        frame = self._crop_item.scene_rect().normalized()
+        width = min(frame.width(), document.width())
+        height = min(frame.height(), document.height())
+        ratio = self._crop_item.fixed_aspect_ratio()
+        if ratio is not None:
+            # Shrink along whichever side hit the edge, keeping the ratio.
+            if width / ratio > height:
+                width = height * ratio
+            else:
+                height = width / ratio
+        x = min(max(frame.x(), document.x()), document.right() - width)
+        y = min(max(frame.y(), document.y()), document.bottom() - height)
+        self._crop_item.setPos(QPointF(x, y))
+        self._crop_item.setRect(QRectF(0.0, 0.0, width, height))
 
     def has_pending_crop(self) -> bool:
         """
@@ -5734,7 +5807,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self._crop_shade_item = QGraphicsPathItem()
         self._crop_shade_item.setZValue(900)
         self._crop_shade_item.setPen(QPen(Qt.PenStyle.NoPen))
-        self._crop_shade_item.setBrush(QColor(20, 20, 20, 110))
+        self._crop_shade_item.setBrush(QColor(0, 0, 0, CROP_SHADE_ALPHA))
         self._crop_shade_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, False)
         self._crop_shade_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, False)
         self._scene.addItem(self._crop_shade_item)
@@ -5782,7 +5855,11 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         rect = QRectF(self.document_rect())
         self._crop_item = CropSelectionItem(rect)
+        self._crop_item.set_crop_presentation(True)
+        self._crop_item.set_always_show_handles(True)
         self._crop_item.set_aspect_ratio_lock_enabled(True)
+        if self._crop_aspect_ratio is not None:
+            self._crop_item.set_fixed_aspect_ratio(self._crop_aspect_ratio)
         self._crop_item.on_geometry_changed = self._update_crop_shade
         self._scene.addItem(self._crop_item)
         self._crop_item.setSelected(True)

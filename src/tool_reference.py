@@ -174,6 +174,19 @@ TOOL_HELP_ENTRIES: tuple[ToolHelpEntry, ...] = (
         ),
     ),
     ToolHelpEntry(
+        tool=Tool.CROP,
+        name="Crop",
+        tooltip_blurb="frames the whole picture; drag the handles, Enter applies",
+        description=(
+            "Frames the whole picture as soon as you pick the tool. The area "
+            "that would be cut away is dimmed, a thirds grid and corner "
+            "brackets help you place the frame, and the resulting pixel size "
+            "is shown while you drag. Drag inside to move the frame or use its "
+            "eight handles to resize it; the tool menu holds fixed ratios. "
+            "Enter applies the crop, Esc cancels it."
+        ),
+    ),
+    ToolHelpEntry(
         tool=Tool.FREEHAND,
         name="Freehand",
         tooltip_blurb="draw by dragging; smoothing slider rounds the corners",

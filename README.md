@@ -236,6 +236,7 @@ Flatpak modules too would be a much larger, slower build.
 - Corner radius (0-90) for rectangles **and triangles**, in both editors
 - Layers, geometry inspector (`X/Y/W/H`), document footer when nothing is selected
 - History with labeled undo list; zoom, grid, snap, smart guides
+- **Crop**: picking the tool frames the whole picture at once — the discarded area is dimmed, a thirds grid and corner brackets sit on the frame, and the resulting pixel size is shown live. Drag the frame or its eight handles, choose a fixed ratio from the tool menu (Free, Original, 1:1, 4:3, 3:2, 16:9, 9:16), then `Enter` to apply or `Esc` to cancel
 - **Freehand**: draw by dragging and keep an object you can select, move, and delete — with a **Smoothing** slider that rounds the corners live and stays adjustable, because the recorded stroke is never overwritten (the Brush still paints pixels)
 - **Image Size...** (Edit menu): resize the whole document; geometry, stroke widths, and font sizes scale with it
 - **Pin to Screen** (View menu): keep the image floating above all windows as a reference — drag to move, wheel to zoom, `Esc` closes
