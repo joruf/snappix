@@ -297,6 +297,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         # not something every annotation should carry.
         self._annotation_halo = False
         self._zoom_factor = 1.0
+        self.enable_pinch_zoom()
         self._initial_view_pending = False
         self._last_action_label = "Edit"
         self._start_scene_pos = QPointF()
@@ -1945,6 +1946,21 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 return
         super().mouseDoubleClickEvent(event)
 
+    def event(self, event) -> bool:
+        """
+        Routes pinch gestures to the zoom before normal handling.
+
+        Args:
+            event: Incoming event.
+
+        Returns:
+            bool: True when the event was consumed.
+        """
+
+        if self.handle_zoom_event(event):
+            return True
+        return super().event(event)
+
     def wheelEvent(self, event) -> None:
         """
         Zooms with Shift+wheel; otherwise keeps default scroll/pan behavior.
@@ -1956,7 +1972,11 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             None
         """
 
-        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+        # Ctrl as well as Shift: a two-finger pinch on a Linux touchpad usually
+        # arrives as Ctrl and a wheel step rather than as a gesture.
+        if event.modifiers() & (
+            Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
+        ):
             delta = event.angleDelta().y()
             if delta == 0:
                 delta = event.angleDelta().x()
@@ -2412,6 +2432,101 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         y = min(max(frame.y(), document.y()), document.bottom() - height)
         self._crop_item.setPos(QPointF(x, y))
         self._crop_item.setRect(QRectF(0.0, 0.0, width, height))
+
+    def selected_cuttable_item(self):
+        """
+        Returns the one selected element that pixels can be cut out of.
+
+        Only elements that carry their own pixels qualify -- an imported image,
+        for instance. A shape has no pixels to remove; changing its outline is a
+        different operation.
+
+        Returns:
+            QGraphicsPixmapItem | None: The element, or None when the selection
+            does not name exactly one suitable element.
+        """
+
+        from PySide6.QtWidgets import QGraphicsPixmapItem
+
+        candidates = [
+            item
+            for item in self._scene.selectedItems()
+            if isinstance(item, QGraphicsPixmapItem)
+            and item is not self._background_item
+        ]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def can_cut_from_selected_item(self) -> bool:
+        """
+        Reports whether cutting out of the selected element is possible.
+
+        Returns:
+            bool: True when one suitable element and a selection both exist.
+        """
+
+        return self.has_pixel_selection() and self.selected_cuttable_item() is not None
+
+    def cut_selection_from_selected_item(self) -> bool:
+        """
+        Removes the selected region from the selected element only.
+
+        The picture underneath and every other element stay untouched, which is
+        the difference to erasing the selection: that one always works on the
+        background.
+
+        Returns:
+            bool: True when pixels were removed.
+        """
+
+        item = self.selected_cuttable_item()
+        if item is None or not self.has_pixel_selection():
+            return False
+
+        document = self.document_rect()
+        mask = self._active_selection_mask(
+            int(round(document.width())),
+            int(round(document.height())),
+        )
+        if mask is None:
+            return False
+
+        source = item.pixmap()
+        if source.isNull():
+            return False
+        image = source.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+
+        scene_to_item, invertible = item.sceneTransform().inverted()
+        if not invertible:
+            return False
+
+        painter = QPainter(image)
+        # Paint in scene coordinates so the mask, which describes the document,
+        # lines up with an element that may sit anywhere and be scaled.
+        painter.setTransform(scene_to_item)
+        painter.setClipRegion(region_from_mask(mask))
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.fillRect(document, Qt.GlobalColor.transparent)
+        painter.end()
+
+        item.setPixmap(QPixmap.fromImage(image))
+        self.clear_pixel_selection()
+        self._last_action_label = "Cut out of element"
+        self._emit_content_changed("Cut out of element")
+        return True
+
+    def clear_annotation_selection(self) -> bool:
+        """
+        Deselects every selected annotation.
+
+        Returns:
+            bool: True when something was deselected.
+        """
+
+        if not self._scene.selectedItems():
+            return False
+        self._scene.clearSelection()
+        self._clear_resize_overlay()
+        return True
 
     def has_pending_crop(self) -> bool:
         """
@@ -3868,6 +3983,12 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 return
             if self.has_pixel_selection():
                 self.clear_pixel_selection()
+                return
+            if self._scene.selectedItems():
+                # Only once nothing is in progress: Escape first backs out of
+                # what is being drawn, then drops the selection, and only with
+                # neither of those does it release a locked tool.
+                self.clear_annotation_selection()
                 return
             self.tool_lock_escape_requested.emit()
             return

@@ -54,6 +54,7 @@ GERMAN: dict[str, str] = {
     "Save Project": "Projekt speichern",
     "Save Project As...": "Projekt speichern unter …",
     "Import Image...": "Bild einfügen …",
+    "Cut Out of Element": "Aus Element ausschneiden",
     "Import Image as New Tab...": "Bild als neuen Tab öffnen …",
     "Import Video...": "Video öffnen …",
     "Export": "Exportieren",

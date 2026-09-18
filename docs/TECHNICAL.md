@@ -89,6 +89,7 @@ Startup:
 | `src/cli.py` | Non-GUI commands |
 | `src/autostart.py` | XDG autostart `.desktop` |
 | `src/tool_reference.py` / `tool_reference_dialog.py` | In-app tools help |
+| `src/version.py` | Version derived from the commit history; `VERSION` file for packaged copies |
 | `src/ffmpeg_setup.py` | Per-user ffmpeg unpack for Windows accounts without administrator rights |
 | `src/tesseract_setup.py` | Per-user Tesseract install for Windows accounts without administrator rights |
 | `src/freehand.py` | Freehand point thinning while drawing and Chaikin smoothing for display |

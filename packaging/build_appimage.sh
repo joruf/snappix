@@ -5,7 +5,8 @@ PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$PROJECT_ROOT/dist"
 BUILD_DIR="$PROJECT_ROOT/.build/appimage"
 APPDIR="$BUILD_DIR/Snappix.AppDir"
-APP_VERSION="${1:-0.1.0}"
+# Same source as the app itself; two version numbers would be two truths.
+APP_VERSION="${1:-$(python3 -c "import sys; sys.path.insert(0, '.'); from src.version import version; print(version()[0])" 2>/dev/null || echo 0.0.0)}"
 
 if ! command -v appimagetool >/dev/null 2>&1; then
   echo "appimagetool not found. Install it first."

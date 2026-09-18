@@ -6,7 +6,8 @@ DIST_DIR="$PROJECT_ROOT/dist"
 BUILD_DIR="$PROJECT_ROOT/.build/deb"
 STAGING_DIR="$BUILD_DIR/staging"
 PKG_NAME="snappix"
-PKG_VERSION="${1:-0.1.0}"
+# Same source as the app itself; two version numbers would be two truths.
+PKG_VERSION="${1:-$(python3 -c "import sys; sys.path.insert(0, '.'); from src.version import version; print(version()[0])" 2>/dev/null || echo 0.0.0)}"
 ARCH="$(dpkg --print-architecture)"
 
 echo "[snappix] Preparing Debian package build directories..."

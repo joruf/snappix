@@ -21,6 +21,72 @@ class ZoomableCanvasMixin:
     ZOOM_MAX = 8.0
     ZOOM_STEP = 1.06
 
+    # Smallest pinch change worth acting on. Touchpads report a stream of tiny
+    # scale factors; rescaling on every one of them costs a full repaint and
+    # makes the picture shimmer without moving.
+    PINCH_DEAD_ZONE = 0.002
+
+    def enable_pinch_zoom(self) -> None:
+        """
+        Starts listening for two-finger pinch gestures.
+
+        Returns:
+            None
+        """
+
+        from PySide6.QtCore import Qt
+
+        self.grabGesture(Qt.GestureType.PinchGesture)
+
+    def handle_zoom_event(self, event) -> bool:
+        """
+        Zooms in response to a pinch, whichever way the system reports it.
+
+        Two-finger zoom arrives differently depending on the platform and the
+        input driver: as a pinch gesture from a touchscreen, or as a native
+        zoom gesture from a touchpad. Both are handled here so the canvases
+        only have to forward the event.
+
+        Args:
+            event: Event to inspect.
+
+        Returns:
+            bool: True when the event was a zoom and has been handled.
+        """
+
+        from PySide6.QtCore import QEvent, Qt
+
+        event_type = event.type()
+        if event_type == QEvent.Type.NativeGesture:
+            if event.gestureType() != Qt.NativeGestureType.ZoomNativeGesture:
+                return False
+            return self._apply_pinch_scale(1.0 + float(event.value()))
+        if event_type == QEvent.Type.Gesture:
+            pinch = event.gesture(Qt.GestureType.PinchGesture)
+            if pinch is None:
+                return False
+            self._apply_pinch_scale(float(pinch.scaleFactor()))
+            return True
+        return False
+
+    def _apply_pinch_scale(self, scale_factor: float) -> bool:
+        """
+        Applies one pinch step.
+
+        Args:
+            scale_factor: Reported scale factor; 1.0 means unchanged.
+
+        Returns:
+            bool: True when the gesture was consumed.
+        """
+
+        if scale_factor <= 0.0:
+            return True
+        if abs(scale_factor - 1.0) < self.PINCH_DEAD_ZONE:
+            return True
+        self._apply_zoom(scale_factor)
+        return True
+
     def zoom_in(self) -> None:
         """
         Zooms into the canvas.

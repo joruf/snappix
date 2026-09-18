@@ -327,6 +327,7 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self._poly_preview: PolyPathItem | None = None
         self._first_frame_forced = False
         self._zoom_factor = 1.0
+        self.enable_pinch_zoom()
         self._initial_view_pending = True
         self._resize_overlay_item: CropSelectionItem | None = None
         self._resize_overlay_target: QGraphicsItem | None = None
@@ -458,6 +459,21 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self._initial_view_pending = False
         self.zoom_changed.emit(self._zoom_factor)
 
+    def event(self, event) -> bool:
+        """
+        Routes pinch gestures to the zoom before normal handling.
+
+        Args:
+            event: Incoming event.
+
+        Returns:
+            bool: True when the event was consumed.
+        """
+
+        if self.handle_zoom_event(event):
+            return True
+        return super().event(event)
+
     def wheelEvent(self, event) -> None:
         """
         Zooms with Shift+wheel; otherwise keeps default scroll behavior.
@@ -469,7 +485,11 @@ class VideoCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             None
         """
 
-        if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+        # Ctrl as well as Shift: a two-finger pinch on a Linux touchpad usually
+        # arrives as Ctrl and a wheel step rather than as a gesture.
+        if event.modifiers() & (
+            Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
+        ):
             delta = event.angleDelta().y()
             if delta == 0:
                 delta = event.angleDelta().x()

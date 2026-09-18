@@ -1757,6 +1757,15 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         file_menu.addAction(open_action)
         self._register_shortcut_action("open_project", open_action)
 
+        # Import belongs with the other file operations; the Edit menu keeps the
+        # same action so the place people already know still works.
+        self._import_image_action = QAction("Import Image...", self)
+        self._import_image_action.setToolTip(
+            "Insert an image file into the current document."
+        )
+        self._import_image_action.triggered.connect(self.import_image)
+        file_menu.addAction(self._import_image_action)
+
         import_image_tab_action = QAction("Import Image as New Tab...", self)
         import_image_tab_action.setToolTip(
             "Open an external image in a new editor tab with a movable layer."
@@ -1906,10 +1915,16 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         edit_menu.addSeparator()
 
-        import_image_action = QAction("Import Image...", self)
-        import_image_action.setToolTip("Insert an image file into the current document.")
-        import_image_action.triggered.connect(self.import_image)
-        edit_menu.addAction(import_image_action)
+        edit_menu.addAction(self._import_image_action)
+
+        cut_from_item_action = QAction("Cut Out of Element", self)
+        cut_from_item_action.setToolTip(
+            "Remove the marked region from the selected element only, leaving "
+            "the picture underneath untouched. Select an element, mark a region "
+            "with Marquee, Lasso, or Magic Wand, then use this."
+        )
+        cut_from_item_action.triggered.connect(self.cut_out_of_selected_element)
+        edit_menu.addAction(cut_from_item_action)
 
         select_all_action = QAction("Select All", self)
         select_all_action.setToolTip("Mark the whole drawing area, ready to copy.")
@@ -5250,6 +5265,32 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             self.presentation_frame_check.blockSignals(True)
             self.presentation_frame_check.setChecked(frame.enabled)
             self.presentation_frame_check.blockSignals(False)
+
+    def cut_out_of_selected_element(self) -> None:
+        """
+        Cuts the marked region out of the selected element.
+
+        Returns:
+            None
+        """
+
+        if not self.canvas.has_pixel_selection():
+            self.statusBar().showMessage(
+                "Mark a region first — use Marquee, Lasso, or Magic Wand.",
+                5000,
+            )
+            return
+        if self.canvas.selected_cuttable_item() is None:
+            self.statusBar().showMessage(
+                "Select one element that carries its own pixels, such as an "
+                "imported image.",
+                5000,
+            )
+            return
+        if self.canvas.cut_selection_from_selected_item():
+            self._set_next_history_label("Cut out of element")
+            self._push_history_state()
+            self.statusBar().showMessage("Cut out of the selected element", 4000)
 
     def _on_crop_state_changed(self, is_active: bool) -> None:
         """

@@ -156,6 +156,8 @@ these automatically for tagged releases, see `.github/workflows/release.yml`):
 | Flatpak | Linux | `flatpak-builder` (`sudo apt install flatpak-builder`); the script installs the `org.kde.Platform`/`org.kde.Sdk` 6.9 runtime itself on first run |
 | Windows `.zip` | Windows | `pip install pyinstaller` |
 
+The version is derived from the commit history — `build` counts commits, `minor` counts feature rounds, `patch` counts changes since the last one — so every commit is a new version and nothing has to be raised by hand. `python -m src.version` prints it; the About dialog shows it. Passing a version to a build script still overrides it.
+
 ```bash
 # Debian package (Ubuntu / Linux Mint)
 ./packaging/build_deb.sh 0.1.0
@@ -236,6 +238,10 @@ Flatpak modules too would be a much larger, slower build.
 - Corner radius (0-90) for rectangles **and triangles**, in both editors
 - Layers, geometry inspector (`X/Y/W/H`), document footer when nothing is selected
 - History with labeled undo list; zoom, grid, snap, smart guides
+- **Import Image...** is offered in both the File and Edit menus, next to the "as new tab" variant
+- **Two-finger zoom** on touchpads and touchscreens; `Ctrl`/`Shift` plus wheel zoom as well
+- `Esc` drops the current selection once nothing is being drawn
+- **Cut Out of Element** (Edit menu): mark a region with Marquee, Lasso, or Magic Wand and remove it from the selected element only, leaving the picture underneath untouched
 - **Crop**: picking the tool frames the whole picture at once — the discarded area is dimmed, a thirds grid and corner brackets sit on the frame, and the resulting pixel size is shown live. Drag the frame or its eight handles, choose a fixed ratio from the tool menu (Free, Original, 1:1, 4:3, 3:2, 16:9, 9:16), then `Enter` to apply or `Esc` to cancel
 - **Freehand**: draw by dragging and keep an object you can select, move, and delete — with a **Smoothing** slider that rounds the corners live and stays adjustable, because the recorded stroke is never overwritten (the Brush still paints pixels)
 - **Image Size...** (Edit menu): resize the whole document; geometry, stroke widths, and font sizes scale with it
