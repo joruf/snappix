@@ -89,6 +89,7 @@ Startup:
 | `src/cli.py` | Non-GUI commands |
 | `src/autostart.py` | XDG autostart `.desktop` |
 | `src/tool_reference.py` / `tool_reference_dialog.py` | In-app tools help |
+| Element target | `EditorCanvas.pixel_target_item()` picks what Delete/Fill/Brush/Blur write to; masks and rects are carried into that element's pixel space |
 | `src/version.py` | Version derived from the commit history; `VERSION` file for packaged copies |
 | `src/ffmpeg_setup.py` | Per-user ffmpeg unpack for Windows accounts without administrator rights |
 | `src/tesseract_setup.py` | Per-user Tesseract install for Windows accounts without administrator rights |

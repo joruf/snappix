@@ -241,6 +241,7 @@ Flatpak modules too would be a much larger, slower build.
 - **Import Image...** is offered in both the File and Edit menus, next to the "as new tab" variant
 - **Two-finger zoom** on touchpads and touchscreens; `Ctrl`/`Shift` plus wheel zoom as well
 - `Esc` drops the current selection once nothing is being drawn
+- **Elements panel** beside the canvas lists everything in the document, topmost first, with the background as the last entry. The marked entry is what Delete, Fill, Brush, and Blur apply to — with a picture in the foreground over a background, that question otherwise has no answer. Nothing selected means the background, as before; an element without pixels of its own says so instead of quietly hitting the background
 - **Cut Out of Element** (Edit menu): mark a region with Marquee, Lasso, or Magic Wand and remove it from the selected element only, leaving the picture underneath untouched
 - **Crop**: picking the tool frames the whole picture at once — the discarded area is dimmed, a thirds grid and corner brackets sit on the frame, and the resulting pixel size is shown live. Drag the frame or its eight handles, choose a fixed ratio from the tool menu (Free, Original, 1:1, 4:3, 3:2, 16:9, 9:16), then `Enter` to apply or `Esc` to cancel
 - **Freehand**: draw by dragging and keep an object you can select, move, and delete — with a **Smoothing** slider that rounds the corners live and stays adjustable, because the recorded stroke is never overwritten (the Brush still paints pixels)

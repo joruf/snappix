@@ -104,6 +104,7 @@ GERMAN: dict[str, str] = {
     "Manual": "Handbuch",
     "Drag Out": "Herausziehen",
     # Editor panels
+    "Elements": "Elemente",
     "Tools": "Werkzeuge",
     "Style": "Stil",
     "Arrange": "Anordnen",

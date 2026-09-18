@@ -276,6 +276,9 @@ _SHAPE_STYLE_SELECTION_TYPES = frozenset(STYLE_AWARE_TOOLS)
 _SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect", "triangle"})
 
 # Sentinel meaning "whatever the picture's own ratio is", resolved when chosen.
+# Width of the element list beside the canvas.
+ELEMENT_PANEL_WIDTH = 190
+
 CROP_RATIO_ORIGINAL = -1.0
 
 # Ratio presets for the crop frame, in the order they are offered.
@@ -559,6 +562,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._pending_history_label: str | None = None
         self._syncing_history_list = False
         self._syncing_layer_panel = False
+        self._syncing_element_panel = False
         self._palette_buttons: list[QPushButton] = []
         self._color_target_widgets: dict[str, list[QWidget]] = {
             "stroke": [],
@@ -610,6 +614,9 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.canvas.content_changed.connect(self._on_canvas_changed)
         self.canvas.zoom_changed.connect(self._on_zoom_changed)
         self.canvas.selection_style_changed.connect(self._on_selection_style_changed)
+        self.canvas.selection_style_changed.connect(
+            lambda _payload: self._refresh_element_panel()
+        )
         self.canvas.crop_selection_changed.connect(self._on_crop_state_changed)
         self.canvas.crop_applied.connect(self._on_crop_applied)
         self.canvas.status_message.connect(self._on_canvas_status_message)
@@ -617,7 +624,17 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         self._toolbar_widget = self._build_toolbar()
         root.addWidget(self._toolbar_widget, 0)
-        root.addWidget(self.canvas, 1)
+
+        # Canvas and element list side by side: with a picture in the foreground
+        # over a background, "which one does this apply to?" has to be visible
+        # at all times, not hidden behind a drop-down.
+        canvas_row = QWidget(container)
+        canvas_layout = QHBoxLayout(canvas_row)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        canvas_layout.setSpacing(0)
+        canvas_layout.addWidget(self.canvas, 1)
+        canvas_layout.addWidget(self._build_element_panel(canvas_row), 0)
+        root.addWidget(canvas_row, 1)
 
         self._selection_info_label = QLabel("")
         self._selection_info_label.setObjectName("editorSelectionInfo")
@@ -633,9 +650,105 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         )
         self._push_history_state()
         self._refresh_layer_panel()
+        self._refresh_element_panel()
         self._autosave_flushing = False
         self._recovery_dirty = False
         self._autosave_timer = self.startTimer(30_000)
+
+    def _build_element_panel(self, parent: QWidget) -> QWidget:
+        """
+        Builds the list of every element in the document.
+
+        Returns:
+            QWidget: Panel holding the list.
+        """
+
+        panel = QWidget(parent)
+        panel.setObjectName("editorElementPanel")
+        panel.setFixedWidth(ELEMENT_PANEL_WIDTH)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+
+        caption = QLabel("Elements", panel)
+        caption.setToolTip(
+            "Everything in this document, topmost first. The marked entry is "
+            "what Delete, Fill, Brush, and Blur apply to."
+        )
+        layout.addWidget(caption)
+
+        self.element_list = QListWidget(panel)
+        self.element_list.setToolTip(
+            "Pick what the next action applies to. The background is the last "
+            "entry; with nothing else marked it is the target, as before."
+        )
+        self.element_list.currentItemChanged.connect(self._on_element_list_changed)
+        layout.addWidget(self.element_list, 1)
+
+        self.element_target_label = QLabel("", panel)
+        self.element_target_label.setObjectName("editorElementTarget")
+        self.element_target_label.setWordWrap(True)
+        layout.addWidget(self.element_target_label)
+        return panel
+
+    def _on_element_list_changed(self, current, _previous) -> None:
+        """
+        Makes the chosen entry the selection, and with it the target.
+
+        Args:
+            current: Newly current list row.
+            _previous: Previously current row.
+
+        Returns:
+            None
+        """
+
+        if self._syncing_element_panel or current is None:
+            return
+        element_id = str(current.data(Qt.ItemDataRole.UserRole) or "")
+        if element_id:
+            self.canvas.select_element_by_id(element_id)
+        self._refresh_element_panel()
+
+    def _refresh_element_panel(self) -> None:
+        """
+        Rebuilds the element list and marks the current target.
+
+        Returns:
+            None
+        """
+
+        if not hasattr(self, "element_list"):
+            return
+
+        payloads = self.canvas.list_element_payloads()
+        # Cleared in a finally: a stuck flag makes every later click look like
+        # an echo of this refresh, and the list stops working.
+        self._syncing_element_panel = True
+        try:
+            self.element_list.clear()
+            for payload in payloads:
+                entry = QListWidgetItem(str(payload.get("name") or "Element"))
+                entry.setData(Qt.ItemDataRole.UserRole, str(payload.get("id") or ""))
+                if not payload.get("paintable"):
+                    entry.setToolTip(
+                        "This element has no pixels of its own, so Delete, "
+                        "Fill, Brush, and Blur do not apply to it."
+                    )
+                self.element_list.addItem(entry)
+                if payload.get("selected"):
+                    self.element_list.setCurrentItem(entry)
+        finally:
+            self._syncing_element_panel = False
+
+        if self.canvas.has_unpaintable_selection():
+            self.element_target_label.setText(
+                "Selected element has no pixels of its own."
+            )
+            return
+        self.element_target_label.setText(
+            f"Delete, Fill, Brush and Blur go to: {self.canvas.pixel_target_name()}"
+        )
 
     def _build_toolbar(self) -> QWidget:
         """
@@ -4612,6 +4725,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                     self.layer_combo.setCurrentIndex(selected_index)
         finally:
             self._syncing_layer_panel = False
+        self._syncing_element_panel = False
         self._set_layer_controls_enabled(bool(layer_payloads))
 
     def _set_layer_controls_enabled(self, enabled: bool) -> None:
@@ -4805,6 +4919,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                     self.layer_combo.setCurrentIndex(self.layer_combo.findData(layer_id))
                 finally:
                     self._syncing_layer_panel = False
+        self._syncing_element_panel = False
         self.layer_visible_check.blockSignals(True)
         self.layer_lock_check.blockSignals(True)
         self.layer_visible_check.setChecked(bool(payload.get("visible", True)))

@@ -213,6 +213,18 @@ POLY_DRAW_TOOLS = frozenset({Tool.POLYLINE, Tool.POLYGON, Tool.BENT_ARROW})
 # kept area reads as the picture and the rest as discarded, light enough that
 # what is being cut away stays recognizable.
 CROP_SHADE_ALPHA = 165
+
+# What the background is called in the element list. It is not a scene item like
+# the others, but it has to be listed and choosable all the same.
+BACKGROUND_ELEMENT_NAME = "Background"
+BACKGROUND_ELEMENT_ID = "__background__"
+
+# Shown when the chosen element has no pixels of its own. Refusing beats quietly
+# painting somewhere else, which is the confusion the target is meant to end.
+UNPAINTABLE_TARGET_MESSAGE = (
+    "This element has no pixels of its own. Select the background or a picture, "
+    "then try again."
+)
 DRAG_SHAPE_TOOLS = DRAG_RECT_TOOLS | DRAG_LINE_TOOLS
 
 
@@ -304,6 +316,8 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self._preview_item: QGraphicsItem | None = None
         self._crop_item: CropSelectionItem | None = None
         self._crop_aspect_ratio: float | None = None
+        self._brush_target_item = None
+        self._brush_document_to_target: QTransform | None = None
         self._crop_shade_item: QGraphicsPathItem | None = None
         self._resize_overlay_item: CropSelectionItem | None = None
         self._resize_overlay_target: QGraphicsItem | None = None
@@ -2433,6 +2447,144 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         self._crop_item.setPos(QPointF(x, y))
         self._crop_item.setRect(QRectF(0.0, 0.0, width, height))
 
+    def pixel_target_item(self):
+        """
+        Returns the element pixel operations currently apply to.
+
+        With a background and a second picture in one tab, "delete" is
+        ambiguous unless the target is named. The selection is that answer: an
+        element that carries its own pixels takes the operation, and with
+        nothing selected it goes to the background, exactly as before.
+
+        Returns:
+            QGraphicsPixmapItem | None: The element, or None for the background.
+        """
+
+        return self.selected_cuttable_item()
+
+    def _target_label_suffix(self) -> str:
+        """
+        Returns the target's name in brackets, empty for the background.
+
+        Naming the background in every history entry would only add noise; the
+        name matters exactly when the action went somewhere else than usual.
+
+        Returns:
+            str: For example ``" (Image)"``, or an empty string.
+        """
+
+        item = self.pixel_target_item()
+        return "" if item is None else f" ({self.pixel_target_name()})"
+
+    def pixel_target_name(self) -> str:
+        """
+        Returns a readable name for the current target.
+
+        Returns:
+            str: Element name, or ``Background``.
+        """
+
+        item = self.pixel_target_item()
+        if item is None:
+            return BACKGROUND_ELEMENT_NAME
+        return str(item.data(ITEM_ROLE_TYPE) or "Element").title()
+
+    def has_unpaintable_selection(self) -> bool:
+        """
+        Reports whether the selection names something without pixels.
+
+        A shape or an arrow has no pixels to erase, fill, or blur. Quietly
+        falling back to the background would reintroduce exactly the ambiguity
+        the target is meant to remove, so callers refuse and say why.
+
+        Returns:
+            bool: True when something is selected but none of it is paintable.
+        """
+
+        selected = [
+            item
+            for item in self._scene.selectedItems()
+            if item is not self._crop_item and item is not self._background_item
+        ]
+        return bool(selected) and self.selected_cuttable_item() is None
+
+    def _target_pixmap(self) -> QPixmap:
+        """
+        Returns the pixels the current target is made of.
+
+        Returns:
+            QPixmap: Target pixmap; the background when nothing is selected.
+        """
+
+        item = self.pixel_target_item()
+        return self.screenshot() if item is None else item.pixmap()
+
+    def _set_target_pixmap(self, pixmap: QPixmap) -> None:
+        """
+        Writes pixels back to the current target.
+
+        Args:
+            pixmap: New pixels.
+
+        Returns:
+            None
+        """
+
+        item = self.pixel_target_item()
+        if item is None:
+            self._background_item.setPixmap(pixmap)
+            return
+        item.setPixmap(pixmap)
+
+    def _document_to_target(self) -> QTransform:
+        """
+        Returns the transform from document coordinates into the target.
+
+        Masks, rectangles, and brush positions are all expressed in document
+        terms; an element may sit anywhere and be scaled, so they have to be
+        carried into its own pixel space first.
+
+        Returns:
+            QTransform: Identity for the background.
+        """
+
+        item = self.pixel_target_item()
+        if item is None:
+            return QTransform()
+        inverted, invertible = item.sceneTransform().inverted()
+        return inverted if invertible else QTransform()
+
+    def _target_selection_mask(self) -> QImage | None:
+        """
+        Returns the active selection as a mask in the target's pixel space.
+
+        Returns:
+            QImage | None: Mask sized like the target, or None when empty.
+        """
+
+        document = self.document_rect()
+        document_mask = self._active_selection_mask(
+            int(round(document.width())),
+            int(round(document.height())),
+        )
+        if document_mask is None:
+            return None
+
+        item = self.pixel_target_item()
+        if item is None:
+            return document_mask
+
+        target = item.pixmap()
+        if target.isNull():
+            return None
+        mask = QImage(target.size(), QImage.Format.Format_ARGB32)
+        mask.fill(QColor(0, 0, 0, 255))
+        painter = QPainter(mask)
+        painter.setTransform(self._document_to_target())
+        painter.drawImage(0, 0, document_mask)
+        painter.end()
+        return mask
+
     def selected_cuttable_item(self):
         """
         Returns the one selected element that pixels can be cut out of.
@@ -2942,11 +3094,14 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         if not self.has_pixel_selection():
             return False
-        screenshot = self.screenshot()
-        if screenshot.isNull():
+        if self.has_unpaintable_selection():
+            self.status_message.emit(UNPAINTABLE_TARGET_MESSAGE)
             return False
-        image = screenshot.toImage()
-        mask = self._active_selection_mask(image.width(), image.height())
+        target = self._target_pixmap()
+        if target.isNull():
+            return False
+        image = target.toImage()
+        mask = self._target_selection_mask()
         if mask is None:
             return False
         if self._erase_mode == ERASE_MODE_FILL:
@@ -2958,8 +3113,8 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 QColor(0, 0, 0, 0),
                 erase_transparent=True,
             )
-        self._background_item.setPixmap(QPixmap.fromImage(image))
-        self._emit_content_changed("Erase selection")
+        self._set_target_pixmap(QPixmap.fromImage(image))
+        self._emit_content_changed(f"Erase selection{self._target_label_suffix()}")
         return True
 
     def fill_pixel_selection(self) -> bool:
@@ -2973,18 +3128,21 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         if not self.has_pixel_selection():
             self.status_message.emit("Select an area first, then use Fill.")
             return False
-        screenshot = self.screenshot()
-        if screenshot.isNull():
+        if self.has_unpaintable_selection():
+            self.status_message.emit(UNPAINTABLE_TARGET_MESSAGE)
             return False
-        image = screenshot.toImage().convertToFormat(QImage.Format.Format_ARGB32)
-        mask = self._active_selection_mask(image.width(), image.height())
+        target = self._target_pixmap()
+        if target.isNull():
+            return False
+        image = target.toImage().convertToFormat(QImage.Format.Format_ARGB32)
+        mask = self._target_selection_mask()
         if mask is None or not mask_has_selection(mask):
             self.status_message.emit("Select an area first, then use Fill.")
             return False
         fill = QColor(self._style.fill_color)
         image = paint_mask_on_image(image, mask, fill)
-        self._background_item.setPixmap(QPixmap.fromImage(image))
-        self._emit_content_changed("Fill selection")
+        self._set_target_pixmap(QPixmap.fromImage(image))
+        self._emit_content_changed(f"Fill selection{self._target_label_suffix()}")
         message = (
             f"Filled selection with Fill color "
             f"(RGBA {fill.red()},{fill.green()},{fill.blue()},{fill.alpha()})."
@@ -3035,23 +3193,30 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             None
         """
 
-        screenshot = self.screenshot()
-        if screenshot.isNull():
+        if self.has_unpaintable_selection():
+            self.status_message.emit(UNPAINTABLE_TARGET_MESSAGE)
             self._brush_paint_image = None
             self._brush_clip_region = None
             return
 
-        self._brush_paint_image = screenshot.toImage().convertToFormat(
+        # Pinned for the whole stroke: letting the target change mid-stroke
+        # would write the second half into a different picture.
+        self._brush_target_item = self.pixel_target_item()
+        target = self._target_pixmap()
+        if target.isNull():
+            self._brush_paint_image = None
+            self._brush_clip_region = None
+            return
+
+        self._brush_paint_image = target.toImage().convertToFormat(
             QImage.Format.Format_ARGB32
         )
         self._brush_image_origin = QPointF(self.document_rect().topLeft())
-        self._brush_image_ratio = max(1.0, float(screenshot.devicePixelRatio()))
+        self._brush_image_ratio = max(1.0, float(target.devicePixelRatio()))
+        self._brush_document_to_target = self._brush_stroke_transform()
         self._brush_clip_region = None
         if self.has_pixel_selection() and self._brush_paint_image is not None:
-            mask = self._active_selection_mask(
-                self._brush_paint_image.width(),
-                self._brush_paint_image.height(),
-            )
+            mask = self._target_selection_mask()
             if mask is not None and mask_has_selection(mask):
                 self._brush_clip_region = region_from_mask(mask)
         self._brush_pixmap_sync_timer.restart()
@@ -3083,6 +3248,23 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             label = "Eraser stroke" if erase_mode else "Brush stroke"
             self._emit_content_changed(label)
 
+    def _brush_stroke_transform(self) -> QTransform:
+        """
+        Returns the document-to-target mapping used for one brush stroke.
+
+        Returns:
+            QTransform: Mapping that also accounts for a high-resolution
+            background, where image pixels and document units differ.
+        """
+
+        if self.pixel_target_item() is not None:
+            return self._document_to_target()
+        origin = QPointF(self.document_rect().topLeft())
+        transform = QTransform()
+        transform.scale(self._brush_image_ratio, self._brush_image_ratio)
+        transform.translate(-origin.x(), -origin.y())
+        return transform
+
     def _sync_brush_pixmap(self, *, force: bool = False) -> None:
         """
         Pushes the in-memory brush buffer to the scene pixmap.
@@ -3101,7 +3283,11 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 return
         painted = QPixmap.fromImage(self._brush_paint_image)
         painted.setDevicePixelRatio(self._brush_image_ratio)
-        self._background_item.setPixmap(painted)
+        target = getattr(self, "_brush_target_item", None)
+        if target is None:
+            self._background_item.setPixmap(painted)
+        else:
+            target.setPixmap(painted)
         self._brush_pixmap_sync_timer.restart()
 
     def _paint_brush_segment(self, start: QPointF, end: QPointF) -> None:
@@ -3130,7 +3316,12 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         origin = self._brush_image_origin
         ratio = self._brush_image_ratio
 
+        transform = getattr(self, "_brush_document_to_target", None)
+
         def to_image_point(point: QPointF) -> QPointF:
+            """Carries one document position into the target's pixel space."""
+            if transform is not None:
+                return transform.map(point)
             return QPointF(
                 (point.x() - origin.x()) * ratio,
                 (point.y() - origin.y()) * ratio,
@@ -4261,15 +4452,21 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         clipped = rect.intersected(self.document_rect()).normalized()
         if clipped.width() < 1 or clipped.height() < 1:
             return
-        screenshot = self.screenshot()
-        if screenshot.isNull():
+        if self.has_unpaintable_selection():
+            self.status_message.emit(UNPAINTABLE_TARGET_MESSAGE)
             return
-        image = screenshot.toImage()
+        target = self._target_pixmap()
+        if target.isNull():
+            return
+        image = target.toImage()
         painter = QPainter(image)
-        painter.fillRect(clipped.toAlignedRect(), self._style.fill_color)
+        # Painted in document coordinates so the rectangle lands where it was
+        # drawn, whatever the target's own position and scale are.
+        painter.setTransform(self._document_to_target())
+        painter.fillRect(clipped, self._style.fill_color)
         painter.end()
-        self._background_item.setPixmap(QPixmap.fromImage(image))
-        self._emit_content_changed("Fill background")
+        self._set_target_pixmap(QPixmap.fromImage(image))
+        self._emit_content_changed(f"Fill background{self._target_label_suffix()}")
 
     def set_blur_block_size(self, block_size: int) -> None:
         """
@@ -4308,17 +4505,22 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
         clipped = rect.intersected(self.document_rect()).normalized()
         if clipped.width() < 1 or clipped.height() < 1:
             return
-        screenshot = self.screenshot()
-        if screenshot.isNull():
+        if self.has_unpaintable_selection():
+            self.status_message.emit(UNPAINTABLE_TARGET_MESSAGE)
             return
-        image = screenshot.toImage()
-        blurred = pixelate_qimage_region(
-            image,
-            clipped.toAlignedRect(),
-            self._blur_block_size,
-        )
-        self._background_item.setPixmap(QPixmap.fromImage(blurred))
-        self._emit_content_changed("Blur region")
+        target = self._target_pixmap()
+        if target.isNull():
+            return
+        image = target.toImage()
+        # Pixelation reads and writes a rectangle of the target image, so the
+        # region has to be carried into the target's own pixel space first.
+        region = self._document_to_target().mapRect(clipped).toAlignedRect()
+        region = region.intersected(image.rect())
+        if region.width() < 1 or region.height() < 1:
+            return
+        blurred = pixelate_qimage_region(image, region, self._blur_block_size)
+        self._set_target_pixmap(QPixmap.fromImage(blurred))
+        self._emit_content_changed(f"Blur region{self._target_label_suffix()}")
 
     def duplicate_selected_items(self) -> bool:
         """
@@ -5246,6 +5448,58 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
                 continue
             items.append(item)
         return items
+
+    def list_element_payloads(self) -> list[dict[str, Any]]:
+        """
+        Returns every element in the document, topmost first.
+
+        The background is included as the last entry. It is not a scene item
+        like the others, but with a picture in the foreground "which one does
+        this apply to?" has no answer unless the background can be named and
+        chosen just as explicitly.
+
+        Returns:
+            list[dict[str, Any]]: One payload per element, background last.
+        """
+
+        payloads = list(self.list_layer_payloads())
+        for payload in payloads:
+            payload["paintable"] = str(payload.get("type") or "") == "image"
+        payloads.append(
+            {
+                "id": BACKGROUND_ELEMENT_ID,
+                "name": BACKGROUND_ELEMENT_NAME,
+                "selected": self.pixel_target_item() is None
+                and not self.has_unpaintable_selection(),
+                "paintable": True,
+                "type": "background",
+                "visible": True,
+                "locked": False,
+            }
+        )
+        return payloads
+
+    def select_element_by_id(self, element_id: str) -> bool:
+        """
+        Makes one element the selection, and with it the target.
+
+        Args:
+            element_id: Element id, or the background id.
+
+        Returns:
+            bool: True when the selection changed to that element.
+        """
+
+        if element_id == BACKGROUND_ELEMENT_ID:
+            self._scene.clearSelection()
+            self._clear_resize_overlay()
+            return True
+        for item in self._annotation_items():
+            if str(item.data(ITEM_ROLE_ID) or "") == element_id:
+                self._scene.clearSelection()
+                item.setSelected(True)
+                return True
+        return False
 
     def list_layer_payloads(self) -> list[dict[str, Any]]:
         """
