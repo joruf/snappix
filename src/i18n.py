@@ -51,6 +51,8 @@ GERMAN: dict[str, str] = {
     "New Canvas...": "Neue Leinwand …",
     "New Tab": "Neuer Tab",
     "Open Project...": "Projekt öffnen …",
+    "Save": "Speichern",
+    "Save As...": "Speichern unter …",
     "Save Project": "Projekt speichern",
     "Save Project As...": "Projekt speichern unter …",
     "Import Image...": "Bild einfügen …",

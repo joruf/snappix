@@ -276,6 +276,18 @@ _SHAPE_STYLE_SELECTION_TYPES = frozenset(STYLE_AWARE_TOOLS)
 _SHAPE_RADIUS_SELECTION_TYPES = frozenset({"rect", "triangle"})
 
 # Sentinel meaning "whatever the picture's own ratio is", resolved when chosen.
+# What Ctrl+S offers, in order. The first entry is what the dialog opens on:
+# an image is what people almost always want out of a screenshot tool, while
+# the project format is for coming back to edit the annotations later.
+SAVE_FORMATS: tuple[tuple[str, str, str], ...] = (
+    ("PNG Image (*.png)", ".png", "png"),
+    ("JPEG Image (*.jpg *.jpeg)", ".jpg", "jpg"),
+    ("WebP Image (*.webp)", ".webp", "webp"),
+    ("BMP Image (*.bmp)", ".bmp", "bmp"),
+    ("PDF Document (*.pdf)", ".pdf", "pdf"),
+    ("SVG Image (*.svg)", ".svg", "svg"),
+)
+
 # Width of the element list beside the canvas.
 ELEMENT_PANEL_WIDTH = 190
 
@@ -518,6 +530,8 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.setWindowTitle(f"{APP_NAME} Editor")
         self.resize(1400, 900)
         self._current_project_path = ""
+        # Where and in which format this document was last written.
+        self._save_target: tuple[str, str] | None = None
         self._recovery_path = ""
         self._pinned_windows: list = []
         self._minimize_to_tray_on_close = True
@@ -1895,17 +1909,33 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
         file_menu.addSeparator()
 
-        save_as_action = QAction("Save Project As...", self)
-        save_as_action.setToolTip("Save project under a new file name.")
-        save_as_action.triggered.connect(self.save_project_as)
+        save_action = QAction("Save", self)
+        save_action.setToolTip(
+            "Save this document. Offers PNG first, then the other image "
+            "formats, PDF, SVG, and the editable project file."
+        )
+        save_action.triggered.connect(self.save_document)
+        file_menu.addAction(save_action)
+        self._register_shortcut_action("save_project", save_action)
+
+        save_as_action = QAction("Save As...", self)
+        save_as_action.setToolTip("Save under a new name and pick the format.")
+        save_as_action.triggered.connect(self.save_document_as)
         file_menu.addAction(save_as_action)
         self._register_shortcut_action("save_project_as", save_as_action)
 
-        save_action = QAction("Save Project", self)
-        save_action.setToolTip("Save changes to the current project.")
-        save_action.triggered.connect(self.save_project)
-        file_menu.addAction(save_action)
-        self._register_shortcut_action("save_project", save_action)
+        save_project_action = QAction("Save Project", self)
+        save_project_action.setToolTip(
+            "Save as an editable project file, keeping every annotation "
+            "separate so it can be changed later."
+        )
+        save_project_action.triggered.connect(self.save_project)
+        file_menu.addAction(save_project_action)
+
+        save_project_as_action = QAction("Save Project As...", self)
+        save_project_as_action.setToolTip("Save the project under a new file name.")
+        save_project_as_action.triggered.connect(self.save_project_as)
+        file_menu.addAction(save_project_as_action)
 
         # All export entries live in one submenu so the File menu stays short.
         self.export_menu = file_menu.addMenu("Export")
@@ -5542,6 +5572,150 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             return
         self.statusBar().showMessage("Image imported")
 
+    def _save_format_filters(self) -> str:
+        """
+        Returns the dialog filter string, image formats first.
+
+        Returns:
+            str: Filters joined for ``QFileDialog``.
+        """
+
+        filters = [entry[0] for entry in SAVE_FORMATS]
+        filters.append(f"{APP_NAME} Project (*{APP_FILE_EXTENSION})")
+        return ";;".join(filters)
+
+    def _resolve_save_format(self, file_path: str, selected_filter: str) -> tuple[str, str]:
+        """
+        Decides which format a chosen path and filter mean.
+
+        A typed extension wins over the drop-down: someone who writes
+        ``shot.jpg`` means JPEG even when the filter still says PNG.
+
+        Args:
+            file_path: Path from the dialog.
+            selected_filter: Filter the dialog reported.
+
+        Returns:
+            tuple[str, str]: Completed path and format key.
+        """
+
+        lowered = file_path.lower()
+        if lowered.endswith(APP_FILE_EXTENSION):
+            return file_path, "project"
+        for _label, extension, key in SAVE_FORMATS:
+            if lowered.endswith(extension) or (key == "jpg" and lowered.endswith(".jpeg")):
+                return file_path, key
+
+        if APP_FILE_EXTENSION in selected_filter:
+            return f"{file_path}{APP_FILE_EXTENSION}", "project"
+        for label, extension, key in SAVE_FORMATS:
+            if label == selected_filter:
+                return f"{file_path}{extension}", key
+        # No filter matched: fall back to the format the dialog opens on.
+        return f"{file_path}{SAVE_FORMATS[0][1]}", SAVE_FORMATS[0][2]
+
+    def _write_document(self, file_path: str, format_key: str, *, ask: bool) -> bool:
+        """
+        Writes the document in one format.
+
+        Args:
+            file_path: Target path.
+            format_key: Format key from ``SAVE_FORMATS`` or ``project``.
+            ask: True to prompt for JPEG quality and PDF resolution; a repeat
+                save reuses the previous answers instead of asking again.
+
+        Returns:
+            bool: True when the file was written.
+        """
+
+        if format_key == "project":
+            model = build_project_model(
+                screenshot=self.canvas.screenshot(),
+                annotation_models=self.canvas.collect_annotations(),
+            )
+            save_project(file_path, model)
+            self._current_project_path = file_path
+            self._update_window_title()
+            return True
+
+        if format_key == "svg":
+            if self._write_svg_to_path(file_path):
+                return True
+            QMessageBox.warning(self, APP_NAME, "SVG export failed.")
+            return False
+
+        if format_key == "pdf":
+            dpi = self._pdf_dpi
+            if ask:
+                chosen = self._ask_pdf_dpi(self._pdf_dpi)
+                if chosen is None:
+                    return False
+                self._pdf_dpi = chosen
+                dpi = chosen
+            self._write_pdf_to_path(file_path, dpi)
+            return True
+
+        if format_key == "jpg":
+            quality = self._jpeg_quality
+            if ask:
+                chosen = self._ask_jpeg_quality(self._jpeg_quality)
+                if chosen is None:
+                    return False
+                self._jpeg_quality = chosen
+                quality = chosen
+            return bool(
+                self._export_output_pixmap(for_jpeg=True).save(file_path, "JPG", quality)
+            )
+
+        written_format = {"png": "PNG", "webp": "WEBP", "bmp": "BMP"}.get(
+            format_key, "PNG"
+        )
+        return bool(
+            self._export_output_pixmap(for_jpeg=False).save(file_path, written_format)
+        )
+
+    def save_document(self) -> None:
+        """
+        Saves to the file this document was last written to.
+
+        Without one, falls back to asking -- which opens on an image format,
+        since that is what a screenshot is usually wanted as.
+
+        Returns:
+            None
+        """
+
+        if not self._save_target:
+            self.save_document_as()
+            return
+        file_path, format_key = self._save_target
+        if self._write_document(file_path, format_key, ask=False):
+            self.statusBar().showMessage(f"Saved {Path(file_path).name}", 4000)
+
+    def save_document_as(self) -> None:
+        """
+        Asks where and in which format to save.
+
+        Returns:
+            None
+        """
+
+        suggested = self._save_target[0] if self._save_target else ""
+        file_path, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save",
+            suggested,
+            self._save_format_filters(),
+        )
+        if not file_path:
+            return
+
+        file_path, format_key = self._resolve_save_format(file_path, selected_filter)
+        if not self._write_document(file_path, format_key, ask=True):
+            return
+        self._save_target = (file_path, format_key)
+        self.statusBar().showMessage(f"Saved {Path(file_path).name}", 4000)
+
     def save_project_as(self) -> None:
         """
         Saves current screenshot project to a Snappix file.
@@ -5566,6 +5740,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         )
         save_project(file_path, model)
         self._current_project_path = file_path
+        self._save_target = (file_path, "project")
         self.statusBar().showMessage("Project saved")
         self._update_window_title()
 
@@ -5585,6 +5760,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             annotation_models=self.canvas.collect_annotations(),
         )
         save_project(self._current_project_path, model)
+        self._save_target = (self._current_project_path, "project")
         self.statusBar().showMessage("Project saved")
 
     def open_project(self) -> None:
