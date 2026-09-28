@@ -6,11 +6,12 @@ GenericName=Screenshot and annotation
 Comment=Capture, annotate and record the screen
 Comment[de]=Bildschirm aufnehmen, beschriften und als Video mitschneiden
 # %k is the path of this file, so the program beside it is the one that starts -- wherever the
-# folder was copied to. The same path repairs Icon= in place: a .desktop file cannot point at its
+# folder was copied to. snappix-red.svg is the capture icon; snappix.svg is the editor's
+# blue one and must not be used here. The same path repairs Icon= in place: a .desktop file cannot point at its
 # icon with a relative path (the spec reads one as a theme name), so the launcher writes the
 # absolute path of the icon next to it whenever the folder has moved.
-Exec=/bin/bash -c "s=\\$(readlink -f \\"\\$0\\"); d=\\${s%%/*}; i=\\$d/assets/snappix.svg; grep -qxF \\"Icon=\\$i\\" \\"\\$s\\" || { I=\\$i awk '/^Icon=/{print \\"Icon=\\" ENVIRON[\\"I\\"]; next}1' \\"\\$s\\" > \\"\\$s.new\\" && mv -f \\"\\$s.new\\" \\"\\$s\\"; }; cd \\"\\$d\\" && exec python3 ./run.py" %k
-Icon=/home/joruf/Applications/snappix/assets/snappix.svg
+Exec=/bin/bash -c "s=\\$(readlink -f \\"\\$0\\"); d=\\${s%%/*}; i=\\$d/assets/snappix-red.svg; grep -qxF \\"Icon=\\$i\\" \\"\\$s\\" || { I=\\$i awk '/^Icon=/{print \\"Icon=\\" ENVIRON[\\"I\\"]; next}1' \\"\\$s\\" > \\"\\$s.new\\" && mv -f \\"\\$s.new\\" \\"\\$s\\"; }; cd \\"\\$d\\" && exec python3 ./run.py" %k
+Icon=/home/joruf/Applications/snappix/assets/snappix-red.svg
 Terminal=false
 Categories=Graphics;Utility;
 Keywords=screenshot;annotate;record;capture;Bildschirmfoto;

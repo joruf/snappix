@@ -571,6 +571,96 @@ def _ensure_desktop_launcher() -> None:
     record_user_file(editor_launcher_path)
 
 
+def _instance_server_name() -> str:
+    """
+    Returns the name the running instance listens on.
+
+    Carries the user name so two accounts on one machine do not fight over the
+    same socket.
+
+    Returns:
+        str: Local server name.
+    """
+
+    import getpass
+
+    try:
+        user = getpass.getuser()
+    except Exception:
+        user = "user"
+    return f"snappix-instance-{user}"
+
+
+def _signal_running_instance() -> bool:
+    """
+    Asks an already running Snappix to show its window.
+
+    Returns:
+        bool: True when the request was delivered.
+    """
+
+    try:
+        from PySide6.QtCore import QCoreApplication
+        from PySide6.QtNetwork import QLocalSocket
+    except ModuleNotFoundError:
+        return False
+
+    # A socket needs an application object; the running instance has one, this
+    # short-lived process has to make its own.
+    temporary_app = None
+    if QCoreApplication.instance() is None:
+        temporary_app = QCoreApplication(sys.argv)
+    try:
+        socket = QLocalSocket()
+        socket.connectToServer(_instance_server_name())
+        if not socket.waitForConnected(1500):
+            return False
+        socket.write(b"show")
+        socket.flush()
+        socket.waitForBytesWritten(1500)
+        socket.disconnectFromServer()
+        return True
+    except Exception:
+        return False
+    finally:
+        del temporary_app
+
+
+def _start_instance_server(controller) -> object | None:
+    """
+    Listens for later launches so they can raise this window.
+
+    Args:
+        controller: Application controller to bring forward.
+
+    Returns:
+        object | None: The server, kept alive by the caller, or None.
+    """
+
+    try:
+        from PySide6.QtNetwork import QLocalServer
+    except ModuleNotFoundError:
+        return None
+
+    name = _instance_server_name()
+    # A crash leaves the socket file behind; without this the listen fails and
+    # every later launch falls back to doing nothing visible.
+    QLocalServer.removeServer(name)
+    server = QLocalServer()
+    if not server.listen(name):
+        return None
+
+    def _on_connection() -> None:
+        """Brings the window forward when another launch asks for it."""
+        connection = server.nextPendingConnection()
+        if connection is not None:
+            connection.disconnectFromServer()
+        controller._show_from_tray()
+
+    server.newConnection.connect(_on_connection)
+    return server
+
+
 def _acquire_single_instance_lock() -> bool:
     """
     Acquires a non-blocking process lock to enforce single instance.
@@ -3495,7 +3585,13 @@ def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) 
     """
 
     if not _acquire_single_instance_lock():
-        print("Snappix is already running.")
+        # Exiting quietly here is what made a second click look like a failure
+        # to start: the message lands in a terminal nobody is watching, and the
+        # window that is already open may sit on another screen or in the tray.
+        if _signal_running_instance():
+            print("Snappix is already running; brought it to the front.")
+        else:
+            print("Snappix is already running.")
         return 0
     from src.paths import is_linux, is_windows
     from src.platform import set_windows_app_user_model_id
@@ -3535,6 +3631,8 @@ def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) 
         autostart_launch=autostart_launch,
     )
     controller._translation_filter = translation_filter
+    # Kept on the controller so it lives as long as the application does.
+    controller._instance_server = _start_instance_server(controller)
     app.aboutToQuit.connect(controller._save_editor_session)
     app.aboutToQuit.connect(cleanup_session_export_dir)
     controller.show()
