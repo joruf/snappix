@@ -90,7 +90,7 @@ Startup:
 | `src/autostart.py` | XDG autostart `.desktop` |
 | `src/tool_reference.py` / `tool_reference_dialog.py` | In-app tools help |
 | Element target | `EditorCanvas.pixel_target_item()` picks what Delete/Fill/Brush/Blur write to; masks and rects are carried into that element's pixel space |
-| `src/version.py` | Version derived from the commit history; `VERSION` file for packaged copies |
+| `src/version.py` | Version derived from the commit history; `VERSION` file (kept current by `.githooks/post-commit`) for copies without `.git` |
 | `src/ffmpeg_setup.py` | Per-user ffmpeg unpack for Windows accounts without administrator rights |
 | `src/tesseract_setup.py` | Per-user Tesseract install for Windows accounts without administrator rights |
 | `src/freehand.py` | Freehand point thinning while drawing and Chaikin smoothing for display |
@@ -460,6 +460,7 @@ Zero-Python entry points: `Snappix.bat` (Windows) and `snappix.sh` (Linux) downl
 3. Record **only newly installed** packages in `install-manifest.json`.
 4. Ensure project-local uv + managed Python 3.12, create `.venv`, and `uv pip install -r requirements.txt`.
 5. Record created `.venv`, `.snappix-runtime`, and user integration files (desktop entries, icons, autostart).
+6. In a checkout, set `core.hooksPath = .githooks` so the version hook runs — unless a different hooks path is already configured, which is left alone.
 
 ### Uninstaller (`uninstall_dependencies.py`)
 
@@ -717,6 +718,12 @@ Prefer deterministic unit tests over live X11 smoke as the release gate.
 |--------|--------|
 | `packaging/build_deb.sh` | `dist/snappix_{version}_{arch}.deb` |
 | `packaging/build_appimage.sh` | `dist/Snappix-{version}-x86_64.AppImage` |
+
+### Version number
+
+`src/version.py` derives `0.minor.patch (build)` from `git log`: `build` counts commits, a commit whose subject starts with *Add*, *Implement*, *Introduce* or *Bring* raises `minor` and resets `patch`. Sources, in order: `SNAPPIX_VERSION` → history → `VERSION` → `unknown` (never an invented `0.0.0`).
+
+`VERSION` holds `name build commit date marker` and is not checked in. `.githooks/post-commit` runs `src/version.py --write` after every commit (best effort; it never fails a commit), and every read of the history rewrites it too. The marker is the size and nanosecond mtime of `.git/logs/HEAD` (the index only when the reflog is off), so an unchanged checkout answers from the file without starting git, while a commit, checkout or reset forces a re-read. The Linux build scripts read the version before copying the tree, so the fresh file ships inside the package.
 
 README screenshots: `scripts/generate_readme_screenshots.py` → `docs/screenshots/`.
 

@@ -790,6 +790,53 @@ def install_packages(project_dir: Path) -> int:
     return 0
 
 
+def enable_version_hook(project_dir: Path) -> bool:
+    """
+    Turns on the commit hook that keeps the ``VERSION`` file current.
+
+    Only for a checkout that carries ``.githooks``, and never over a hooks path
+    someone already set: whoever set it had a reason, and overwriting it would
+    silently switch their hooks off.
+
+    Args:
+        project_dir: Project root directory.
+
+    Returns:
+        bool: True when the setting is in place afterwards.
+    """
+
+    if not (project_dir / ".git").exists() or not (project_dir / ".githooks").is_dir():
+        return False
+    if which("git") is None:
+        return False
+
+    current = subprocess.run(
+        ["git", "-C", str(project_dir), "config", "--get", "core.hooksPath"],
+        capture_output=True,
+        text=True,
+        check=False,
+    ).stdout.strip()
+    if current == ".githooks":
+        return True
+    if current:
+        print(
+            f"Snappix installer: leaving core.hooksPath as it is ({current}); "
+            "the version hook is not active."
+        )
+        return False
+
+    done = subprocess.run(
+        ["git", "-C", str(project_dir), "config", "core.hooksPath", ".githooks"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if done.returncode != 0:
+        return False
+    print("Snappix installer: activated the version hook (core.hooksPath = .githooks).")
+    return True
+
+
 def bootstrap(project_dir: Path, python_bin: str | None = None) -> int:
     """
     Runs system package setup plus managed virtualenv package installation.
@@ -807,6 +854,7 @@ def bootstrap(project_dir: Path, python_bin: str | None = None) -> int:
     del python_bin
     print("Snappix installer: checking installation requirements...")
     record_project_dir(project_dir)
+    enable_version_hook(project_dir)
     system_code = install_system_dependencies(project_dir)
 
     from src.runtime_bootstrap import bootstrap_managed_runtime

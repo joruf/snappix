@@ -21,3 +21,5 @@ docs/screenshots/_sample-video.mp4
 # Fetched by scripts/fetch_ffmpeg_windows.py; far too large to commit.
 /vendor/ffmpeg-windows.zip
 /vendor/ffmpeg-windows.json
+# Derived from the history by src/version.py and .githooks/post-commit.
+/VERSION

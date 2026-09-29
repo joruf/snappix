@@ -4,6 +4,8 @@ Application constants for Snappix.
 
 from __future__ import annotations
 
+from html import escape
+
 APP_NAME = "Snappix"
 APP_FILE_EXTENSION = ".sfp"
 PROJECT_FORMAT_NAME = "snappix-project"
@@ -58,6 +60,7 @@ def build_about_dialog_html(
     """
 
     from src.theme import get_theme_colors
+    from src.version import version_label
 
     colors = get_theme_colors()
     resolved_link = (link_color or colors.link).strip() or colors.link
@@ -67,7 +70,7 @@ def build_about_dialog_html(
     website_url = normalize_about_url(ABOUT_WEBSITE)
     github_url = normalize_about_url(ABOUT_GITHUB)
     return (
-        f"<p><b>{APP_NAME}</b></p>"
+        f"<p><b>{APP_NAME}</b><br>Version: {escape(version_label())}</p>"
         f"<p>Author: {ABOUT_AUTHOR}<br>"
         f'Website: <a href="{website_url}" style="{link_style}">{ABOUT_WEBSITE}</a><br>'
         f'GitHub: <a href="{github_url}" style="{link_style}">{ABOUT_GITHUB}</a></p>'

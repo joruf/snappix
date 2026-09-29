@@ -60,6 +60,22 @@ class TestAboutConstants(unittest.TestCase):
         self.assertIn(ABOUT_WEBSITE, html)
         self.assertIn(ABOUT_GITHUB, html)
 
+    def test_build_about_dialog_html_shows_the_version(self) -> None:
+        """
+        Ensures the About box names the running version and its commit.
+        """
+
+        from unittest.mock import patch
+
+        from src.version import ENVIRONMENT_VARIABLE, version_label
+
+        with patch.dict("os.environ", {ENVIRONMENT_VARIABLE: "0.39.0 129 abc1234 2026-09-29"}):
+            version_label(refresh=True)
+            html = build_about_dialog_html()
+        version_label(refresh=True)
+
+        self.assertIn("Version: 0.39.0 (129) · abc1234 · 29.09.2026", html)
+
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for About dialog tests")
 class TestAboutDialog(unittest.TestCase):
@@ -114,6 +130,39 @@ class TestAboutDialog(unittest.TestCase):
             )
         ]
         self.assertTrue(labels)
+        window.close()
+
+    def test_editor_about_box_shows_the_version(self) -> None:
+        """
+        Ensures the version reaches the dialog an editor actually opens.
+        """
+
+        from unittest.mock import patch
+        from PySide6.QtWidgets import QMessageBox
+
+        from src.version import ENVIRONMENT_VARIABLE, version_label
+
+        pixmap = QPixmap(40, 30)
+        pixmap.fill(QColor(200, 200, 200))
+        window = EditorWindow(pixmap)
+        created: list[QMessageBox] = []
+        real_init = QMessageBox.__init__
+
+        def tracking_init(self, *args, **kwargs):
+            real_init(self, *args, **kwargs)
+            created.append(self)
+
+        with patch.dict(
+            "os.environ", {ENVIRONMENT_VARIABLE: "0.39.0 129 abc1234 2026-09-29"}
+        ), patch.object(QMessageBox, "__init__", tracking_init), patch.object(
+            QMessageBox, "exec", return_value=QMessageBox.StandardButton.Ok
+        ):
+            version_label(refresh=True)
+            window.show_about()
+        version_label(refresh=True)
+
+        self.assertEqual(len(created), 1)
+        self.assertIn("0.39.0 (129) · abc1234 · 29.09.2026", created[0].text())
         window.close()
 
 

@@ -156,7 +156,9 @@ these automatically for tagged releases, see `.github/workflows/release.yml`):
 | Flatpak | Linux | `flatpak-builder` (`sudo apt install flatpak-builder`); the script installs the `org.kde.Platform`/`org.kde.Sdk` 6.9 runtime itself on first run |
 | Windows `.zip` | Windows | `pip install pyinstaller` |
 
-The version is derived from the commit history — `build` counts commits, `minor` counts feature rounds, `patch` counts changes since the last one — so every commit is a new version and nothing has to be raised by hand. `python -m src.version` prints it; the About dialog shows it. Passing a version to a build script still overrides it.
+The version is derived from the commit history — `build` counts commits, `minor` counts feature rounds, `patch` counts changes since the last one — so every commit is a new version and nothing has to be raised by hand. `python -m src.version` prints it; the About dialog shows it. The About dialog also names the short hash and day of the newest commit, so a reported number leads back to an exact commit. Passing a version to a build script still overrides it.
+
+The number lands in an untracked `VERSION` file next to `run.py`, written after every commit by `.githooks/post-commit` and refreshed whenever Snappix reads the history; a copy without `.git` reads it from there. The installer turns the hook on for a checkout; by hand it is `git config core.hooksPath .githooks`.
 
 ```bash
 # Debian package (Ubuntu / Linux Mint)

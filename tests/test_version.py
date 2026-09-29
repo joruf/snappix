@@ -18,7 +18,10 @@ from src.version import (
     ENVIRONMENT_VARIABLE,
     UNKNOWN,
     VERSION_FILE_NAME,
+    details,
+    history_marker,
     version,
+    version_label,
     version_string,
     write_version_file,
 )
@@ -233,6 +236,182 @@ class TestDisplay(unittest.TestCase):
 
         self.assertNotEqual(name, UNKNOWN)
         self.assertTrue(build.isdigit(), build)
+
+
+class TestStoredFile(unittest.TestCase):
+    """
+    Verifies the ``VERSION`` file the commit hook and every read keep current.
+    """
+
+    def _read(self, root: Path) -> dict[str, str]:
+        """
+        Resolves the version of ``root`` as a fresh process would.
+
+        Args:
+            root: Project root to resolve.
+
+        Returns:
+            dict[str, str]: The resolved fields.
+        """
+
+        from src import version as version_module
+
+        with patch.dict("os.environ", {}, clear=True), patch.object(
+            version_module, "project_root", return_value=root
+        ):
+            return details(refresh=True)
+
+    def test_reading_the_history_writes_the_file(self) -> None:
+        """
+        Ensures a checkout leaves a file behind that a copy without .git can read.
+        """
+
+        with TemporaryDirectory() as temporary:
+            root = _repository(Path(temporary), ["Add capture", "Fix one"])
+            found = self._read(root)
+            stored = (root / VERSION_FILE_NAME).read_text(encoding="utf-8").split()
+
+        self.assertEqual(stored[:2], ["0.1.1", "2"])
+        self.assertEqual(stored[2], found["commit"])
+        self.assertRegex(stored[3], r"^\d{4}-\d{2}-\d{2}$")
+        self.assertEqual(stored[4], found["marker"])
+        self.assertTrue(found["marker"])
+
+    def test_an_unchanged_history_answers_from_the_file(self) -> None:
+        """
+        Ensures a normal start does not run git once the file is current.
+        """
+
+        from src import version as version_module
+
+        with TemporaryDirectory() as temporary:
+            root = _repository(Path(temporary), ["Add capture"])
+            self._read(root)
+            marker = history_marker(root)
+            (root / VERSION_FILE_NAME).write_text(
+                f"7.7.7 70 abcdef0 2026-01-02 {marker}\n", encoding="utf-8"
+            )
+            with patch.object(
+                version_module.subprocess, "run", side_effect=AssertionError("git ran")
+            ):
+                found = self._read(root)
+
+        self.assertEqual((found["name"], found["build"]), ("7.7.7", "70"))
+
+    def test_a_new_commit_replaces_a_stale_file(self) -> None:
+        """
+        Ensures the file never outlives the commit it describes.
+        """
+
+        with TemporaryDirectory() as temporary:
+            root = _repository(Path(temporary), ["Add capture"])
+            self._read(root)
+            (root / "later.txt").write_text("x", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "Fix later"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            found = self._read(root)
+            stored = (root / VERSION_FILE_NAME).read_text(encoding="utf-8").split()
+
+        self.assertEqual((found["name"], found["build"]), ("0.1.1", "2"))
+        self.assertEqual(stored[:2], ["0.1.1", "2"])
+
+    def test_two_commits_in_one_second_still_move_the_marker(self) -> None:
+        """
+        Ensures a quick second commit is not mistaken for the first.
+        """
+
+        with TemporaryDirectory() as temporary:
+            root = _repository(Path(temporary), ["Add capture"])
+            before = history_marker(root)
+            (root / "later.txt").write_text("x", encoding="utf-8")
+            subprocess.run(["git", "add", "."], cwd=root, check=True, capture_output=True)
+            subprocess.run(
+                ["git", "commit", "-q", "-m", "Fix later"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+            )
+            after = history_marker(root)
+
+        self.assertNotEqual(before, after)
+
+    def test_a_plain_status_does_not_invalidate_the_file(self) -> None:
+        """
+        Ensures only a moving history, not a refreshed index, costs a re-read.
+        """
+
+        with TemporaryDirectory() as temporary:
+            root = _repository(Path(temporary), ["Add capture"])
+            before = history_marker(root)
+            (root / "file0.txt").touch()
+            subprocess.run(["git", "status"], cwd=root, check=True, capture_output=True)
+            after = history_marker(root)
+
+        self.assertEqual(before, after)
+
+    def test_a_copy_without_history_trusts_the_file(self) -> None:
+        """
+        Ensures a package reads the full record, commit and date included.
+        """
+
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / VERSION_FILE_NAME).write_text(
+                "0.4.2 55 1a2b3c4 2026-09-29 123.456\n", encoding="utf-8"
+            )
+            found = self._read(root)
+
+        self.assertEqual(found["commit"], "1a2b3c4")
+        self.assertEqual(found["date"], "2026-09-29")
+
+
+class TestLabel(unittest.TestCase):
+    """
+    Verifies the full form shown in the About dialog.
+    """
+
+    def test_the_label_leads_back_to_the_commit(self) -> None:
+        """
+        Ensures a number in a bug report names its exact commit and day.
+        """
+
+        with patch.dict("os.environ", {ENVIRONMENT_VARIABLE: "0.38.2 127 33980da 2026-09-28"}):
+            self.assertEqual(version_label(refresh=True), "0.38.2 (127) · 33980da · 28.09.2026")
+
+    def test_an_unknown_label_stays_plain(self) -> None:
+        """
+        Ensures nothing decorates an unknown version.
+        """
+
+        from src import version as version_module
+
+        with TemporaryDirectory() as temporary:
+            with patch.dict("os.environ", {}, clear=True), patch.object(
+                version_module, "project_root", return_value=Path(temporary)
+            ):
+                self.assertEqual(version_label(refresh=True), UNKNOWN)
+
+    def test_the_about_dialog_shows_the_label(self) -> None:
+        """
+        Ensures the About dialog carries the commit, not just the number.
+        """
+
+        from unittest.mock import MagicMock
+
+        import run
+
+        fake = MagicMock()
+        with patch.dict("os.environ", {ENVIRONMENT_VARIABLE: "0.38.2 127 33980da 2026-09-28"}):
+            version_label(refresh=True)
+            run.AppController.show_about_dialog(fake)
+
+        shown = fake._QMessageBox.information.call_args[0][2]
+        self.assertIn("0.38.2 (127) · 33980da · 28.09.2026", shown)
 
 
 if __name__ == "__main__":

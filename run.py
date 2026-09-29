@@ -3528,13 +3528,13 @@ class AppController:
             None
         """
 
-        from src.version import version_string as app_version_string
+        from src.version import version_label as app_version_label
 
         self._QMessageBox.information(
             None,
             f"About {APP_NAME}",
             (
-                f"{APP_NAME} {app_version_string()}\n"
+                f"{APP_NAME} {app_version_label()}\n"
                 "Capture screenshots, annotate visuals, blur sensitive data, run OCR, and export fast.\n\n"
                 "Joachim Ruf\n"
                 "Loresoft\n"
