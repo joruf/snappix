@@ -184,6 +184,45 @@ The Flatpak sandboxes the PySide6/Python runtime but, like the `.deb`, still exp
 (`--filesystem=host` in `packaging/flatpak/io.github.joruf.Snappix.yml`) — bundling those as
 Flatpak modules too would be a much larger, slower build.
 
+### Single-file executable (no Python needed)
+
+Snappix can also be built as one executable file that carries Python, PySide6 and every package it
+needs. One script does the whole build:
+
+```bash
+./build-exe.py          # Linux   -> dist/snappix-linux-x86_64-<version>-build<build>
+py build-exe.py         # Windows -> dist/snappix-windows-x86_64-<version>-build<build>.exe
+```
+
+The file name carries the version, e.g. `snappix-linux-x86_64-0.39.0-build129`. The script writes
+`VERSION` from the commit history first, so it has to run in a git checkout.
+
+- **Build on the system the file is for.** PyInstaller cannot build for another system: the Linux
+  file runs on Linux only, the `.exe` on Windows only. Both come from the same code.
+- **Linux: the file runs on systems with the same or a newer glibc as the build machine.** Build on
+  the oldest system you want to support. The release workflow uses Ubuntu 22.04.
+- **Build machine:** Python 3.11+ with `venv`; the script creates its own build environment in
+  `build/exe/` and installs PyInstaller plus the pinned `requirements.txt` there.
+  `--clean` rebuilds that environment, `--keep-env` reuses it without updating.
+- **Linux:** make the downloaded file executable once (`chmod +x snappix-linux-*`), then start it.
+- **Windows:** SmartScreen warns about the unsigned `.exe` ("More info" → "Run anyway").
+
+What stays outside the file, on purpose:
+
+| Component | How the executable gets it |
+|---|---|
+| ffmpeg, Tesseract (Windows) | per user, without administrator rights: `snappix-windows-….exe --install-ffmpeg` / `--install-ocr` (what `install.bat` does for a checkout), into `%LOCALAPPDATA%\snappix\.snappix-runtime` |
+| ffmpeg, Tesseract, xdotool, x11-utils, grim/slurp (Linux) | as before: the package manager |
+| `vendor/ffmpeg-windows.zip` | not built in (170 MB); the Windows ffmpeg setup downloads the archive instead |
+
+Every push to `main` runs `.github/workflows/release-exe.yml`. It builds both files on GitHub
+(Ubuntu 22.04 and Windows) and publishes them as the release `v<version>-build<build>`. The
+executable updates itself from these releases: *Check for Updates* compares build numbers, saves the
+new file next to the running one under its own versioned name and restarts into it; the new program
+points an existing desktop shortcut and autostart entry at itself and deletes the old file. Those
+tags are created with `GITHUB_TOKEN` and therefore do **not** trigger `release.yml`; the packages
+above still come from tags pushed by hand.
+
 ---
 
 ## Key Features

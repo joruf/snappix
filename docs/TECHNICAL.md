@@ -718,6 +718,42 @@ Prefer deterministic unit tests over live X11 smoke as the release gate.
 |--------|--------|
 | `packaging/build_deb.sh` | `dist/snappix_{version}_{arch}.deb` |
 | `packaging/build_appimage.sh` | `dist/Snappix-{version}-x86_64.AppImage` |
+| `build-exe.py` | `dist/snappix-{linux,windows}-{arch}-{version}-build{build}[.exe]` (single file) |
+
+### Single-file executable (frozen mode)
+
+`build-exe.py` builds a PyInstaller one-file executable for the system it runs on. It writes
+`VERSION` with `src/version.py`, sets up a build venv in `build/exe/` (no system site packages),
+stages `assets/` and `VERSION` under the checkout's layout, writes a spec file into
+`build/exe/work/` and checks the result with `--version`, which answers before Qt is imported.
+The file name comes from `paths.executable_name(version, build)`, shared with the updater.
+Inside the executable `paths.IS_FROZEN` is set, and a few things work differently:
+
+- **Resources from the bundle.** `run._project_root()` and `version.project_root()` are
+  `sys._MEIPASS`, so the icons and `VERSION` are found where a checkout has them. Nothing is
+  written there: the version comes from the bundled file only (no git, no `SNAPPIX_VERSION`, no
+  rewrite), and launcher icons are copied to `user_data_dir()`.
+- **No venv, no installer.** `sys.executable` is the program itself; starting it with `-c` or a
+  script would start Snappix again. The venv re-exec, the uv runtime bootstrap and the Tk installer
+  are skipped. `--install-ffmpeg` / `--install-ocr` call the per-user Windows setup in-process;
+  `paths.runtime_parent()` moves `.snappix-runtime/{ffmpeg,tesseract}` to `user_data_dir()`.
+- **Launchers** (`~/.local/share/applications`, desktop shortcut, autostart `.desktop` / Startup
+  `.bat`) run `"<executable>"` with no script path and no working directory.
+- **Child processes get the system's libraries.** PyInstaller points `LD_LIBRARY_PATH` (and the Qt
+  hooks further variables) at the unpacked files. `paths.use_system_environment_for_children()`
+  wraps `subprocess.Popen` once at startup so every child gets `paths.child_environment()`: entries
+  pointing into `sys._MEIPASS` are dropped and `LD_LIBRARY_PATH` gets its original value back.
+- **Updates from releases.** `updater.check`/`apply` read `releases/latest` instead of the branch
+  head, compare the build number in the tag `v<version>-build<build>` and download the asset
+  `paths.executable_name(version, build)` next to the running file. The old path is kept in
+  `user_data_dir()/update-state.json`; `finish_executable_update()` in the new program rewrites the
+  desktop shortcut and autostart entry and deletes the old file (retried on the next start while
+  it is still locked, never deleting itself). `restart()` sets `PYINSTALLER_RESET_ENVIRONMENT` so
+  the new file unpacks afresh; on Windows the old process quits after spawning it.
+
+`.github/workflows/release-exe.yml` runs the same script on Ubuntu 22.04 (oldest glibc) and Windows
+on every push to `main` (full history, so the derived build number is right) and publishes the
+release. Its tags are created with `GITHUB_TOKEN` and do not trigger `release.yml`.
 
 ### Version number
 

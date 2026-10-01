@@ -19,7 +19,6 @@ goes next to them.
 
 from __future__ import annotations
 
-import os
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -46,10 +45,13 @@ def bundled_tesseract_dir(project_dir: Path) -> Path:
         project_dir: Project root directory.
 
     Returns:
-        Path: Target directory inside the project runtime folder.
+        Path: Target directory inside the project runtime folder (the
+        per-user data directory in the single-file executable).
     """
 
-    return Path(project_dir) / RUNTIME_DIR_NAME / TESSERACT_DIR_NAME
+    from src.paths import runtime_parent
+
+    return runtime_parent(project_dir) / RUNTIME_DIR_NAME / TESSERACT_DIR_NAME
 
 
 def bundled_tesseract_exe(project_dir: Path) -> Path:
@@ -213,7 +215,10 @@ def tesseract_environment(project_dir: Path) -> dict[str, str]:
         dict[str, str]: Environment for ``subprocess``.
     """
 
-    environment = dict(os.environ)
+    from src.paths import child_environment
+
+    # Without the executable's unpacked library paths (a plain copy otherwise).
+    environment = child_environment()
     data_dir = tessdata_dir(project_dir)
     if data_dir.is_dir():
         environment["TESSDATA_PREFIX"] = str(data_dir)

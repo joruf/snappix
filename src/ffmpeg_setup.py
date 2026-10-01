@@ -39,10 +39,13 @@ def bundled_ffmpeg_dir(project_dir: Path) -> Path:
         project_dir: Project root directory.
 
     Returns:
-        Path: Target directory inside the project runtime folder.
+        Path: Target directory inside the project runtime folder (the
+        per-user data directory in the single-file executable).
     """
 
-    return Path(project_dir) / RUNTIME_DIR_NAME / FFMPEG_DIR_NAME
+    from src.paths import runtime_parent
+
+    return runtime_parent(project_dir) / RUNTIME_DIR_NAME / FFMPEG_DIR_NAME
 
 
 def bundled_ffmpeg_exe(project_dir: Path) -> Path:

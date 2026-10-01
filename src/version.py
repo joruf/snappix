@@ -68,10 +68,15 @@ def project_root() -> Path:
     """
     Returns the directory holding ``run.py``.
 
+    In the single-file executable that is the unpacked bundle, which carries the
+    ``VERSION`` file ``build-exe.py`` wrote.
+
     Returns:
         Path: Project root.
     """
 
+    if getattr(sys, "frozen", False):
+        return Path(getattr(sys, "_MEIPASS", "."))
     return Path(__file__).resolve().parent.parent
 
 
@@ -236,6 +241,11 @@ def _resolve(root: Path) -> dict[str, str] | None:
     Returns:
         dict[str, str] | None: The first answer any source gave, or None.
     """
+
+    if getattr(sys, "frozen", False):
+        # The executable answers from the file it was built with: no history to
+        # read, and its unpacked files vanish on exit, so nothing is written.
+        return _from_file(root)
 
     fixed = _from_environment()
     if fixed is not None:

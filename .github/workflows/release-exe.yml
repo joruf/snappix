@@ -1,0 +1,94 @@
+name: Executables
+
+# Builds the single-file executables with build-exe.py - one per system, each on
+# that system, because PyInstaller cannot build for another one - and publishes
+# them as a GitHub release.  The updater inside the executable looks for exactly
+# these releases: tag v<version>-build<build>, one asset per platform.
+#
+# The version is derived from the commit history (src/version.py), so every
+# commit is a new build number: this runs on every push to main.  The checkout
+# needs the whole history (fetch-depth: 0), or the numbers would be wrong.
+#
+# The tags created here use GITHUB_TOKEN, and GitHub never starts workflows for
+# events caused by that token - so these v<version>-build<build> tags do NOT
+# trigger release.yml (.deb, AppImage, Flatpak, Windows zip), although they match
+# its "v*" filter.  Those packages still come from tags pushed by hand.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os }}
+    strategy:
+      fail-fast: true
+      matrix:
+        # The oldest supported Ubuntu: the Linux file runs on every system with
+        # the same or a newer glibc, never on an older one.
+        os: [ubuntu-22.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libgl1 libglib2.0-0 libpulse0 libxcb-cursor0 libxkbcommon-x11-0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # build-exe.py writes VERSION from the history before it builds.
+      - name: Build
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python build-exe.py
+
+      - name: Keep the executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: exe-${{ matrix.os }}
+          path: dist/snappix-*
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Collect the executables
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Create or refresh the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(python3 -c "from src.version import version; print(version()[0])")
+          BUILD=$(python3 -c "from src.version import version; print(version()[1])")
+          TAG="v${VERSION}-build${BUILD}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/snappix-* --clobber
+          else
+            gh release create "$TAG" dist/snappix-* \
+              --target "$GITHUB_SHA" \
+              --title "Snappix ${VERSION} (${BUILD})" \
+              --notes "Single-file executables built by build-exe.py. Linux: make the file executable (chmod +x) and start it. Windows: start the .exe (SmartScreen warns, the file is unsigned). ffmpeg, Tesseract and the X11 tools stay system-provided."
+          fi

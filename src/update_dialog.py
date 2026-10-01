@@ -21,6 +21,7 @@ import threading
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication, QMessageBox, QWidget
 
+from src import paths
 from src.constants import APP_NAME
 from src.updater import UpdateInfo, apply, check, restart
 
@@ -209,3 +210,8 @@ def _on_applied(success: bool, message: str) -> None:
         f"Update installed.\n\n{message}\n\n{APP_NAME} restarts now.",
     )
     restart()
+    if paths.IS_FROZEN and paths.is_windows():
+        # Windows starts the new executable beside this one instead of replacing
+        # it. It needs the instance lock this process holds, so this one ends now,
+        # while the new file is still unpacking itself.
+        QApplication.quit()

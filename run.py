@@ -90,6 +90,21 @@ def _project_root() -> Path:
 _INITIALIZED_FILE = user_data_dir() / ".initialized"
 
 
+def _is_frozen() -> bool:
+    """
+    Returns whether this is the single-file executable built by ``build-exe.py``.
+
+    Read on every call rather than imported once, so tests can pretend.
+
+    Returns:
+        bool: True inside the executable.
+    """
+
+    from src import paths
+
+    return paths.IS_FROZEN
+
+
 def _capture_icon_path() -> Path:
     """
     Returns the red capture icon path.
@@ -114,13 +129,25 @@ def _editor_icon_path() -> Path:
 
 def _icon_path() -> Path:
     """
-    Returns the primary application (capture) icon path.
+    Returns the primary application (capture) icon path for launchers.
+
+    The executable unpacks its icon into a temporary directory that is deleted
+    on exit, so desktop entries reference a copy in the user data directory.
 
     Returns:
         Path: Icon file path.
     """
 
-    return _capture_icon_path()
+    icon = _capture_icon_path()
+    if not _is_frozen():
+        return icon
+    kept = user_data_dir() / icon.name
+    try:
+        kept.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(icon, kept)
+    except OSError:
+        pass
+    return kept
 
 
 def _build_icon_from_svg(path: Path):
@@ -306,7 +333,8 @@ def _reexec_into_venv_if_available(project_root: Path) -> None:
         None
     """
 
-    if os.environ.get("SNAPPIX_REEXECUTED") == "1":
+    if os.environ.get("SNAPPIX_REEXECUTED") == "1" or _is_frozen():
+        # The executable is its own interpreter: there is no venv to switch to.
         return
 
     venv_python = _resolve_venv_python(project_root)
@@ -355,6 +383,11 @@ def _ensure_qt_runtime() -> int:
     try:
         import PySide6  # noqa: F401
     except ModuleNotFoundError:
+        if _is_frozen():
+            # Built in, so this is a broken build; the installer would start the
+            # executable itself instead of a Python interpreter.
+            print("Snappix: this executable is missing PySide6.", file=sys.stderr)
+            return 1
         from src.install_progress_gui import run_installer_with_progress_gui
 
         install_code = run_installer_with_progress_gui()
@@ -379,8 +412,12 @@ def _autostart_exec_command() -> str:
         str: Command string for desktop entry or Startup batch file.
     """
 
-    from src.paths import is_windows, venv_python_path
+    from src.paths import executable, is_windows, venv_python_path
 
+    if _is_frozen():
+        # The single-file executable starts itself; its unpacked files are gone
+        # once it ends, so no script path and no working directory into them.
+        return f'"{executable()}"'
     script_path = _project_root() / "run.py"
     if is_windows():
         python_exe = venv_python_path(_project_root())
@@ -3690,7 +3727,7 @@ def _ensure_supported_runtime(project_root: Path) -> None:
 
     from src.py_compat import is_supported_python
 
-    if is_supported_python():
+    if is_supported_python() or _is_frozen():
         return
     _bootstrap_then_reexec(project_root)
 
@@ -3722,7 +3759,78 @@ def _require_supported_python() -> None:
     raise SystemExit(1)
 
 
+def _print_version() -> int:
+    """
+    Prints the full version label for ``--version``.
+
+    Needs nothing but the standard library, so it answers before any GUI toolkit
+    is loaded -- ``build-exe.py`` checks a fresh, headless build with it.
+
+    Returns:
+        int: Exit code 0.
+    """
+
+    from src.version import version_label
+
+    print(f"{APP_NAME} {version_label()}")
+    return 0
+
+
+def _point_launchers_at_executable() -> None:
+    """
+    Rewrites the existing desktop shortcut and autostart entry for this file.
+
+    Called once after an executable update, so neither keeps starting the
+    previous file, which is deleted right after.
+
+    Returns:
+        None
+    """
+
+    from src.paths import default_autostart_path, is_linux
+
+    if is_linux() and (_user_desktop_dir() / "Snappix.desktop").exists():
+        _install_desktop_shortcut()
+    manager = AutostartManager(default_autostart_path())
+    if manager.is_enabled():
+        manager.enable(_autostart_login_exec_command(), APP_NAME, str(_icon_path()))
+
+
+def _start_frozen() -> int | None:
+    """
+    Prepares a start of the single-file executable.
+
+    There is no venv to create and nothing to re-exec into. Child processes get
+    the system's libraries instead of the unpacked ones, and a finished update
+    is completed. ``--install-ffmpeg`` and ``--install-ocr`` do what
+    ``install.bat`` does for a checkout: install the tool for this Windows
+    account, into the user data directory.
+
+    Returns:
+        int | None: Exit code when the run ends here, else None to start the app.
+    """
+
+    from src import paths, updater
+
+    paths.use_system_environment_for_children()
+    updater.finish_executable_update(_point_launchers_at_executable)
+    if "--install-ffmpeg" in sys.argv[1:]:
+        from install_dependencies import install_ffmpeg_for_current_user
+
+        return install_ffmpeg_for_current_user(_project_root())
+    if "--install-ocr" in sys.argv[1:]:
+        from install_dependencies import install_ocr_for_current_user
+
+        return install_ocr_for_current_user(_project_root())
+    return None
+
+
 if __name__ == "__main__":
+    if "--version" in sys.argv[1:]:
+        raise SystemExit(_print_version())
+    if _is_frozen():
+        _frozen_code = _start_frozen()
+        raise SystemExit(main() if _frozen_code is None else _frozen_code)
     _project = _project_root()
     _reexec_into_venv_if_available(_project)
     _ensure_supported_runtime(_project)
