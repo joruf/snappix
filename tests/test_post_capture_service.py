@@ -10,7 +10,11 @@ from datetime import datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
-from src.post_capture_service import build_capture_filename, save_capture_pixmap_to_directory
+from src.post_capture_service import (
+    build_capture_filename,
+    save_capture_pixmap_to_directory,
+    suggest_save_path,
+)
 
 try:
     from PySide6.QtGui import QColor, QPixmap
@@ -84,6 +88,58 @@ class TestSaveCapturePixmapToDirectory(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             result = save_capture_pixmap_to_directory(failing_pixmap, Path(tmp_dir))
         self.assertIsNone(result)
+
+
+class TestSuggestSavePath(unittest.TestCase):
+    """
+    Verifies the name the Save dialog opens with.
+    """
+
+    STAMP = datetime(2026, 10, 30, 19, 38, 0)
+
+    def test_name_is_the_time_stamp_in_the_requested_form(self) -> None:
+        """
+        Ensures ``snappix-YYYY-MM-DD-HH-MM-SS.ext``, zero-padded.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = suggest_save_path(Path(directory), ".png", self.STAMP)
+            self.assertEqual(path.name, "snappix-2026-10-30-19-38-00.png")
+            self.assertEqual(path.parent, Path(directory))
+
+    def test_extension_follows_the_format(self) -> None:
+        """
+        Ensures the extension is the one asked for, not a fixed ``.png``.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = suggest_save_path(Path(directory), ".jpg", self.STAMP)
+            self.assertEqual(path.name, "snappix-2026-10-30-19-38-00.jpg")
+
+    def test_existing_file_gets_a_counter(self) -> None:
+        """
+        Ensures a taken name is never proposed again; a counter follows the stamp.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            (folder / "snappix-2026-10-30-19-38-00.png").write_bytes(b"x")
+            first = suggest_save_path(folder, ".png", self.STAMP)
+            self.assertEqual(first.name, "snappix-2026-10-30-19-38-00-1.png")
+            first.write_bytes(b"x")
+            second = suggest_save_path(folder, ".png", self.STAMP)
+            self.assertEqual(second.name, "snappix-2026-10-30-19-38-00-2.png")
+
+    def test_another_extension_does_not_count_as_taken(self) -> None:
+        """
+        Ensures only a file of the same format forces a counter.
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            (folder / "snappix-2026-10-30-19-38-00.jpg").write_bytes(b"x")
+            path = suggest_save_path(folder, ".png", self.STAMP)
+            self.assertEqual(path.name, "snappix-2026-10-30-19-38-00.png")
 
 
 if __name__ == "__main__":

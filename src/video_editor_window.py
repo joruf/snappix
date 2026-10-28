@@ -107,6 +107,7 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._minimize_to_tray_on_close = True
         self._current_project_path = ""
         self._recovery_path = ""
+        self._capture_file = ""
         self._cached_duration_ms = 0
         self._session_video_source_path = ""
         self._recovery_dirty = False
@@ -1243,6 +1244,39 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
                 self.history_list_combo.setCurrentIndex(self._history_index)
         finally:
             self._syncing_history_list = False
+
+    def set_capture_file(self, path: str) -> None:
+        """
+        Binds this tab to the file in the capture folder that backs it.
+
+        Args:
+            path: Capture file path, or empty for a tab without one.
+
+        Returns:
+            None
+        """
+
+        self._capture_file = path.strip()
+
+    def capture_file(self) -> str:
+        """
+        Returns the capture file backing this tab.
+
+        Returns:
+            str: Capture file path, empty when the tab has none.
+        """
+
+        return self._capture_file
+
+    def has_changes_since_capture(self) -> bool:
+        """
+        Reports whether the tab holds work that the capture file does not.
+
+        Returns:
+            bool: True when annotations exist or an edit is in the history.
+        """
+
+        return self.has_annotations() or self._history_index > 0
 
     def set_recovery_path(self, path: str) -> None:
         """

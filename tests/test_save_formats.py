@@ -370,5 +370,104 @@ class TestSaveAndResave(SaveTestCase):
         self.assertIsNone(editor._save_target)
 
 
+class TestProposedName(SaveTestCase):
+    """
+    Verifies the name Ctrl+S puts into the dialog.
+    """
+
+    def _run_dialog(self, editor, directory: str, answer):
+        """
+        Presses Ctrl+S with a stubbed dialog and a fixed capture folder.
+
+        Args:
+            editor: Editor under test.
+            directory: Folder standing in for the capture folder.
+            answer: What the dialog returns.
+
+        Returns:
+            MagicMock: The patched ``getSaveFileName``.
+        """
+
+        with patch(
+            "src.config.default_capture_save_directory", return_value=directory
+        ), patch(
+            "src.editor_window.QFileDialog.getSaveFileName", return_value=answer
+        ) as dialog:
+            editor.save_document()
+        return dialog
+
+    def test_ctrl_s_proposes_a_time_stamped_png(self) -> None:
+        """
+        Ensures the dialog opens on ``snappix-<date>-<time>.png``.
+        """
+
+        editor = self._editor()
+        with TemporaryDirectory() as directory:
+            dialog = self._run_dialog(editor, directory, ("", ""))
+            proposed = Path(dialog.call_args[0][2])
+
+        self.assertEqual(proposed.parent, Path(directory))
+        self.assertRegex(
+            proposed.name, r"^snappix-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}\.png$"
+        )
+
+    def test_a_taken_name_gets_a_counter(self) -> None:
+        """
+        Ensures the proposal never points at a file that is already there.
+        """
+
+        from datetime import datetime
+        from unittest.mock import MagicMock
+
+        clock = MagicMock()
+        clock.now.return_value = datetime(2026, 10, 30, 19, 38, 0)
+        editor = self._editor()
+        with TemporaryDirectory() as directory, patch(
+            "src.post_capture_service.datetime", clock
+        ):
+            (Path(directory) / "snappix-2026-10-30-19-38-00.png").write_bytes(b"x")
+            proposed = Path(
+                self._run_dialog(editor, directory, ("", "")).call_args[0][2]
+            )
+
+        self.assertEqual(proposed.name, "snappix-2026-10-30-19-38-00-1.png")
+
+    def test_untouched_name_follows_the_chosen_format(self) -> None:
+        """
+        Ensures picking JPEG in the dialog yields a JPEG, not a ``.png`` name.
+        """
+
+        editor = self._editor()
+        with TemporaryDirectory() as directory:
+            proposed = Path(
+                self._run_dialog(editor, directory, ("", "")).call_args[0][2]
+            )
+            with patch(
+                "src.config.default_capture_save_directory", return_value=directory
+            ), patch(
+                "src.editor_window.QFileDialog.getSaveFileName",
+                return_value=(str(proposed), "JPEG Image (*.jpg *.jpeg)"),
+            ), patch.object(editor, "_ask_jpeg_quality", return_value=90):
+                editor.save_document()
+
+            written = editor._save_target
+            self.assertIsNotNone(written)
+            self.assertEqual(written[1], "jpg")
+            self.assertTrue(written[0].endswith(".jpg"))
+            self.assertTrue(Path(written[0]).is_file())
+            self.assertFalse(proposed.exists())
+
+    def test_a_typed_name_is_left_alone(self) -> None:
+        """
+        Ensures only the untouched proposal is re-interpreted, never a typed name.
+        """
+
+        editor = self._editor()
+        with TemporaryDirectory() as directory:
+            target = str(Path(directory) / "mine.png")
+            self._run_dialog(editor, directory, (target, "PNG Image (*.png)"))
+            self.assertEqual(editor._save_target, (target, "png"))
+
+
 if __name__ == "__main__":
     unittest.main()

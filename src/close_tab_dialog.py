@@ -38,16 +38,22 @@ def _force_button_order(box: QMessageBox, ordered: list[QAbstractButton]) -> Non
         layout.addWidget(button)
 
 
-def confirm_close_tab(parent: QWidget, message: str) -> bool:
+def confirm_close_tab(
+    parent: QWidget,
+    message: str,
+    confirm_label: str = "Close Tab",
+) -> bool:
     """
     Asks whether one editor tab with unsaved annotations may be closed.
 
     Args:
         parent: Owner widget for the dialog.
         message: Tab-specific warning text (image vs. video wording).
+        confirm_label: Text of the button that goes ahead, for a close that
+            also deletes something.
 
     Returns:
-        bool: True when the user chose to close the tab.
+        bool: True when the user chose to go ahead.
     """
 
     box = QMessageBox(parent)
@@ -58,7 +64,7 @@ def confirm_close_tab(parent: QWidget, message: str) -> bool:
     style = box.style()
     cancel_button = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
     cancel_button.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton))
-    close_button = box.addButton("Close Tab", QMessageBox.ButtonRole.DestructiveRole)
+    close_button = box.addButton(confirm_label, QMessageBox.ButtonRole.DestructiveRole)
     close_button.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
     box.setDefaultButton(cancel_button)
     _force_button_order(box, [cancel_button, close_button])

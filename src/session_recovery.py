@@ -27,12 +27,15 @@ class EditorSessionTab:
         recovery_path: Auto-save project file for the tab.
         source_path: Optional user project path when the tab was saved before.
         kind: Tab content type, ``image`` or ``video``.
+        capture_file: File in the capture folder that backs the tab, or empty
+            for a tab that was opened or created rather than captured.
     """
 
     title: str
     recovery_path: str
     source_path: str = ""
     kind: str = "image"
+    capture_file: str = ""
 
 
 def reset_workspace_root() -> None:
@@ -356,6 +359,7 @@ def save_editor_session(tabs: list[EditorSessionTab]) -> None:
                 "recovery_path": tab.recovery_path,
                 "source_path": tab.source_path,
                 "kind": tab.kind,
+                "capture_file": tab.capture_file,
             }
             for tab in tabs
             if tab.recovery_path.strip()
@@ -404,6 +408,7 @@ def load_editor_session() -> list[EditorSessionTab]:
                 source_path=str(entry.get("source_path", "")).strip(),
                 kind=str(entry.get("kind", tab_kind_from_recovery_path(recovery_path))).strip()
                 or tab_kind_from_recovery_path(recovery_path),
+                capture_file=str(entry.get("capture_file", "")).strip(),
             )
         )
     return tabs

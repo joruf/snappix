@@ -667,6 +667,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._refresh_element_panel()
         self._autosave_flushing = False
         self._recovery_dirty = False
+        self._capture_file = ""
         self._autosave_timer = self.startTimer(30_000)
 
     def _build_element_panel(self, parent: QWidget) -> QWidget:
@@ -5692,6 +5693,27 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         if self._write_document(file_path, format_key, ask=False):
             self.statusBar().showMessage(f"Saved {Path(file_path).name}", 4000)
 
+    def _suggested_save_path(self) -> str:
+        """
+        Proposes a time-stamped name for a document that was never saved.
+
+        The folder is the one the last project was saved in, else the capture
+        folder when it exists, else the user's home.
+
+        Returns:
+            str: Full path in the image format the dialog opens on.
+        """
+
+        from src.config import default_capture_save_directory
+        from src.post_capture_service import suggest_save_path
+
+        directory = Path.home()
+        if self._current_project_path:
+            directory = Path(self._current_project_path).parent
+        elif Path(default_capture_save_directory()).is_dir():
+            directory = Path(default_capture_save_directory())
+        return str(suggest_save_path(directory, SAVE_FORMATS[0][1]))
+
     def save_document_as(self) -> None:
         """
         Asks where and in which format to save.
@@ -5700,7 +5722,8 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
             None
         """
 
-        suggested = self._save_target[0] if self._save_target else ""
+        proposed = "" if self._save_target else self._suggested_save_path()
+        suggested = self._save_target[0] if self._save_target else proposed
         file_path, selected_filter = QFileDialog.getSaveFileName(
             self,
             "Save",
@@ -5709,6 +5732,10 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         )
         if not file_path:
             return
+        if proposed and file_path == proposed:
+            # The name was not touched, so its extension is only our guess: let the
+            # format picked in the dialog decide instead of the proposed ".png".
+            file_path = str(Path(file_path).with_suffix(""))
 
         file_path, format_key = self._resolve_save_format(file_path, selected_filter)
         if not self._write_document(file_path, format_key, ask=True):
@@ -5792,6 +5819,39 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._current_project_path = file_path
         self._update_window_title()
         self.statusBar().showMessage("Project loaded")
+
+    def set_capture_file(self, path: str) -> None:
+        """
+        Binds this tab to the file in the capture folder that backs it.
+
+        Args:
+            path: Capture file path, or empty for a tab without one.
+
+        Returns:
+            None
+        """
+
+        self._capture_file = path.strip()
+
+    def capture_file(self) -> str:
+        """
+        Returns the capture file backing this tab.
+
+        Returns:
+            str: Capture file path, empty when the tab has none.
+        """
+
+        return self._capture_file
+
+    def has_changes_since_capture(self) -> bool:
+        """
+        Reports whether the tab holds work that the capture file does not.
+
+        Returns:
+            bool: True when annotations exist or an edit is in the history.
+        """
+
+        return self.has_drawn_annotations() or self._history_index > 0
 
     def set_recovery_path(self, path: str) -> None:
         """

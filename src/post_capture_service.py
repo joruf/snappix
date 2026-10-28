@@ -146,6 +146,37 @@ def resolve_unique_path(
     return candidate
 
 
+def suggest_save_path(
+    directory: Path,
+    extension: str = ".png",
+    now: datetime | None = None,
+) -> Path:
+    """
+    Suggests a free file name for the Save dialog, stamped with the time.
+
+    The name reads ``snappix-2026-10-30-19-38-00.png``. When that file exists,
+    a counter follows the stamp (``...-00-1.png``, ``...-00-2.png``) so a
+    second save inside the same second never proposes an overwrite.
+
+    Args:
+        directory: Folder the dialog will open in.
+        extension: Extension including the dot, for the format on offer.
+        now: Timestamp to encode; defaults to the current time.
+
+    Returns:
+        Path: A path that does not exist yet.
+    """
+
+    stamp = (now or datetime.now()).strftime("%Y-%m-%d-%H-%M-%S")
+    base = f"snappix-{stamp}"
+    candidate = directory / f"{base}{extension}"
+    counter = 1
+    while candidate.exists():
+        candidate = directory / f"{base}-{counter}{extension}"
+        counter += 1
+    return candidate
+
+
 def save_capture_pixmap_to_directory(
     pixmap,
     directory: Path,

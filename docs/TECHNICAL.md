@@ -257,6 +257,20 @@ same listener.
 | `clipboard` | Copy pixmap |
 | `save` | PNG to configured or `~/Downloads/snappix/` |
 
+### Capture files
+
+A capture that opens as a tab is a file before the tab exists (`AppController._store_capture_file`, `_move_recording_to_capture_folder`); recordings leave the `tmp/` scratch folder for the capture folder when they finish. `src/capture_files.py` keeps a hidden index, `.snappix-captures.json`, in that folder: `{"files": [{"name", "kind", "recovery"}]}`. The index is the ownership record — only indexed files are restored as tabs, and only indexed files are ever deleted (`delete_capture` refuses anything else, and an entry name cannot leave the folder).
+
+| Event | Behavior |
+|-------|----------|
+| Capture opens a tab | File written and indexed, tab bound via `set_capture_file()`, path stored in `session.json` (`capture_file`) |
+| Tab X (`_close_editor_tab_with_capture`) | Tab, recovery data and file deleted; a tab with changes (`has_changes_since_capture()`) asks first |
+| Other close (`_close_current_editor_tab`) | File kept, entry dropped from the index so it is not restored |
+| Quit | Nothing deleted |
+| Start | Manifest tabs restored, then `_lost_capture_tabs()` finds indexed files without a tab: rebuilt from their recovery project when it survives, otherwise from the file |
+
+A video tab releases its player (`shutdown_playback`) before its file is deleted, because Windows cannot delete an open file.
+
 ## Editor Architecture
 
 ### Host

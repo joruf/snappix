@@ -145,14 +145,21 @@ class TestHandleCaptureResult(unittest.TestCase):
         Ensures any other configured action falls back to opening an editor tab.
         """
 
-        controller = _make_controller(post_capture_action="open_editor")
-        pixmap = QPixmap(10, 10)
-        pixmap.fill(QColor(255, 255, 0))
+        with tempfile.TemporaryDirectory() as directory:
+            controller = _make_controller(
+                post_capture_action="open_editor", save_directory=Path(directory)
+            )
+            pixmap = QPixmap(10, 10)
+            pixmap.fill(QColor(255, 255, 0))
 
-        controller._handle_capture_result(pixmap)
+            controller._handle_capture_result(pixmap)
 
-        controller._create_editor_tab.assert_called_once()
-        controller.capture_panel.show.assert_called_once()
+            controller._create_editor_tab.assert_called_once()
+            controller.capture_panel.show.assert_called_once()
+            # The capture is a file before its tab exists: the tab is handed it.
+            handed = controller._create_editor_tab.call_args.kwargs["capture_file"]
+            self.assertEqual(Path(handed).parent, Path(directory))
+            self.assertTrue(Path(handed).is_file())
 
 
 if __name__ == "__main__":

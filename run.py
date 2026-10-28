@@ -934,7 +934,7 @@ class AppController:
         self.editor_tabs.setTabBar(TabBarWithTrailingButton(reposition_new_tab_corner_button))
         reposition_new_tab_corner_button()
         self.editor_tabs.setTabsClosable(True)
-        self.editor_tabs.tabCloseRequested.connect(self._close_editor_tab_by_index)
+        self.editor_tabs.tabCloseRequested.connect(self._close_editor_tab_with_capture)
         self.editor_empty_state = QWidget(self.editor_stack)
         empty_layout = QVBoxLayout(self.editor_empty_state)
         empty_layout.setContentsMargins(40, 40, 40, 40)
@@ -1337,7 +1337,39 @@ class AppController:
 
         width = rect.width() if rect is not None else 0
         height = rect.height() if rect is not None else 0
-        self._create_video_editor_tab(output_path, width, height, "Recording")
+        capture_file = self._move_recording_to_capture_folder(output_path)
+        self._create_video_editor_tab(
+            capture_file or output_path,
+            width,
+            height,
+            "Recording",
+            capture_file=capture_file,
+        )
+
+    def _move_recording_to_capture_folder(self, output_path: str) -> str:
+        """
+        Moves a finished recording out of the scratch folder into the capture folder.
+
+        Args:
+            output_path: Path of the finalized recording.
+
+        Returns:
+            str: New path, or empty when the file could not be moved; the tab
+            then plays it where it is, without a backing file.
+        """
+
+        try:
+            source = Path(output_path)
+            target = self._capture_save_directory() / source.name
+            counter = 1
+            while target.exists():
+                target = target.with_name(f"{source.stem}-{counter}{source.suffix}")
+                counter += 1
+            shutil.move(str(source), str(target))
+        except OSError as exc:
+            print(f"Snappix: could not store the recording: {exc}", file=sys.stderr)
+            return ""
+        return str(target)
 
     def _recording_fits_editor_limit(self, output_path: str) -> bool:
         """
@@ -1385,6 +1417,7 @@ class AppController:
         recovery_path: str = "",
         source_path: str = "",
         persist_session: bool = True,
+        capture_file: str = "",
     ):
         """
         Creates one video editor tab for a recorded video and focuses the editor host.
@@ -1397,6 +1430,7 @@ class AppController:
             recovery_path: Optional existing recovery project path.
             source_path: Optional user project path for the tab.
             persist_session: When True, flush and persist the editor session.
+            capture_file: File in the capture folder that backs the tab.
 
         Returns:
             VideoEditorWindow: Created video editor instance.
@@ -1425,6 +1459,7 @@ class AppController:
             emit_signal=False,
         )
         editor.set_recovery_path(recovery_path or create_video_tab_recovery_path())
+        self._bind_capture_file(editor, capture_file, "video")
         editor.prepare_recovery_assets()
         editor.import_image_tab_requested.connect(
             lambda: self.import_image_as_new_tab(editor),
@@ -1645,13 +1680,22 @@ class AppController:
             Path: Existing or newly created save directory.
         """
 
-        configured = self.config.capture_save_directory.strip()
-        if configured:
-            target = Path(configured).expanduser()
-        else:
-            target = Path(default_capture_save_directory())
+        target = self._capture_directory_path()
         target.mkdir(parents=True, exist_ok=True)
         return target
+
+    def _capture_directory_path(self) -> Path:
+        """
+        Returns the capture folder without creating it.
+
+        Returns:
+            Path: Configured or default capture folder, which may not exist yet.
+        """
+
+        configured = self.config.capture_save_directory.strip()
+        if configured:
+            return Path(configured).expanduser()
+        return Path(default_capture_save_directory())
 
     def _save_capture_pixmap(self, pixmap) -> Path | None:
         """
@@ -1729,8 +1773,28 @@ class AppController:
         self._create_editor_tab(
             pixmap,
             f"Screenshot {self.editor_tabs.count() + 1}",
+            capture_file=self._store_capture_file(pixmap),
         )
         self.capture_panel.show()
+
+    def _store_capture_file(self, pixmap) -> str:
+        """
+        Writes a capture to the capture folder at once, before its tab opens.
+
+        Args:
+            pixmap: Captured screenshot pixmap.
+
+        Returns:
+            str: Path of the written file, empty when it could not be written;
+            the tab then opens without a backing file instead of losing the shot.
+        """
+
+        try:
+            saved_path = self._save_capture_pixmap(pixmap)
+        except OSError as exc:
+            print(f"Snappix: could not store the capture: {exc}", file=sys.stderr)
+            return ""
+        return str(saved_path) if saved_path is not None else ""
 
     def _sync_theme_tray_actions(self, theme_name: str) -> None:
         """
@@ -2097,6 +2161,7 @@ class AppController:
         recovery_path: str = "",
         source_path: str = "",
         persist_session: bool = True,
+        capture_file: str = "",
     ) -> "EditorWindow":
         """
         Creates one editor tab for a screenshot and focuses editor host.
@@ -2107,6 +2172,7 @@ class AppController:
             recovery_path: Optional existing recovery project path.
             source_path: Optional source project path for the tab.
             persist_session: When True, flush and persist the editor session.
+            capture_file: File in the capture folder that backs the tab.
 
         Returns:
             EditorWindow: Created editor instance.
@@ -2118,6 +2184,7 @@ class AppController:
 
         editor = EditorWindow(screenshot)
         editor.set_recovery_path(recovery_path or create_tab_recovery_path())
+        self._bind_capture_file(editor, capture_file, "image")
         editor.set_theme_selection(self.config.theme)
         editor.set_export_preset(self.config.export_preset, emit_signal=False)
         editor.set_export_scale(self.config.export_scale)
@@ -2191,6 +2258,26 @@ class AppController:
             self._initialize_tab_recovery(editor)
         return editor
 
+    def _bind_capture_file(self, editor, capture_file: str, kind: str) -> None:
+        """
+        Ties a tab to its capture file and records the file in the folder index.
+
+        Args:
+            editor: Editor tab widget.
+            capture_file: Capture file path; empty for a tab without one.
+            kind: ``image`` or ``video``.
+
+        Returns:
+            None
+        """
+
+        if not capture_file:
+            return
+        from src.capture_files import register_capture
+
+        editor.set_capture_file(capture_file)
+        register_capture(capture_file, kind, editor.recovery_path())
+
     def _flush_editor_tab_recovery(self, editor) -> None:
         """
         Writes one editor tab state to its recovery project file.
@@ -2253,6 +2340,7 @@ class AppController:
                     recovery_path=recovery_path,
                     source_path=str(source_path or ""),
                     kind=kind or tab_kind_from_recovery_path(recovery_path),
+                    capture_file=str(getattr(editor, "_capture_file", "") or ""),
                 )
             )
         return tabs
@@ -2291,16 +2379,19 @@ class AppController:
         from src.storage import base64_png_to_pixmap, load_project
         from src.video_storage import load_video_project
 
-        if not EditorWindow.has_recovery_snapshot():
-            return
+        session_tabs = []
+        if EditorWindow.has_recovery_snapshot():
+            session_tabs = load_editor_session()
+            if not session_tabs:
+                legacy_tab = load_legacy_recovery_tab()
+                if legacy_tab is not None:
+                    session_tabs = [legacy_tab]
 
-        session_tabs = load_editor_session()
-        if not session_tabs:
-            legacy_tab = load_legacy_recovery_tab()
-            if legacy_tab is not None:
-                session_tabs = [legacy_tab]
-
-        if not session_tabs:
+        # Captures whose tab got lost come back too: the folder is searched
+        # for files Snappix made that no restored tab is showing.
+        lost_tabs, lost_files = self._lost_capture_tabs(session_tabs)
+        session_tabs = [*session_tabs, *lost_tabs]
+        if not session_tabs and not lost_files:
             return
 
         restored_count = 0
@@ -2327,6 +2418,7 @@ class AppController:
                     recovery_path=tab_entry.recovery_path,
                     source_path=tab_entry.source_path,
                     persist_session=False,
+                    capture_file=self._existing_capture_file(tab_entry.capture_file),
                 )
                 editor.load_video_project_model(project_model, tab_entry.source_path)
                 editor.flush_initial_recovery_snapshot()
@@ -2346,10 +2438,15 @@ class AppController:
                 recovery_path=tab_entry.recovery_path,
                 source_path=tab_entry.source_path,
                 persist_session=False,
+                capture_file=self._existing_capture_file(tab_entry.capture_file),
             )
             editor.load_project_model(recovered_model, tab_entry.source_path)
             editor.flush_initial_recovery_snapshot()
             restored_count += 1
+
+        for lost_entry in lost_files:
+            if self._open_capture_file_tab(lost_entry, recovery_errors):
+                restored_count += 1
 
         self._report_recovery_errors(recovery_errors)
 
@@ -2358,6 +2455,117 @@ class AppController:
 
         self._show_editor_host()
         self._save_editor_session()
+
+    @staticmethod
+    def _existing_capture_file(capture_file: str) -> str:
+        """
+        Drops a capture file that has been removed from the folder meanwhile.
+
+        Args:
+            capture_file: Path stored with a tab.
+
+        Returns:
+            str: The path while the file exists, otherwise empty.
+        """
+
+        return capture_file if capture_file and os.path.isfile(capture_file) else ""
+
+    def _lost_capture_tabs(self, session_tabs: list) -> tuple[list, list]:
+        """
+        Finds captures in the folder that no restored tab is going to show.
+
+        Args:
+            session_tabs: Tabs the saved session brings back.
+
+        Returns:
+            tuple[list, list]: Captures that still have a recovery project, as
+            session tabs that keep their annotations, and the remaining ones,
+            which can only be reopened from their file.
+        """
+
+        from src.capture_files import registered_captures
+        from src.session_recovery import EditorSessionTab
+
+        shown_files = {
+            os.path.normpath(tab.capture_file) for tab in session_tabs if tab.capture_file
+        }
+        shown_recoveries = {os.path.normpath(tab.recovery_path) for tab in session_tabs}
+        shown_files.update(
+            os.path.normpath(str(getattr(editor, "_capture_file", "")))
+            for editor in self.editors + self.video_editors
+        )
+
+        with_recovery: list = []
+        file_only: list = []
+        for entry in registered_captures(self._capture_directory_path()):
+            if os.path.normpath(str(entry.path)) in shown_files:
+                continue
+            recovery = entry.recovery_path
+            usable = (
+                bool(recovery)
+                and os.path.normpath(recovery) not in shown_recoveries
+                and os.path.isfile(recovery)
+                and os.path.getsize(recovery) > 0
+            )
+            if usable:
+                with_recovery.append(
+                    EditorSessionTab(
+                        title=entry.path.name,
+                        recovery_path=recovery,
+                        kind=entry.kind,
+                        capture_file=str(entry.path),
+                    )
+                )
+            else:
+                file_only.append(entry)
+        return with_recovery, file_only
+
+    def _open_capture_file_tab(self, entry, errors: list[str]) -> bool:
+        """
+        Opens a tab from a capture file alone, for when its recovery data is gone.
+
+        Args:
+            entry: Capture entry from the folder index.
+            errors: Collects a message when the file cannot be opened.
+
+        Returns:
+            bool: True when a tab was created.
+        """
+
+        from src.capture_files import KIND_VIDEO
+
+        path = str(entry.path)
+        if entry.kind == KIND_VIDEO:
+            from src.media_import import probe_video_file
+            from src.video_recorder import has_ffmpeg
+
+            probe = probe_video_file(path) if has_ffmpeg() else None
+            if probe is None:
+                errors.append(f"{entry.path.name}: the video could not be read")
+                return False
+            self._create_video_editor_tab(
+                path,
+                probe.width,
+                probe.height,
+                entry.path.name,
+                persist_session=False,
+                capture_file=path,
+            )
+            return True
+
+        from PySide6.QtGui import QPixmap
+
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            errors.append(f"{entry.path.name}: the image could not be read")
+            return False
+        self._create_editor_tab(
+            pixmap,
+            entry.path.name,
+            persist_session=False,
+            capture_file=path,
+        )
+        return True
 
     def _report_recovery_errors(self, errors: list[str]) -> None:
         """
@@ -3318,9 +3526,13 @@ class AppController:
         )
         self.editor_host.resize(width, height)
         fit_top_level_window_to_available(self.editor_host)
-    def _close_editor_tab_by_index(self, index: int) -> None:
+    def _close_editor_tab_with_capture(self, index: int) -> None:
         """
-        Closes one editor tab and disposes its resources.
+        Closes a tab through its X button, which also deletes its capture file.
+
+        A capture is a file the moment it is taken, so closing its tab with the
+        X throws it away without asking -- unless the tab holds changes, which
+        are confirmed first. Tabs without a capture file close as they always did.
 
         Args:
             index: Target tab index.
@@ -3332,9 +3544,59 @@ class AppController:
         tab_widget = self.editor_tabs.widget(index)
         if tab_widget is None:
             return
+        capture_file = str(getattr(tab_widget, "_capture_file", "") or "")
+        if capture_file:
+            try:
+                changed = tab_widget.has_changes_since_capture()
+            except RuntimeError:
+                return
+            if changed:
+                from src.close_tab_dialog import confirm_close_tab
+
+                if not confirm_close_tab(
+                    tab_widget,
+                    "This capture has changes. Closing it deletes the capture "
+                    "file from the Snappix folder as well. Delete it?",
+                    "Delete",
+                ):
+                    return
+        self._close_editor_tab_by_index(
+            index,
+            delete_capture=bool(capture_file),
+            confirmed=bool(capture_file),
+        )
+
+    def _close_editor_tab_by_index(
+        self,
+        index: int,
+        *,
+        delete_capture: bool = False,
+        confirmed: bool = False,
+    ) -> None:
+        """
+        Closes one editor tab and disposes its resources.
+
+        Args:
+            index: Target tab index.
+            delete_capture: True to delete the tab's capture file as well.
+                Otherwise the file stays but is no longer brought back as a tab.
+            confirmed: True when the caller has already asked, so the
+                annotation prompt is skipped.
+
+        Returns:
+            None
+        """
+
+        tab_widget = self.editor_tabs.widget(index)
+        if tab_widget is None:
+            return
         if not self._is_quitting:
             try:
-                if hasattr(tab_widget, "confirm_close_if_needed") and not tab_widget.confirm_close_if_needed():
+                if (
+                    not confirmed
+                    and hasattr(tab_widget, "confirm_close_if_needed")
+                    and not tab_widget.confirm_close_if_needed()
+                ):
                     return
             except RuntimeError:
                 return
@@ -3346,6 +3608,7 @@ class AppController:
                 from src.session_recovery import delete_tab_recovery_data
 
                 delete_tab_recovery_data(recovery_path)
+            self._release_capture_file(tab_widget, delete=delete_capture)
         self.editor_tabs.removeTab(index)
         if tab_widget in self.editors:
             self.editors.remove(tab_widget)
@@ -3360,6 +3623,40 @@ class AppController:
             else:
                 self._save_editor_session()
         self._handle_empty_editor_tabs()
+
+    @staticmethod
+    def _release_capture_file(tab_widget, *, delete: bool) -> None:
+        """
+        Lets go of a closed tab's capture file.
+
+        Args:
+            tab_widget: The closed tab.
+            delete: True to delete the file, False to keep it.
+
+        Returns:
+            None
+        """
+
+        from src.capture_files import delete_capture, unregister_capture
+
+        try:
+            capture_file = str(getattr(tab_widget, "_capture_file", "") or "")
+        except RuntimeError:
+            return
+        if not capture_file:
+            return
+        if delete:
+            # A playing video holds its file open, and Windows will not delete
+            # a file that is still open.
+            release = getattr(tab_widget, "shutdown_playback", None)
+            if callable(release):
+                try:
+                    release()
+                except RuntimeError:
+                    pass
+            delete_capture(capture_file)
+        else:
+            unregister_capture(capture_file)
 
     def _close_current_editor_tab(self) -> None:
         """
