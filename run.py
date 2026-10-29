@@ -38,7 +38,6 @@ _prepare_linux_session_env()
 
 from src.autostart import AutostartManager
 from src.config import (
-    EDITOR_LAST_TAB_CLOSE_WINDOW,
     POST_CAPTURE_CLIPBOARD,
     POST_CAPTURE_SAVE,
     AppConfig,
@@ -2804,13 +2803,16 @@ class AppController:
 
         self._capture_in_progress = True
         self._hide_windows_for_capture()
+        self._minimize_editor_for_capture()
 
         def on_capture_done(pixmap) -> None:
             self._capture_in_progress = False
+            self._restore_editor_after_capture()
             self._handle_capture_result(pixmap)
 
         def on_capture_cancelled() -> None:
             self._capture_in_progress = False
+            self._restore_editor_after_capture()
             self.capture_panel.show()
             self.capture_panel.raise_()
 
@@ -2819,6 +2821,42 @@ class AppController:
             on_capture=on_capture_done,
             on_cancel=on_capture_cancelled,
         )
+
+    def _minimize_editor_for_capture(self) -> None:
+        """
+        Minimizes the editor while a screenshot is taken.
+
+        An open editor otherwise covers part of what a quick capture is meant
+        to photograph. An editor that is not showing, or already minimized, is
+        left alone and stays that way afterwards.
+
+        Returns:
+            None
+        """
+
+        from PySide6.QtWidgets import QApplication
+
+        host = self.editor_host
+        self._editor_minimized_for_capture = False
+        if not host.isVisible() or host.isMinimized():
+            return
+        host.showMinimized()
+        self._editor_minimized_for_capture = True
+        # Flush it through Qt before the compositor settle timer starts.
+        QApplication.processEvents()
+
+    def _restore_editor_after_capture(self) -> None:
+        """
+        Brings the editor back once the screenshot is done, so it can be looked at.
+
+        Returns:
+            None
+        """
+
+        if not getattr(self, "_editor_minimized_for_capture", False):
+            return
+        self._editor_minimized_for_capture = False
+        self._show_editor_host()
 
     def _hide_windows_for_capture(self) -> None:
         """
@@ -3419,13 +3457,18 @@ class AppController:
             None
         """
 
-        from PySide6.QtCore import QTimer
+        from PySide6.QtCore import QTimer, Qt
         from src.platform import raise_qt_window
 
         self._sync_editor_host_view()
         self._apply_editor_taskbar_identity()
         self._ensure_editor_host_geometry()
         self.editor_host.show()
+        if self.editor_host.isMinimized():
+            # show() alone leaves a minimized window minimized.
+            self.editor_host.setWindowState(
+                self.editor_host.windowState() & ~Qt.WindowState.WindowMinimized
+            )
         self.editor_host.raise_()
         self.editor_host.activateWindow()
         raise_qt_window(self.editor_host)
@@ -3708,7 +3751,7 @@ class AppController:
 
     def _handle_empty_editor_tabs(self) -> None:
         """
-        Applies configured behavior when no editor tabs remain open.
+        Closes the whole editor when its last tab is gone.
 
         Returns:
             None
@@ -3717,11 +3760,10 @@ class AppController:
         self._sync_editor_host_view()
         if self.editor_tabs.count() != 0:
             return
-        if self.config.editor_last_tab_behavior == EDITOR_LAST_TAB_CLOSE_WINDOW:
-            self.editor_host.hide()
-            self.capture_panel.show()
-            self.capture_panel.raise_()
-            self._apply_capture_taskbar_identity()
+        self.editor_host.hide()
+        self.capture_panel.show()
+        self.capture_panel.raise_()
+        self._apply_capture_taskbar_identity()
 
     def _on_editor_host_close(self) -> None:
         """

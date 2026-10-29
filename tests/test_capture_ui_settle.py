@@ -326,6 +326,8 @@ class TestCapturePanelHiddenBeforeCapture(unittest.TestCase):
         self.controller.tray_icon = MagicMock()
         self.controller.capture_panel = QWidget()
         self.controller.capture_panel.show()
+        # A closed editor, which a capture must leave alone.
+        self.controller.editor_host = QWidget()
         QApplication.processEvents()
         self.assertTrue(self.controller.capture_panel.isVisible())
 

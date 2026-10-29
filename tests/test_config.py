@@ -12,10 +12,8 @@ from src.config import (
     DEFAULT_EXPORT_PRESET,
     DEFAULT_EXPORT_SCALE,
     DEFAULT_HOTKEY_CAPTURE_REGION,
-    DEFAULT_EDITOR_LAST_TAB_BEHAVIOR,
     AppConfig,
     ConfigManager,
-    normalize_editor_last_tab_behavior,
     normalize_export_preset,
     normalize_export_scale,
     normalize_hotkey_spec,
@@ -42,10 +40,6 @@ class TestConfigManager(unittest.TestCase):
             self.assertEqual(config.theme, "dark")
             self.assertTrue(config.hotkeys_enabled)
             self.assertEqual(config.hotkey_capture_region, DEFAULT_HOTKEY_CAPTURE_REGION)
-            self.assertEqual(
-                config.editor_last_tab_behavior,
-                DEFAULT_EDITOR_LAST_TAB_BEHAVIOR,
-            )
             self.assertEqual(config.export_preset, DEFAULT_EXPORT_PRESET)
             self.assertTrue(config.batch_export_profiles)
             self.assertEqual(config.batch_export_profile_key, "docs_hq")
@@ -68,10 +62,6 @@ class TestConfigManager(unittest.TestCase):
             self.assertEqual(config.theme, "dark")
             self.assertTrue(config.hotkeys_enabled)
             self.assertEqual(config.hotkey_capture_region, DEFAULT_HOTKEY_CAPTURE_REGION)
-            self.assertEqual(
-                config.editor_last_tab_behavior,
-                DEFAULT_EDITOR_LAST_TAB_BEHAVIOR,
-            )
             self.assertEqual(config.export_preset, DEFAULT_EXPORT_PRESET)
             self.assertTrue(config.batch_export_profiles)
             self.assertEqual(config.batch_export_profile_key, "docs_hq")
@@ -114,7 +104,6 @@ class TestConfigManager(unittest.TestCase):
                     theme=THEME_LIGHT,
                     post_capture_action="clipboard",
                     hotkey_capture_window="ctrl+shift+w",
-                    editor_last_tab_behavior="close_window",
                     export_preset="print",
                     export_scale=2.0,
                     export_keep_transparency=False,
@@ -140,7 +129,6 @@ class TestConfigManager(unittest.TestCase):
             self.assertEqual(restored.theme, THEME_LIGHT)
             self.assertEqual(restored.post_capture_action, "clipboard")
             self.assertEqual(restored.hotkey_capture_window, "ctrl+shift+w")
-            self.assertEqual(restored.editor_last_tab_behavior, "close_window")
             self.assertEqual(restored.export_preset, "print")
             self.assertEqual(restored.export_scale, 2.0)
             self.assertFalse(restored.export_keep_transparency)
@@ -167,14 +155,6 @@ class TestConfigManager(unittest.TestCase):
 
         self.assertEqual(normalize_post_capture_action("clipboard"), "clipboard")
         self.assertEqual(normalize_post_capture_action("unknown"), "editor")
-
-    def test_normalize_editor_last_tab_behavior_falls_back_to_default(self) -> None:
-        """
-        Ensures invalid last-tab behaviors fall back to keep_open.
-        """
-
-        self.assertEqual(normalize_editor_last_tab_behavior("close_window"), "close_window")
-        self.assertEqual(normalize_editor_last_tab_behavior("invalid"), "keep_open")
 
     def test_normalize_export_preset_falls_back_to_default(self) -> None:
         """

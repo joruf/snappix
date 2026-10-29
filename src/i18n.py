@@ -191,7 +191,6 @@ GERMAN: dict[str, str] = {
     "File name:": "Dateiname:",
     "Save folder:": "Speicherordner:",
     "Workspace folder:": "Arbeitsordner:",
-    "When last tab closes:": "Wenn der letzte Tab schließt:",
     "Selection handle size:": "Größe der Anfasser:",
     "Selection handle position:": "Position der Anfasser:",
     "Auto-crop canvas when content shrinks": "Leinwand automatisch beschneiden",

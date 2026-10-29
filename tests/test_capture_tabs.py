@@ -70,6 +70,12 @@ class CaptureTabCase(unittest.TestCase):
         modal.start()
         self.addCleanup(modal.stop)
 
+        # A real manager would grab global hotkeys on whatever desktop runs the
+        # tests, and its listener threads sometimes block on the X server.
+        hotkeys = patch("src.global_hotkeys.GlobalHotkeyManager", MagicMock())
+        hotkeys.start()
+        self.addCleanup(hotkeys.stop)
+
         from src.theme import current_theme_name, set_current_theme
 
         self.addCleanup(set_current_theme, current_theme_name())
@@ -103,7 +109,6 @@ class CaptureTabCase(unittest.TestCase):
         """
 
         controller._is_quitting = True
-        controller._hotkey_manager.stop()
         while controller.editor_tabs.count() > 0:
             controller._close_editor_tab_by_index(0)
         controller.tray_icon.hide()
@@ -561,6 +566,157 @@ class TestRecordings(CaptureTabCase):
 
         self.assertEqual(order, ["release:True"])
         self.assertFalse(clip.exists())
+
+
+class TestEditorWindowAroundCaptures(CaptureTabCase):
+    """
+    Verifies when the whole editor goes away and comes back.
+    """
+
+    def _start_capture(self, controller):
+        """
+        Starts a screenshot with the grab itself stubbed out.
+
+        Args:
+            controller: Controller under test.
+
+        Returns:
+            dict: The ``on_capture`` and ``on_cancel`` callbacks the capture got.
+        """
+
+        from src.capture import CaptureMode, CaptureRequest
+
+        callbacks: dict = {}
+
+        def fake_execute(*, request, on_capture, on_cancel) -> None:
+            callbacks["capture"] = on_capture
+            callbacks["cancel"] = on_cancel
+
+        with patch("src.capture.execute_capture_request", fake_execute):
+            controller.start_capture(CaptureRequest(mode=CaptureMode.REGION, delay_seconds=0))
+        return callbacks
+
+    def test_closing_the_last_tab_closes_the_editor(self) -> None:
+        """
+        Ensures no empty editor window is left behind.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        self.assertTrue(controller.editor_host.isVisible())
+
+        controller._close_editor_tab_with_capture(0)
+
+        self.assertFalse(controller.editor_host.isVisible())
+        self.assertTrue(controller.capture_panel.isVisible())
+
+    def test_closing_a_tab_with_others_left_keeps_the_editor(self) -> None:
+        """
+        Ensures only the last tab takes the window with it.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        self._capture(controller)
+
+        controller._close_editor_tab_with_capture(0)
+
+        self.assertEqual(controller.editor_tabs.count(), 1)
+        self.assertTrue(controller.editor_host.isVisible())
+
+    def test_the_editor_is_minimized_while_a_screenshot_is_taken(self) -> None:
+        """
+        Ensures an open editor cannot cover what the capture is meant to grab.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        self.assertFalse(controller.editor_host.isMinimized())
+
+        self._start_capture(controller)
+
+        self.assertTrue(controller.editor_host.isMinimized())
+
+    def test_the_editor_returns_once_the_screenshot_is_done(self) -> None:
+        """
+        Ensures the finished screenshot is on screen to be looked at.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        callbacks = self._start_capture(controller)
+        pixmap = QPixmap(50, 40)
+        pixmap.fill(QColor(0, 120, 0))
+
+        callbacks["capture"](pixmap)
+        self._app.processEvents()
+
+        self.assertFalse(controller.editor_host.isMinimized())
+        self.assertTrue(controller.editor_host.isVisible())
+        self.assertEqual(controller.editor_tabs.count(), 2)
+
+    def test_the_editor_returns_when_the_screenshot_goes_to_the_clipboard(self) -> None:
+        """
+        Ensures the editor comes back even when no new tab opens.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        controller.config.post_capture_action = "clipboard"
+        callbacks = self._start_capture(controller)
+        pixmap = QPixmap(50, 40)
+        pixmap.fill(QColor(0, 120, 0))
+
+        callbacks["capture"](pixmap)
+        self._app.processEvents()
+
+        self.assertEqual(controller.editor_tabs.count(), 1)
+        self.assertFalse(controller.editor_host.isMinimized())
+
+    def test_the_editor_returns_after_a_cancelled_screenshot(self) -> None:
+        """
+        Ensures cancelling leaves the editor as it was.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        callbacks = self._start_capture(controller)
+
+        callbacks["cancel"]()
+        self._app.processEvents()
+
+        self.assertFalse(controller.editor_host.isMinimized())
+        self.assertTrue(controller.editor_host.isVisible())
+
+    def test_a_closed_editor_is_not_opened_by_a_screenshot_that_is_cancelled(self) -> None:
+        """
+        Ensures only an editor that was showing is brought back.
+        """
+
+        controller = self._controller()
+        self.assertFalse(controller.editor_host.isVisible())
+        callbacks = self._start_capture(controller)
+
+        callbacks["cancel"]()
+        self._app.processEvents()
+
+        self.assertFalse(controller.editor_host.isVisible())
+
+    def test_an_editor_the_user_minimized_stays_minimized(self) -> None:
+        """
+        Ensures the capture does not pop up a window the user put away.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        controller.editor_host.showMinimized()
+        self._app.processEvents()
+        callbacks = self._start_capture(controller)
+
+        callbacks["cancel"]()
+        self._app.processEvents()
+
+        self.assertTrue(controller.editor_host.isMinimized())
 
 
 if __name__ == "__main__":

@@ -43,7 +43,6 @@ def build_settings_icon(icon_id: str, *, size: int = 18) -> QIcon:
         "after_capture": _paint_after_capture,
         "language": _paint_language,
         "screenshot_source": _paint_screenshot_source,
-        "last_tab": _paint_last_tab,
         "canvas": _paint_canvas,
         "handle_size": _paint_handle_size,
         "handle_position": _paint_handle_position,
@@ -241,16 +240,6 @@ def _paint_screenshot_source(painter: QPainter) -> None:
     painter.drawEllipse(QRectF(6.5, 7.5, 5.0, 5.0))
     painter.setBrush(QBrush(_ACCENT))
     painter.drawEllipse(QRectF(7.8, 8.8, 2.4, 2.4))
-
-
-def _paint_last_tab(painter: QPainter) -> None:
-    painter.setPen(_stroke(1.3))
-    painter.setBrush(QBrush(_ACCENT_FILL))
-    painter.drawRoundedRect(QRectF(2.0, 4.0, 8.0, 4.0), 0.8, 0.8)
-    painter.drawRoundedRect(QRectF(2.0, 8.5, 14.0, 6.0), 1.0, 1.0)
-    painter.setPen(_accent(1.4))
-    painter.drawLine(QPointF(12.0, 4.5), QPointF(15.5, 8.0))
-    painter.drawLine(QPointF(15.5, 4.5), QPointF(12.0, 8.0))
 
 
 def _paint_canvas(painter: QPainter) -> None:

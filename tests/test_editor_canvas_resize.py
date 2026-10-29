@@ -421,23 +421,55 @@ class TestEditorCanvasResize(unittest.TestCase):
         self.assertEqual(len(collected), 1)
         self.assertEqual(collected[0].annotation_type, "rect")
 
-    def test_initial_view_fits_tall_screenshot_in_viewport(self) -> None:
+    def test_initial_view_shows_a_large_screenshot_at_original_size(self) -> None:
         """
-        Ensures very tall screenshots are fully visible after initial fit.
+        Ensures a screenshot bigger than the viewport is not scaled down.
         """
 
         canvas = EditorCanvas()
         canvas.resize(420, 320)
         canvas.show()
         QApplication.processEvents()
-        canvas.set_screenshot(_solid_pixmap(240, 2400))
+        zoom_values: list[float] = []
+        canvas.zoom_changed.connect(zoom_values.append)
+        canvas.set_screenshot(_solid_pixmap(1600, 2400))
         canvas._apply_initial_screenshot_view()  # pylint: disable=protected-access
 
+        self.assertAlmostEqual(canvas.transform().m11(), 1.0)
+        self.assertEqual(zoom_values[-1], 1.0)
         visible_rect = canvas.mapToScene(canvas.viewport().rect()).boundingRect()
-        document_rect = canvas.document_rect()
-        self.assertGreaterEqual(visible_rect.width(), document_rect.width() * 0.95)
-        self.assertGreaterEqual(visible_rect.height(), document_rect.height() * 0.95)
-        self.assertLessEqual(canvas.transform().m11(), 1.0)
+        self.assertTrue(visible_rect.contains(0.0, 0.0), "starts at the top-left corner")
+        self.assertLess(visible_rect.width(), canvas.document_rect().width())
+
+    def test_initial_view_keeps_a_small_screenshot_at_original_size(self) -> None:
+        """
+        Ensures a screenshot that fits is shown at 100% as well.
+        """
+
+        canvas = EditorCanvas()
+        canvas.resize(420, 320)
+        canvas.show()
+        QApplication.processEvents()
+        canvas.set_screenshot(_solid_pixmap(100, 80))
+        canvas._apply_initial_screenshot_view()  # pylint: disable=protected-access
+
+        self.assertAlmostEqual(canvas.transform().m11(), 1.0)
+
+    def test_reset_zoom_still_fits_the_document(self) -> None:
+        """
+        Ensures fitting remains available as an explicit action.
+        """
+
+        canvas = EditorCanvas()
+        canvas.resize(420, 320)
+        canvas.show()
+        QApplication.processEvents()
+        canvas.set_screenshot(_solid_pixmap(1600, 2400))
+        canvas._apply_initial_screenshot_view()  # pylint: disable=protected-access
+        canvas.reset_zoom()
+
+        visible_rect = canvas.mapToScene(canvas.viewport().rect()).boundingRect()
+        self.assertGreaterEqual(visible_rect.height(), canvas.document_rect().height() * 0.95)
 
     def test_resize_selected_image_updates_scale(self) -> None:
         """

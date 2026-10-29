@@ -151,20 +151,6 @@ CAPTURE_BACKENDS = {
     CAPTURE_BACKEND_EXTERNAL: "External tool only",
 }
 
-EDITOR_LAST_TAB_KEEP_OPEN = "keep_open"
-EDITOR_LAST_TAB_CLOSE_WINDOW = "close_window"
-DEFAULT_EDITOR_LAST_TAB_BEHAVIOR = EDITOR_LAST_TAB_KEEP_OPEN
-VALID_EDITOR_LAST_TAB_BEHAVIORS = frozenset(
-    {
-        EDITOR_LAST_TAB_KEEP_OPEN,
-        EDITOR_LAST_TAB_CLOSE_WINDOW,
-    }
-)
-EDITOR_LAST_TAB_BEHAVIORS = {
-    EDITOR_LAST_TAB_KEEP_OPEN: "Keep editor window open",
-    EDITOR_LAST_TAB_CLOSE_WINDOW: "Close editor window",
-}
-
 EXPORT_PRESET_WEB = "web"
 EXPORT_PRESET_DOCS = "docs"
 EXPORT_PRESET_PRINT = "print"
@@ -495,22 +481,6 @@ def normalize_capture_backend(backend: str) -> str:
     return DEFAULT_CAPTURE_BACKEND
 
 
-def normalize_editor_last_tab_behavior(behavior: str) -> str:
-    """
-    Returns a supported editor behavior for closing the last tab.
-
-    Args:
-        behavior: Requested last-tab behavior identifier.
-
-    Returns:
-        str: Valid last-tab behavior.
-    """
-
-    if behavior in VALID_EDITOR_LAST_TAB_BEHAVIORS:
-        return behavior
-    return DEFAULT_EDITOR_LAST_TAB_BEHAVIOR
-
-
 def normalize_export_preset(preset: str) -> str:
     """
     Returns a supported export preset identifier.
@@ -627,7 +597,6 @@ class AppConfig:
         language: Interface language (system, en, or de).
         capture_save_directory: Optional folder for automatic capture saves.
         workspace_directory: Folder for unsaved editor tabs and session recovery data.
-        editor_last_tab_behavior: Behavior when the last editor tab is closed.
         export_preset: Preferred export quality preset.
         export_scale: Preferred export scale factor (1.0, 2.0, or 3.0).
         export_keep_transparency: Whether PNG exports preserve alpha by default.
@@ -662,7 +631,6 @@ class AppConfig:
     language: str = DEFAULT_LANGUAGE
     capture_save_directory: str = ""
     workspace_directory: str = ""
-    editor_last_tab_behavior: str = DEFAULT_EDITOR_LAST_TAB_BEHAVIOR
     export_preset: str = DEFAULT_EXPORT_PRESET
     export_scale: float = DEFAULT_EXPORT_SCALE
     export_keep_transparency: bool = DEFAULT_EXPORT_KEEP_TRANSPARENCY
@@ -797,14 +765,6 @@ class ConfigManager:
             ),
             capture_save_directory=str(payload.get("capture_save_directory", "")).strip(),
             workspace_directory=str(payload.get("workspace_directory", "")).strip(),
-            editor_last_tab_behavior=normalize_editor_last_tab_behavior(
-                str(
-                    payload.get(
-                        "editor_last_tab_behavior",
-                        DEFAULT_EDITOR_LAST_TAB_BEHAVIOR,
-                    )
-                )
-            ),
             export_preset=normalize_export_preset(
                 str(payload.get("export_preset", DEFAULT_EXPORT_PRESET))
             ),
@@ -895,9 +855,6 @@ class ConfigManager:
             ),
             "capture_save_directory": config.capture_save_directory.strip(),
             "workspace_directory": config.workspace_directory.strip(),
-            "editor_last_tab_behavior": normalize_editor_last_tab_behavior(
-                config.editor_last_tab_behavior
-            ),
             "export_preset": normalize_export_preset(config.export_preset),
             "export_scale": normalize_export_scale(config.export_scale),
             "export_keep_transparency": bool(config.export_keep_transparency),

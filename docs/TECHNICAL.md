@@ -249,6 +249,12 @@ and marshals to the Qt thread via a signal. Without pynput the pick simply stays
 click-only. Any new capture path that hides the app from the keyboard needs the
 same listener.
 
+### Editor window during a capture
+
+`start_capture` minimizes the editor host before the grab (`_minimize_editor_for_capture`), so an open editor cannot cover what a quick capture is meant to photograph, and brings it back when the capture finishes or is cancelled (`_restore_editor_after_capture`). An editor that was not showing, or that the user had already minimized, is left as it was. `_show_editor_host` also un-minimizes the window, because `show()` alone leaves a minimized window minimized.
+
+A new screenshot opens at its original size (100 %), scrolled to the top-left corner; `reset_zoom` still fits it on request.
+
 ### Post-capture actions
 
 | Config value | Behavior |
@@ -448,7 +454,7 @@ Configurable via `workspace_directory` in settings (default `~/.snappix`). Set a
 | App quit with open tabs | Flush all tabs → write `session.json` |
 | App start | Load manifest → recreate tabs → load models |
 | Tab close (confirmed) | `delete_tab_recovery_data(path)` → update manifest |
-| Last tab closed | `save_editor_session([])` → `clear_editor_session()` |
+| Last tab closed | `save_editor_session([])` → `clear_editor_session()`; the editor window closes with it (`_handle_empty_editor_tabs`) |
 | Legacy `/tmp/snappix-session/` | Migrated into workspace on first use when empty |
 
 ### Key APIs (`src/session_recovery.py`)
@@ -658,7 +664,6 @@ Path: `~/.config/snappix/config.json`
 | `post_capture_action` | str | `editor` | Post-capture routing |
 | `capture_save_directory` | str | `""` | Save folder override → `~/Downloads/snappix` |
 | `workspace_directory` | str | `""` | Session workspace override → `~/.snappix` |
-| `editor_last_tab_behavior` | str | `keep_open` | Last-tab close behavior |
 | `export_preset` | str | `docs` | Last export preset |
 | `export_scale` | float | `1.0` | Export scale 1 / 2 / 3 |
 | `export_keep_transparency` | bool | `true` | PNG alpha |

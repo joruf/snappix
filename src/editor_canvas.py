@@ -665,7 +665,11 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
     def _apply_initial_screenshot_view(self) -> None:
         """
-        Fits large screenshots into the viewport while keeping smaller ones at 100%.
+        Shows a screenshot at its original size, from its top-left corner.
+
+        A screenshot taken to be looked at pixel for pixel must not come up
+        scaled down; a large one scrolls instead. Fitting stays one click away
+        in the zoom controls.
 
         Returns:
             None
@@ -694,21 +698,17 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
         self.resetTransform()
         screenshot_rect = QRectF(screenshot.rect())
-        needs_fit = (
+        if (
             screenshot_rect.width() > viewport_width
             or screenshot_rect.height() > viewport_height
-        )
-        if needs_fit:
-            self.fitInView(screenshot_rect, Qt.AspectRatioMode.KeepAspectRatio)
-            self._zoom_factor = self.transform().m11()
+        ):
             self.ensureVisible(
                 screenshot_rect.left(),
                 screenshot_rect.top(),
                 1,
                 1,
             )
-        else:
-            self._zoom_factor = 1.0
+        self._zoom_factor = 1.0
         self._initial_view_pending = False
         self.zoom_changed.emit(self._zoom_factor)
 

@@ -35,7 +35,6 @@ _SETTINGS_ICON_IDS = (
     "after_capture",
     "language",
     "screenshot_source",
-    "last_tab",
     "canvas",
     "handle_size",
     "handle_position",

@@ -10,7 +10,6 @@ from unittest.mock import patch
 try:
     from src.config import (
         AppConfig,
-        EDITOR_LAST_TAB_CLOSE_WINDOW,
         POST_CAPTURE_CLIPBOARD,
     )
     from src.settings_dialog import SettingsDialog
@@ -73,9 +72,6 @@ class TestSettingsDialog(unittest.TestCase):
         dialog.post_capture_combo.setCurrentIndex(
             dialog.post_capture_combo.findData(POST_CAPTURE_CLIPBOARD)
         )
-        dialog.editor_last_tab_combo.setCurrentIndex(
-            dialog.editor_last_tab_combo.findData(EDITOR_LAST_TAB_CLOSE_WINDOW)
-        )
         from PySide6.QtGui import QKeySequence
 
         dialog.save_directory_edit.setText("  /home/user/Pictures  ")
@@ -96,7 +92,6 @@ class TestSettingsDialog(unittest.TestCase):
         self.assertEqual(config.hotkey_measure_box, "ctrl+shift+m")
         self.assertEqual(config.post_capture_action, POST_CAPTURE_CLIPBOARD)
         self.assertEqual(config.capture_save_directory, "/home/user/Pictures")
-        self.assertEqual(config.editor_last_tab_behavior, EDITOR_LAST_TAB_CLOSE_WINDOW)
         self.assertFalse(config.auto_crop_on_shrink)
         self.assertEqual(config.resize_handle_size, 12)
         self.assertEqual(config.resize_handle_position, "inside")

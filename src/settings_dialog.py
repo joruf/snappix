@@ -32,14 +32,12 @@ from PySide6.QtWidgets import (
 from src.config import (
     CAPTURE_BACKENDS,
     DEFAULT_HOTKEY_MEASURE_BOX,
-    EDITOR_LAST_TAB_BEHAVIORS,
     POST_CAPTURE_ACTIONS,
     AppConfig,
     default_capture_save_directory,
     default_workspace_directory,
     normalize_capture_backend,
     normalize_filename_template,
-    normalize_editor_last_tab_behavior,
     normalize_hotkey_spec,
     normalize_post_capture_action,
     normalize_resize_handle_position,
@@ -323,19 +321,6 @@ class SettingsDialog(QDialog):
         form.addRow(
             self._option_label("screenshot_source", "Screenshot source:"),
             self.capture_backend_combo,
-        )
-
-        self.editor_last_tab_combo = QComboBox()
-        for behavior_key, behavior_label in EDITOR_LAST_TAB_BEHAVIORS.items():
-            self.editor_last_tab_combo.addItem(behavior_label, behavior_key)
-        behavior_index = self.editor_last_tab_combo.findData(
-            normalize_editor_last_tab_behavior(config.editor_last_tab_behavior)
-        )
-        if behavior_index >= 0:
-            self.editor_last_tab_combo.setCurrentIndex(behavior_index)
-        form.addRow(
-            self._option_label("last_tab", "When last tab closes:"),
-            self.editor_last_tab_combo,
         )
 
         self.auto_crop_on_shrink_checkbox = QCheckBox(
@@ -739,9 +724,6 @@ class SettingsDialog(QDialog):
             ),
             capture_save_directory=self.save_directory_edit.text().strip(),
             workspace_directory=self.workspace_directory_edit.text().strip(),
-            editor_last_tab_behavior=normalize_editor_last_tab_behavior(
-                str(self.editor_last_tab_combo.currentData())
-            ),
             export_preset=self._config.export_preset,
             export_scale=self._config.export_scale,
             export_keep_transparency=self._config.export_keep_transparency,
