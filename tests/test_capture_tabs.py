@@ -27,6 +27,7 @@ except ModuleNotFoundError:
     PYSIDE6_AVAILABLE = False
 
 CONFIRM = "src.close_tab_dialog.confirm_close_tab"
+ASK_DELETE = "src.close_tab_dialog.confirm_delete_capture"
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required")
@@ -228,75 +229,138 @@ class TestCaptureBecomesAFile(CaptureTabCase):
 
 class TestTabCrossDeletes(CaptureTabCase):
     """
-    Verifies the X on a tab.
+    Verifies the X on a tab, which asks what happens to the image in the folder.
     """
 
-    def test_an_untouched_capture_is_deleted_without_asking(self) -> None:
+    def test_the_x_asks_whether_to_delete_the_image(self) -> None:
         """
-        Ensures X removes tab and file, silently, when nothing was changed.
+        Ensures the question is asked, naming the file.
+        """
+
+        controller = self._controller()
+        editor = self._capture(controller)
+
+        with patch(ASK_DELETE, return_value=False) as ask:
+            controller._close_editor_tab_with_capture(0)
+
+        ask.assert_called_once()
+        self.assertEqual(ask.call_args[0][1], Path(editor.capture_file()).name)
+
+    def test_yes_deletes_the_tab_and_the_image(self) -> None:
+        """
+        Ensures yes removes the file from the folder along with the tab.
         """
 
         controller = self._controller()
         self._capture(controller)
 
-        with patch(CONFIRM, side_effect=AssertionError("asked")) as ask:
+        with patch(ASK_DELETE, return_value=True):
             controller._close_editor_tab_with_capture(0)
 
-        ask.assert_not_called()
         self.assertEqual(controller.editor_tabs.count(), 0)
         self.assertEqual(self._files(), [])
 
-    def test_a_changed_capture_asks_before_deleting(self) -> None:
+    def test_no_closes_the_tab_and_keeps_the_image(self) -> None:
         """
-        Ensures work is never thrown away unannounced.
+        Ensures no leaves the file in the folder.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+
+        with patch(ASK_DELETE, return_value=False):
+            controller._close_editor_tab_with_capture(0)
+
+        self.assertEqual(controller.editor_tabs.count(), 0)
+        self.assertEqual(len(self._files()), 1)
+
+    def test_a_kept_image_is_not_brought_back_as_a_tab(self) -> None:
+        """
+        Ensures answering no does not make the tab return on the next start.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        with patch(ASK_DELETE, return_value=False):
+            controller._close_editor_tab_with_capture(0)
+
+        restarted = self._controller()
+        restarted._maybe_restore_recovery_snapshot()
+
+        self.assertEqual(restarted.editor_tabs.count(), 0)
+        self.assertEqual(len(self._files()), 1)
+
+    def test_a_tab_with_annotations_confirms_those_first(self) -> None:
+        """
+        Ensures drawn work is not dropped before the image question comes up.
         """
 
         controller = self._controller()
         editor = self._capture(controller)
         self._draw(editor)
-        self.assertTrue(editor.has_changes_since_capture())
 
-        with patch(CONFIRM, return_value=False) as ask:
+        with patch(CONFIRM, return_value=False) as confirm, patch(
+            ASK_DELETE, side_effect=AssertionError("asked too early")
+        ) as ask:
             controller._close_editor_tab_with_capture(0)
 
-        ask.assert_called_once()
-        self.assertIn("deletes", ask.call_args[0][1])
+        confirm.assert_called_once()
+        ask.assert_not_called()
         self.assertEqual(controller.editor_tabs.count(), 1)
         self.assertEqual(len(self._files()), 1)
 
-    def test_confirming_deletes_the_changed_capture(self) -> None:
+    def test_confirming_the_annotations_leads_to_the_image_question(self) -> None:
         """
-        Ensures confirming removes the file along with the tab.
+        Ensures both questions are asked for a tab with annotations.
         """
 
         controller = self._controller()
         editor = self._capture(controller)
         self._draw(editor)
 
-        with patch(CONFIRM, return_value=True) as ask:
+        with patch(CONFIRM, return_value=True) as confirm, patch(
+            ASK_DELETE, return_value=True
+        ) as ask:
             controller._close_editor_tab_with_capture(0)
 
+        confirm.assert_called_once()
         ask.assert_called_once()
         self.assertEqual(controller.editor_tabs.count(), 0)
         self.assertEqual(self._files(), [])
 
-    def test_the_x_button_is_wired_to_the_deleting_close(self) -> None:
+    def test_a_tab_without_annotations_asks_only_the_image_question(self) -> None:
         """
-        Ensures the real tab X reaches the deleting path, not only the method.
+        Ensures there is a single question for an untouched capture.
         """
 
         controller = self._controller()
         self._capture(controller)
 
-        with patch(CONFIRM, side_effect=AssertionError("asked")):
+        with patch(CONFIRM, side_effect=AssertionError("asked")) as confirm, patch(
+            ASK_DELETE, return_value=True
+        ):
+            controller._close_editor_tab_with_capture(0)
+
+        confirm.assert_not_called()
+
+    def test_the_x_button_is_wired_to_the_question(self) -> None:
+        """
+        Ensures the real tab X reaches it, not only the method.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+
+        with patch(ASK_DELETE, return_value=True) as ask:
             controller.editor_tabs.tabCloseRequested.emit(0)
 
+        ask.assert_called_once()
         self.assertEqual(controller.editor_tabs.count(), 0)
         self.assertEqual(self._files(), [])
 
-    def test_a_tab_without_a_capture_file_closes_as_before(self) -> None:
+    def test_a_tab_without_a_capture_file_asks_no_image_question(self) -> None:
         """
-        Ensures an imported or new tab keeps its old prompt and loses nothing.
+        Ensures an imported or new tab keeps its old prompt and is never asked.
         """
 
         controller = self._controller()
@@ -305,14 +369,16 @@ class TestTabCrossDeletes(CaptureTabCase):
         editor = controller._create_editor_tab(pixmap, "Imported")
         self._draw(editor)
 
-        with patch(CONFIRM, return_value=False) as ask:
+        with patch(CONFIRM, return_value=False) as confirm, patch(
+            ASK_DELETE, side_effect=AssertionError("asked")
+        ) as ask:
             controller._close_editor_tab_with_capture(0)
 
-        ask.assert_called_once()
-        self.assertNotIn("deletes", ask.call_args[0][1])
+        confirm.assert_called_once()
+        ask.assert_not_called()
         self.assertEqual(controller.editor_tabs.count(), 1)
 
-    def test_somebody_elses_file_is_not_deleted(self) -> None:
+    def test_somebody_elses_file_is_not_deleted_even_on_yes(self) -> None:
         """
         Ensures a tab pointing at an unindexed file cannot delete it.
         """
@@ -326,7 +392,8 @@ class TestTabCrossDeletes(CaptureTabCase):
         editor = controller._create_editor_tab(pixmap, "Imported")
         editor.set_capture_file(str(theirs))
 
-        controller._close_editor_tab_with_capture(0)
+        with patch(ASK_DELETE, return_value=True):
+            controller._close_editor_tab_with_capture(0)
 
         self.assertTrue(theirs.is_file())
 
@@ -398,7 +465,8 @@ class TestStartRestoresTabs(CaptureTabCase):
         self.assertEqual(restarted.editor_tabs.count(), 1)
         restored = restarted.editors[-1]
         self.assertEqual(Path(restored.capture_file()), self.folder / self._files()[0])
-        restarted._close_editor_tab_with_capture(0)
+        with patch(ASK_DELETE, return_value=True):
+            restarted._close_editor_tab_with_capture(0)
         self.assertEqual(self._files(), [])
 
     def test_a_lost_tab_is_rebuilt_from_the_folder(self) -> None:
@@ -605,7 +673,8 @@ class TestEditorWindowAroundCaptures(CaptureTabCase):
         self._capture(controller)
         self.assertTrue(controller.editor_host.isVisible())
 
-        controller._close_editor_tab_with_capture(0)
+        with patch(ASK_DELETE, return_value=True):
+            controller._close_editor_tab_with_capture(0)
 
         self.assertFalse(controller.editor_host.isVisible())
         self.assertTrue(controller.capture_panel.isVisible())
@@ -619,7 +688,8 @@ class TestEditorWindowAroundCaptures(CaptureTabCase):
         self._capture(controller)
         self._capture(controller)
 
-        controller._close_editor_tab_with_capture(0)
+        with patch(ASK_DELETE, return_value=True):
+            controller._close_editor_tab_with_capture(0)
 
         self.assertEqual(controller.editor_tabs.count(), 1)
         self.assertTrue(controller.editor_host.isVisible())

@@ -249,6 +249,10 @@ and marshals to the Qt thread via a signal. Without pynput the pick simply stays
 click-only. Any new capture path that hides the app from the keyboard needs the
 same listener.
 
+### Zooming
+
+`ZoomableCanvasMixin.zoom_for_wheel` serves both canvases. A plain mouse-wheel notch zooms, as does a wheel with Shift or Ctrl held (many touchpads report a pinch as Ctrl + wheel). Two-finger touchpad scrolling (events with a pixel delta or a scroll phase) and Alt + wheel still scroll the view. The default key bindings are `+`/`=`/`Ctrl++`/`Ctrl+=` for zoom in and `-`/`Ctrl+-` for zoom out; they are single-key shortcuts like the tool letters, which is safe because text annotations are edited in a dialog, not inline.
+
 ### Editor window during a capture
 
 `start_capture` minimizes the editor host before the grab (`_minimize_editor_for_capture`), so an open editor cannot cover what a quick capture is meant to photograph, and brings it back when the capture finishes or is cancelled (`_restore_editor_after_capture`). An editor that was not showing, or that the user had already minimized, is left as it was. `_show_editor_host` also un-minimizes the window, because `show()` alone leaves a minimized window minimized.
@@ -270,7 +274,7 @@ A capture that opens as a tab is a file before the tab exists (`AppController._s
 | Event | Behavior |
 |-------|----------|
 | Capture opens a tab | File written and indexed, tab bound via `set_capture_file()`, path stored in `session.json` (`capture_file`) |
-| Tab X (`_close_editor_tab_with_capture`) | Tab, recovery data and file deleted; a tab with changes (`has_changes_since_capture()`) asks first |
+| Tab X (`_close_editor_tab_with_capture`) | Annotations confirmed first (`confirm_close_if_needed`), then `confirm_delete_capture` asks yes/no (default no): yes deletes the file, no keeps it; either way the tab and its recovery data go and the file leaves the index |
 | Other close (`_close_current_editor_tab`) | File kept, entry dropped from the index so it is not restored |
 | Quit | Nothing deleted |
 | Start | Manifest tabs restored, then `_lost_capture_tabs()` finds indexed files without a tab: rebuilt from their recovery project when it survives, otherwise from the file |

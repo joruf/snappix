@@ -774,7 +774,7 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         zoom_layout.setContentsMargins(4, 10, 4, 4)
         zoom_layout.setSpacing(4)
         self.zoom_out_button = QPushButton("-", zoom_box)
-        self.zoom_out_button.setToolTip("Zoom out. Shortcut: Shift+Mouse Wheel.")
+        self.zoom_out_button.setToolTip("Zoom out. Shortcut: - or Mouse Wheel.")
         self.zoom_out_button.clicked.connect(self.canvas.zoom_out)
         apply_zoom_step_button_style(self.zoom_out_button)
         zoom_layout.addWidget(self.zoom_out_button)
@@ -793,7 +793,7 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         zoom_layout.addWidget(self.zoom_slider)
 
         self.zoom_in_button = QPushButton("+", zoom_box)
-        self.zoom_in_button.setToolTip("Zoom in. Shortcut: Shift+Mouse Wheel.")
+        self.zoom_in_button.setToolTip("Zoom in. Shortcut: + or Mouse Wheel.")
         self.zoom_in_button.clicked.connect(self.canvas.zoom_in)
         apply_zoom_step_button_style(self.zoom_in_button)
         zoom_layout.addWidget(self.zoom_in_button)
@@ -1267,16 +1267,6 @@ class VideoEditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         """
 
         return self._capture_file
-
-    def has_changes_since_capture(self) -> bool:
-        """
-        Reports whether the tab holds work that the capture file does not.
-
-        Returns:
-            bool: True when annotations exist or an edit is in the history.
-        """
-
-        return self.has_annotations() or self._history_index > 0
 
     def set_recovery_path(self, path: str) -> None:
         """

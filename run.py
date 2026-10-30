@@ -3571,11 +3571,11 @@ class AppController:
         fit_top_level_window_to_available(self.editor_host)
     def _close_editor_tab_with_capture(self, index: int) -> None:
         """
-        Closes a tab through its X button, which also deletes its capture file.
+        Closes a tab through its X button and asks what happens to its capture file.
 
-        A capture is a file the moment it is taken, so closing its tab with the
-        X throws it away without asking -- unless the tab holds changes, which
-        are confirmed first. Tabs without a capture file close as they always did.
+        A capture is a file the moment it is taken, so the X asks whether the
+        image is to be deleted from the folder as well (yes or no). Tabs
+        without a capture file close as they always did.
 
         Args:
             index: Target tab index.
@@ -3588,26 +3588,19 @@ class AppController:
         if tab_widget is None:
             return
         capture_file = str(getattr(tab_widget, "_capture_file", "") or "")
-        if capture_file:
-            try:
-                changed = tab_widget.has_changes_since_capture()
-            except RuntimeError:
+        if not capture_file:
+            self._close_editor_tab_by_index(index)
+            return
+        try:
+            # Annotations that the file does not hold are confirmed first, as for any tab.
+            if not tab_widget.confirm_close_if_needed():
                 return
-            if changed:
-                from src.close_tab_dialog import confirm_close_tab
+        except RuntimeError:
+            return
+        from src.close_tab_dialog import confirm_delete_capture
 
-                if not confirm_close_tab(
-                    tab_widget,
-                    "This capture has changes. Closing it deletes the capture "
-                    "file from the Snappix folder as well. Delete it?",
-                    "Delete",
-                ):
-                    return
-        self._close_editor_tab_by_index(
-            index,
-            delete_capture=bool(capture_file),
-            confirmed=bool(capture_file),
-        )
+        delete = confirm_delete_capture(tab_widget, Path(capture_file).name)
+        self._close_editor_tab_by_index(index, delete_capture=delete, confirmed=True)
 
     def _close_editor_tab_by_index(
         self,
@@ -3799,14 +3792,9 @@ class AppController:
             self._save_editor_session()
         except Exception as exc:
             print(f"Snappix: capture close save failed: {exc}", file=sys.stderr)
+        # Silent on purpose: the tray icon is the way back, and a balloon on every
+        # minimize is noise.
         self.capture_panel.hide()
-        if self._tray_available and self.tray_icon.isVisible():
-            self.tray_icon.showMessage(
-                APP_NAME,
-                "Capture panel hidden. Use tray menu to reopen or quit.",
-                self.tray_icon.MessageIcon.Information,
-                2500,
-            )
 
     def _show_from_tray(self) -> None:
         """

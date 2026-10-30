@@ -1800,9 +1800,9 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.snap_to_grid_button.setToolTip("Snap drawing and movement to grid.")
         self.grid_visible_button.setToolTip("Show or hide the alignment grid.")
         self.grid_size_combo.setToolTip("Choose grid spacing in pixels.")
-        self.zoom_slider.setToolTip("Adjust zoom level. Shortcut: Shift+Mouse Wheel.")
-        self.zoom_in_button.setToolTip("Zoom in. Shortcut: Ctrl++ or Shift+Mouse Wheel.")
-        self.zoom_out_button.setToolTip("Zoom out. Shortcut: Ctrl+- or Shift+Mouse Wheel.")
+        self.zoom_slider.setToolTip("Adjust zoom level. Shortcut: Mouse Wheel.")
+        self.zoom_in_button.setToolTip("Zoom in. Shortcut: + or Mouse Wheel.")
+        self.zoom_out_button.setToolTip("Zoom out. Shortcut: - or Mouse Wheel.")
         self.zoom_reset_button.setToolTip("Reset zoom to fit.")
         self.zoom_label.setToolTip("Current zoom percentage.")
         self.history_undo_button.setToolTip("Undo the last change.")
@@ -5842,16 +5842,6 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         """
 
         return self._capture_file
-
-    def has_changes_since_capture(self) -> bool:
-        """
-        Reports whether the tab holds work that the capture file does not.
-
-        Returns:
-            bool: True when annotations exist or an edit is in the history.
-        """
-
-        return self.has_drawn_annotations() or self._history_index > 0
 
     def set_recovery_path(self, path: str) -> None:
         """

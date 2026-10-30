@@ -38,22 +38,16 @@ def _force_button_order(box: QMessageBox, ordered: list[QAbstractButton]) -> Non
         layout.addWidget(button)
 
 
-def confirm_close_tab(
-    parent: QWidget,
-    message: str,
-    confirm_label: str = "Close Tab",
-) -> bool:
+def confirm_close_tab(parent: QWidget, message: str) -> bool:
     """
     Asks whether one editor tab with unsaved annotations may be closed.
 
     Args:
         parent: Owner widget for the dialog.
         message: Tab-specific warning text (image vs. video wording).
-        confirm_label: Text of the button that goes ahead, for a close that
-            also deletes something.
 
     Returns:
-        bool: True when the user chose to go ahead.
+        bool: True when the user chose to close the tab.
     """
 
     box = QMessageBox(parent)
@@ -64,10 +58,38 @@ def confirm_close_tab(
     style = box.style()
     cancel_button = box.addButton("Cancel", QMessageBox.ButtonRole.RejectRole)
     cancel_button.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_DialogCancelButton))
-    close_button = box.addButton(confirm_label, QMessageBox.ButtonRole.DestructiveRole)
+    close_button = box.addButton("Close Tab", QMessageBox.ButtonRole.DestructiveRole)
     close_button.setIcon(style.standardIcon(QStyle.StandardPixmap.SP_DialogCloseButton))
     box.setDefaultButton(cancel_button)
     _force_button_order(box, [cancel_button, close_button])
 
     box.exec()
     return box.clickedButton() is close_button
+
+
+def confirm_delete_capture(parent: QWidget, file_name: str) -> bool:
+    """
+    Asks whether a closed tab's capture file should be deleted from the folder too.
+
+    Args:
+        parent: Owner widget for the dialog.
+        file_name: Name of the capture file backing the tab.
+
+    Returns:
+        bool: True to delete the file, False to keep it. Keeping is the default,
+        so a stray Enter never costs a picture.
+    """
+
+    box = QMessageBox(parent)
+    box.setWindowTitle("Close Tab")
+    box.setIcon(QMessageBox.Icon.Question)
+    box.setText(f"Delete {file_name} from the Snappix folder as well?")
+    box.setInformativeText("No keeps the file in the folder.")
+    yes_button = box.addButton("Yes", QMessageBox.ButtonRole.YesRole)
+    no_button = box.addButton("No", QMessageBox.ButtonRole.NoRole)
+    box.setDefaultButton(no_button)
+    box.setEscapeButton(no_button)
+    _force_button_order(box, [no_button, yes_button])
+
+    box.exec()
+    return box.clickedButton() is yes_button

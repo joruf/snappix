@@ -159,6 +159,25 @@ class TestSettingsDialogWithoutHotkeySupport(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls._app = ensure_qapp()
 
+    @staticmethod
+    def _dispose(dialog) -> None:
+        """
+        Closes the dialog and the warning it shows, which would otherwise stay
+        open and block keyboard input for every later test in the process.
+
+        Args:
+            dialog: Dialog under test.
+        """
+
+        from PySide6.QtCore import QCoreApplication, QEvent
+        from PySide6.QtWidgets import QMessageBox
+
+        for box in dialog.findChildren(QMessageBox):
+            box.close()
+        dialog.close()
+        dialog.deleteLater()
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
     def test_unsupported_hotkeys_disable_and_uncheck_the_box(self) -> None:
         """
         Ensures the dialog cannot offer hotkeys the platform cannot deliver.
@@ -169,6 +188,7 @@ class TestSettingsDialogWithoutHotkeySupport(unittest.TestCase):
             return_value=False,
         ):
             dialog = SettingsDialog(AppConfig(hotkeys_enabled=True))
+            self.addCleanup(self._dispose, dialog)
 
             self.assertFalse(dialog.hotkeys_enabled_checkbox.isChecked())
             self.assertFalse(dialog.hotkeys_enabled_checkbox.isEnabled())

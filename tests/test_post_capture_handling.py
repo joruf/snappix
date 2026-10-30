@@ -162,5 +162,27 @@ class TestHandleCaptureResult(unittest.TestCase):
             self.assertTrue(Path(handed).is_file())
 
 
+@unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required for post-capture handling tests")
+class TestCapturePanelToTray(unittest.TestCase):
+    """
+    Verifies closing the capture panel into the system tray.
+    """
+
+    def test_hiding_the_panel_shows_no_tray_message(self) -> None:
+        """
+        Ensures minimizing to the tray is silent.
+        """
+
+        controller = _make_controller(post_capture_action="editor")
+        controller._is_quitting = False
+        controller._save_editor_session = MagicMock()
+
+        controller._on_capture_panel_close()
+
+        controller.capture_panel.hide.assert_called_once()
+        controller._save_editor_session.assert_called_once()
+        controller.tray_icon.showMessage.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

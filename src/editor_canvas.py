@@ -1977,7 +1977,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
 
     def wheelEvent(self, event) -> None:
         """
-        Zooms with Shift+wheel; otherwise keeps default scroll/pan behavior.
+        Zooms with the mouse wheel; Alt+wheel and touchpad scrolling still scroll.
 
         Args:
             event: Wheel event.
@@ -1986,19 +1986,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             None
         """
 
-        # Ctrl as well as Shift: a two-finger pinch on a Linux touchpad usually
-        # arrives as Ctrl and a wheel step rather than as a gesture.
-        if event.modifiers() & (
-            Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
-        ):
-            delta = event.angleDelta().y()
-            if delta == 0:
-                delta = event.angleDelta().x()
-            if delta > 0:
-                self.zoom_in()
-            elif delta < 0:
-                self.zoom_out()
-            event.accept()
+        if self.zoom_for_wheel(event):
             return
         super().wheelEvent(event)
 

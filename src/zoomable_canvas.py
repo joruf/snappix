@@ -87,6 +87,47 @@ class ZoomableCanvasMixin:
         self._apply_zoom(scale_factor)
         return True
 
+    def zoom_for_wheel(self, event) -> bool:
+        """
+        Zooms in response to a mouse wheel; the canvases call this first.
+
+        A plain wheel step zooms, and so does one with Shift or Ctrl held, which
+        is also how many touchpads report a pinch. Two-finger touchpad scrolling
+        keeps scrolling, and Alt+wheel scrolls with a mouse, so the picture can
+        still be moved around.
+
+        Args:
+            event: Wheel event.
+
+        Returns:
+            bool: True when the event was a zoom and has been handled.
+        """
+
+        from PySide6.QtCore import Qt
+
+        modifiers = event.modifiers()
+        zoom_modifiers = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
+        if modifiers & zoom_modifiers:
+            pass
+        elif modifiers & Qt.KeyboardModifier.AltModifier:
+            return False
+        elif (
+            not event.pixelDelta().isNull()
+            or event.phase() != Qt.ScrollPhase.NoScrollPhase
+        ):
+            # A touchpad's two-finger scroll, not a wheel notch.
+            return False
+
+        delta = event.angleDelta().y()
+        if delta == 0:
+            delta = event.angleDelta().x()
+        if delta > 0:
+            self.zoom_in()
+        elif delta < 0:
+            self.zoom_out()
+        event.accept()
+        return True
+
     def zoom_in(self) -> None:
         """
         Zooms into the canvas.

@@ -304,7 +304,7 @@ above still come from tags pushed by hand.
 - Closing the last tab closes the whole editor window
 - While a screenshot is taken the editor is minimized, so it cannot cover the area being captured; it comes back when the screenshot is done. Screenshots open at their original size
 - **Every screenshot and recording is a file at once.** A capture that opens as a tab is written to the capture save folder (default `~/Downloads/snappix/`) before the tab appears, so a crash or a lost tab never costs the picture
-- The **X on a tab** deletes the tab and its capture file without asking; a tab that holds changes asks first (Cancel / Delete). Closing a tab any other way, such as the close shortcut, keeps the file
+- The **X on a tab** asks whether the image should be deleted from the folder as well (Yes / No, default No). A tab with annotations first asks the usual "close anyway?". Closing a tab any other way, such as the close shortcut, keeps the file without asking
 - On start, the capture folder is searched for files Snappix made that no restored tab shows, and each gets a tab again, with its annotations when the recovery data survived. Files Snappix did not create are never opened and never deleted: the folder keeps a hidden index (`.snappix-captures.json`) of its own captures
 
 ### Desktop integration
@@ -476,7 +476,8 @@ python3 run.py open --project ./example.sfp
 | `Ctrl+D` | Duplicate selection |
 | `Ctrl+C` / `Ctrl+V` | Copy / Paste |
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copy / paste drawing area across tabs |
-| `Ctrl++` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / reset |
+| `+` / `-` (also `Ctrl++` / `Ctrl+-`) / `Ctrl+0` | Zoom in / out / reset |
+| Mouse wheel | Zoom; `Alt`+wheel or touchpad scroll moves the view |
 | `Ctrl+Shift++` / `Ctrl+Shift+-` | Grow / shrink selection |
 | `Enter` | Apply crop |
 | `Esc` | Cancel crop / overlay |
