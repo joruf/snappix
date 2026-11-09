@@ -17,7 +17,8 @@ from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock, patch
 
 try:
-    from PySide6.QtCore import QCoreApplication, QEvent, QPointF
+    from PySide6.QtCore import QCoreApplication, QEvent, QPointF, Qt
+    from PySide6.QtTest import QTest
     from PySide6.QtGui import QColor, QPixmap
 
     from tests.qt_test_utils import ensure_qapp
@@ -27,7 +28,6 @@ except ModuleNotFoundError:
     PYSIDE6_AVAILABLE = False
 
 CONFIRM = "src.close_tab_dialog.confirm_close_tab"
-ASK_DELETE = "src.close_tab_dialog.confirm_delete_capture"
 
 
 @unittest.skipUnless(PYSIDE6_AVAILABLE, "PySide6 is required")
@@ -70,6 +70,14 @@ class CaptureTabCase(unittest.TestCase):
         modal = patch("PySide6.QtWidgets.QMessageBox.exec", return_value=0)
         modal.start()
         self.addCleanup(modal.stop)
+
+        # The controller styles the whole application, and Qt re-polishes every
+        # widget that exists in the process for each change. With the leftovers
+        # of a full test run that costs seconds per controller, so the sheet is
+        # left out; nothing here asserts on it.
+        sheet = patch("PySide6.QtWidgets.QApplication.setStyleSheet", MagicMock())
+        sheet.start()
+        self.addCleanup(sheet.stop)
 
         # A real manager would grab global hotkeys on whatever desktop runs the
         # tests, and its listener threads sometimes block on the X server.
@@ -227,62 +235,98 @@ class TestCaptureBecomesAFile(CaptureTabCase):
         self.assertEqual(len(self._files()), 2)
 
 
-class TestTabCrossDeletes(CaptureTabCase):
+class TestTabClosePair(CaptureTabCase):
     """
-    Verifies the X on a tab, which asks what happens to the image in the folder.
+    Verifies the two close buttons on a capture-backed tab.
     """
 
-    def test_the_x_asks_whether_to_delete_the_image(self) -> None:
+    def _pair(self, controller, index: int = 0):
         """
-        Ensures the question is asked, naming the file.
+        Returns the close-button pair of one tab.
+
+        Args:
+            controller: Controller under test.
+            index: Tab index.
+
+        Returns:
+            TabClosePair: The widget the tab bar holds for that tab.
         """
 
-        controller = self._controller()
-        editor = self._capture(controller)
+        from PySide6.QtWidgets import QStyle, QTabBar
 
-        with patch(ASK_DELETE, return_value=False) as ask:
-            controller._close_editor_tab_with_capture(0)
+        from src.tab_close_buttons import TabClosePair
 
-        ask.assert_called_once()
-        self.assertEqual(ask.call_args[0][1], Path(editor.capture_file()).name)
+        tab_bar = controller.editor_tabs.tabBar()
+        position = QTabBar.ButtonPosition(
+            tab_bar.style().styleHint(QStyle.StyleHint.SH_TabBar_CloseButtonPosition)
+        )
+        widget = tab_bar.tabButton(index, position)
+        self.assertIsInstance(widget, TabClosePair)
+        return widget
 
-    def test_yes_deletes_the_tab_and_the_image(self) -> None:
+    def test_a_capture_tab_has_two_close_buttons(self) -> None:
         """
-        Ensures yes removes the file from the folder along with the tab.
+        Ensures a capture-backed tab offers both ways of closing.
         """
 
         controller = self._controller()
         self._capture(controller)
 
-        with patch(ASK_DELETE, return_value=True):
-            controller._close_editor_tab_with_capture(0)
+        pair = self._pair(controller)
 
-        self.assertEqual(controller.editor_tabs.count(), 0)
-        self.assertEqual(self._files(), [])
+        self.assertEqual(pair.keep_button.kind, "keep")
+        self.assertEqual(pair.delete_button.kind, "delete")
 
-    def test_no_closes_the_tab_and_keeps_the_image(self) -> None:
+    def test_a_tab_without_a_capture_keeps_the_single_default_x(self) -> None:
         """
-        Ensures no leaves the file in the folder.
+        Ensures only tabs with a file get the pair.
+        """
+
+        from src.tab_close_buttons import TabClosePair
+
+        controller = self._controller()
+        pixmap = QPixmap(60, 40)
+        pixmap.fill(QColor(10, 10, 10))
+        controller._create_editor_tab(pixmap, "Imported")
+
+        tab_bar = controller.editor_tabs.tabBar()
+        for position in (tab_bar.ButtonPosition.LeftSide, tab_bar.ButtonPosition.RightSide):
+            self.assertNotIsInstance(tab_bar.tabButton(0, position), TabClosePair)
+
+    def test_the_keep_button_closes_and_keeps_the_image(self) -> None:
+        """
+        Ensures the X leaves the file in the project folder.
         """
 
         controller = self._controller()
         self._capture(controller)
 
-        with patch(ASK_DELETE, return_value=False):
-            controller._close_editor_tab_with_capture(0)
+        QTest.mouseClick(self._pair(controller).keep_button, Qt.MouseButton.LeftButton)
 
         self.assertEqual(controller.editor_tabs.count(), 0)
         self.assertEqual(len(self._files()), 1)
 
-    def test_a_kept_image_is_not_brought_back_as_a_tab(self) -> None:
+    def test_the_delete_button_closes_and_deletes_the_image(self) -> None:
         """
-        Ensures answering no does not make the tab return on the next start.
+        Ensures the trash can removes the file from the project folder.
         """
 
         controller = self._controller()
         self._capture(controller)
-        with patch(ASK_DELETE, return_value=False):
-            controller._close_editor_tab_with_capture(0)
+
+        QTest.mouseClick(self._pair(controller).delete_button, Qt.MouseButton.LeftButton)
+
+        self.assertEqual(controller.editor_tabs.count(), 0)
+        self.assertEqual(self._files(), [])
+
+    def test_a_kept_image_is_not_brought_back_as_a_tab(self) -> None:
+        """
+        Ensures keeping the image does not make the tab return on the next start.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        QTest.mouseClick(self._pair(controller).keep_button, Qt.MouseButton.LeftButton)
 
         restarted = self._controller()
         restarted._maybe_restore_recovery_snapshot()
@@ -290,95 +334,73 @@ class TestTabCrossDeletes(CaptureTabCase):
         self.assertEqual(restarted.editor_tabs.count(), 0)
         self.assertEqual(len(self._files()), 1)
 
-    def test_a_tab_with_annotations_confirms_those_first(self) -> None:
+    def test_each_button_acts_on_its_own_tab(self) -> None:
         """
-        Ensures drawn work is not dropped before the image question comes up.
+        Ensures a button closes the tab it sits on, whatever the tab order.
         """
 
         controller = self._controller()
-        editor = self._capture(controller)
-        self._draw(editor)
+        first = self._capture(controller)
+        second = self._capture(controller)
 
-        with patch(CONFIRM, return_value=False) as confirm, patch(
-            ASK_DELETE, side_effect=AssertionError("asked too early")
-        ) as ask:
-            controller._close_editor_tab_with_capture(0)
+        QTest.mouseClick(self._pair(controller, 0).delete_button, Qt.MouseButton.LeftButton)
 
-        confirm.assert_called_once()
-        ask.assert_not_called()
         self.assertEqual(controller.editor_tabs.count(), 1)
-        self.assertEqual(len(self._files()), 1)
+        self.assertIs(controller.editor_tabs.widget(0), second)
+        self.assertFalse(Path(first.capture_file()).exists())
+        self.assertTrue(Path(second.capture_file()).exists())
 
-    def test_confirming_the_annotations_leads_to_the_image_question(self) -> None:
+    def test_annotations_are_confirmed_for_either_button(self) -> None:
         """
-        Ensures both questions are asked for a tab with annotations.
+        Ensures drawn work is never dropped without the usual question.
+        """
+
+        for kind in ("keep_button", "delete_button"):
+            with self.subTest(kind=kind):
+                controller = self._controller()
+                editor = self._capture(controller)
+                self._draw(editor)
+
+                with patch(CONFIRM, return_value=False) as confirm:
+                    QTest.mouseClick(
+                        getattr(self._pair(controller, controller.editor_tabs.count() - 1), kind),
+                        Qt.MouseButton.LeftButton,
+                    )
+
+                confirm.assert_called_once()
+                self.assertGreaterEqual(controller.editor_tabs.count(), 1)
+                self.assertTrue(Path(editor.capture_file()).exists())
+
+    def test_confirming_annotations_then_deletes(self) -> None:
+        """
+        Ensures the delete button still deletes once the annotations are confirmed.
         """
 
         controller = self._controller()
         editor = self._capture(controller)
         self._draw(editor)
+        file = Path(editor.capture_file())
 
-        with patch(CONFIRM, return_value=True) as confirm, patch(
-            ASK_DELETE, return_value=True
-        ) as ask:
-            controller._close_editor_tab_with_capture(0)
+        with patch(CONFIRM, return_value=True):
+            QTest.mouseClick(self._pair(controller).delete_button, Qt.MouseButton.LeftButton)
 
-        confirm.assert_called_once()
-        ask.assert_called_once()
+        self.assertFalse(file.exists())
         self.assertEqual(controller.editor_tabs.count(), 0)
-        self.assertEqual(self._files(), [])
 
-    def test_a_tab_without_annotations_asks_only_the_image_question(self) -> None:
+    def test_a_tab_without_annotations_asks_nothing(self) -> None:
         """
-        Ensures there is a single question for an untouched capture.
+        Ensures the buttons are the decision, with no extra dialog.
         """
 
         controller = self._controller()
         self._capture(controller)
 
-        with patch(CONFIRM, side_effect=AssertionError("asked")) as confirm, patch(
-            ASK_DELETE, return_value=True
-        ):
-            controller._close_editor_tab_with_capture(0)
+        with patch(CONFIRM, side_effect=AssertionError("asked")) as confirm:
+            QTest.mouseClick(self._pair(controller).delete_button, Qt.MouseButton.LeftButton)
 
         confirm.assert_not_called()
 
-    def test_the_x_button_is_wired_to_the_question(self) -> None:
-        """
-        Ensures the real tab X reaches it, not only the method.
-        """
-
-        controller = self._controller()
-        self._capture(controller)
-
-        with patch(ASK_DELETE, return_value=True) as ask:
-            controller.editor_tabs.tabCloseRequested.emit(0)
-
-        ask.assert_called_once()
-        self.assertEqual(controller.editor_tabs.count(), 0)
-        self.assertEqual(self._files(), [])
-
-    def test_a_tab_without_a_capture_file_asks_no_image_question(self) -> None:
-        """
-        Ensures an imported or new tab keeps its old prompt and is never asked.
-        """
-
-        controller = self._controller()
-        pixmap = QPixmap(60, 40)
-        pixmap.fill(QColor(10, 10, 10))
-        editor = controller._create_editor_tab(pixmap, "Imported")
-        self._draw(editor)
-
-        with patch(CONFIRM, return_value=False) as confirm, patch(
-            ASK_DELETE, side_effect=AssertionError("asked")
-        ) as ask:
-            controller._close_editor_tab_with_capture(0)
-
-        confirm.assert_called_once()
-        ask.assert_not_called()
-        self.assertEqual(controller.editor_tabs.count(), 1)
-
-    def test_somebody_elses_file_is_not_deleted_even_on_yes(self) -> None:
+    def test_somebody_elses_file_is_not_deleted(self) -> None:
         """
         Ensures a tab pointing at an unindexed file cannot delete it.
         """
@@ -389,13 +411,188 @@ class TestTabCrossDeletes(CaptureTabCase):
         self.folder.mkdir(parents=True)
         theirs = self.folder / "holiday.png"
         pixmap.save(str(theirs))
-        editor = controller._create_editor_tab(pixmap, "Imported")
+        editor = controller._create_editor_tab(pixmap, "Imported", capture_file="")
         editor.set_capture_file(str(theirs))
+        controller._install_tab_close_buttons(editor)
 
-        with patch(ASK_DELETE, return_value=True):
-            controller._close_editor_tab_with_capture(0)
+        QTest.mouseClick(self._pair(controller).delete_button, Qt.MouseButton.LeftButton)
 
         self.assertTrue(theirs.is_file())
+
+    def test_a_video_tab_gets_the_pair_too(self) -> None:
+        """
+        Ensures recordings can be closed both ways like screenshots.
+        """
+
+        controller = self._controller()
+        self.folder.mkdir(parents=True)
+        clip = self.folder / "clip.mp4"
+        clip.write_bytes(b"not-a-real-video")
+        controller._create_video_editor_tab(
+            str(clip), 320, 240, "Recording", capture_file=str(clip)
+        )
+
+        self.assertEqual(self._pair(controller).delete_button.kind, "delete")
+
+
+class TestTabClosePairLooksClear(CaptureTabCase):
+    """
+    Verifies that the two buttons are told apart at a glance and stay tidy.
+    """
+
+    def _tab_with_pair(self):
+        """
+        Opens an editor with one capture tab.
+
+        Returns:
+            tuple: The controller and the pair on its tab.
+        """
+
+        controller = self._controller()
+        self._capture(controller)
+        # A second tab takes the selection, so the first shows its normal colours.
+        self._capture(controller)
+        controller.editor_host.resize(900, 600)
+        self._app.processEvents()
+        tab_bar = controller.editor_tabs.tabBar()
+        from PySide6.QtWidgets import QStyle, QTabBar
+
+        position = QTabBar.ButtonPosition(
+            tab_bar.style().styleHint(QStyle.StyleHint.SH_TabBar_CloseButtonPosition)
+        )
+        return controller, tab_bar.tabButton(0, position)
+
+    def test_the_buttons_sit_directly_next_to_each_other(self) -> None:
+        """
+        Ensures a small gap, in a fixed order: keep first, delete second.
+        """
+
+        from src.tab_close_buttons import BUTTON_GAP
+
+        _controller, pair = self._tab_with_pair()
+        keep, delete = pair.keep_button.geometry(), pair.delete_button.geometry()
+
+        self.assertLess(keep.right(), delete.left())
+        self.assertEqual(delete.left() - keep.right() - 1, BUTTON_GAP)
+        self.assertEqual(keep.top(), delete.top())
+
+    def test_the_buttons_do_not_overlap_or_leave_the_tab(self) -> None:
+        """
+        Ensures the pair fits inside its tab, clear of the title.
+        """
+
+        controller, pair = self._tab_with_pair()
+        tab_bar = controller.editor_tabs.tabBar()
+        tab = tab_bar.tabRect(0)
+        pair_rect = pair.geometry()
+
+        self.assertTrue(tab.contains(pair_rect), f"{pair_rect} not inside {tab}")
+        self.assertFalse(pair.keep_button.geometry().intersects(pair.delete_button.geometry()))
+        text_width = tab_bar.fontMetrics().horizontalAdvance(tab_bar.tabText(0))
+        # The title keeps its own room: tab width covers text plus both buttons.
+        self.assertGreaterEqual(tab.width(), text_width + pair_rect.width())
+
+    def test_the_tabs_do_not_overlap_each_other(self) -> None:
+        """
+        Ensures several capture tabs stay separate with a pair on each.
+        """
+
+        controller = self._controller()
+        for _ in range(4):
+            self._capture(controller)
+        controller.editor_host.resize(1200, 600)
+        self._app.processEvents()
+        tab_bar = controller.editor_tabs.tabBar()
+
+        rects = [tab_bar.tabRect(index) for index in range(tab_bar.count())]
+        for left, right in zip(rects, rects[1:]):
+            self.assertLessEqual(left.right(), right.left())
+
+    def test_the_buttons_look_different(self) -> None:
+        """
+        Ensures the two are told apart by shape and colour, not only by tooltip.
+        """
+
+        _controller, pair = self._tab_with_pair()
+        keep_image = pair.keep_button.grab().toImage()
+        delete_image = pair.delete_button.grab().toImage()
+
+        self.assertNotEqual(keep_image, delete_image)
+
+    def test_the_delete_button_is_in_the_danger_colour(self) -> None:
+        """
+        Ensures the destructive button is the red one.
+        """
+
+        from src.tab_close_buttons import DANGER_COLOR
+
+        _controller, pair = self._tab_with_pair()
+
+        self.assertEqual(pair.delete_button.glyph_color().name(), DANGER_COLOR)
+        self.assertNotEqual(pair.keep_button.glyph_color().name(), DANGER_COLOR)
+
+    def test_the_keep_glyph_follows_the_theme(self) -> None:
+        """
+        Ensures the X is readable on every theme.
+        """
+
+        from src.theme import THEME_LIGHT, get_theme_colors, set_current_theme
+
+        _controller, pair = self._tab_with_pair()
+        set_current_theme(THEME_LIGHT)
+
+        self.assertEqual(
+            pair.keep_button.glyph_color().name(),
+            get_theme_colors(THEME_LIGHT).text.lower(),
+        )
+
+    def test_the_selected_tab_uses_colours_made_for_its_background(self) -> None:
+        """
+        Ensures both glyphs stay readable on the accent-coloured selected tab.
+        """
+
+        from src.tab_close_buttons import DANGER_COLOR, DANGER_COLOR_ON_ACCENT
+        from src.theme import get_theme_colors
+
+        controller = self._controller()
+        self._capture(controller)
+        self._capture(controller)
+        tab_bar = controller.editor_tabs.tabBar()
+        from PySide6.QtWidgets import QStyle, QTabBar
+
+        position = QTabBar.ButtonPosition(
+            tab_bar.style().styleHint(QStyle.StyleHint.SH_TabBar_CloseButtonPosition)
+        )
+        controller.editor_tabs.setCurrentIndex(0)
+        self._app.processEvents()
+        selected = tab_bar.tabButton(0, position)
+        other = tab_bar.tabButton(1, position)
+
+        self.assertEqual(selected.delete_button.glyph_color().name(), DANGER_COLOR_ON_ACCENT)
+        self.assertEqual(other.delete_button.glyph_color().name(), DANGER_COLOR)
+        self.assertEqual(
+            selected.keep_button.glyph_color().name(),
+            get_theme_colors().button_checked_text.lower(),
+        )
+
+        controller.editor_tabs.setCurrentIndex(1)
+        self._app.processEvents()
+        self.assertEqual(selected.delete_button.glyph_color().name(), DANGER_COLOR)
+        self.assertEqual(other.delete_button.glyph_color().name(), DANGER_COLOR_ON_ACCENT)
+
+    def test_each_button_says_what_it_does(self) -> None:
+        """
+        Ensures the tooltips name the effect on the image, in plain words.
+        """
+
+        _controller, pair = self._tab_with_pair()
+
+        self.assertIn("keep", pair.keep_button.toolTip().lower())
+        self.assertIn("delete", pair.delete_button.toolTip().lower())
+        self.assertNotEqual(pair.keep_button.toolTip(), pair.delete_button.toolTip())
+        self.assertNotEqual(
+            pair.keep_button.accessibleName(), pair.delete_button.accessibleName()
+        )
 
 
 class TestOtherCloseKeepsTheFile(CaptureTabCase):
@@ -465,8 +662,7 @@ class TestStartRestoresTabs(CaptureTabCase):
         self.assertEqual(restarted.editor_tabs.count(), 1)
         restored = restarted.editors[-1]
         self.assertEqual(Path(restored.capture_file()), self.folder / self._files()[0])
-        with patch(ASK_DELETE, return_value=True):
-            restarted._close_editor_tab_with_capture(0)
+        restarted._close_tab_of(restarted.editors[-1], delete_capture=True)
         self.assertEqual(self._files(), [])
 
     def test_a_lost_tab_is_rebuilt_from_the_folder(self) -> None:
@@ -673,8 +869,7 @@ class TestEditorWindowAroundCaptures(CaptureTabCase):
         self._capture(controller)
         self.assertTrue(controller.editor_host.isVisible())
 
-        with patch(ASK_DELETE, return_value=True):
-            controller._close_editor_tab_with_capture(0)
+        controller._close_tab_of(controller.editors[0], delete_capture=True)
 
         self.assertFalse(controller.editor_host.isVisible())
         self.assertTrue(controller.capture_panel.isVisible())
@@ -688,8 +883,7 @@ class TestEditorWindowAroundCaptures(CaptureTabCase):
         self._capture(controller)
         self._capture(controller)
 
-        with patch(ASK_DELETE, return_value=True):
-            controller._close_editor_tab_with_capture(0)
+        controller._close_tab_of(controller.editors[0], delete_capture=True)
 
         self.assertEqual(controller.editor_tabs.count(), 1)
         self.assertTrue(controller.editor_host.isVisible())

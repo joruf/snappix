@@ -90,7 +90,10 @@ Startup:
 | `src/autostart.py` | XDG autostart `.desktop` |
 | `src/tool_reference.py` / `tool_reference_dialog.py` | In-app tools help |
 | Element target | `EditorCanvas.pixel_target_item()` picks what Delete/Fill/Brush/Blur write to; masks and rects are carried into that element's pixel space |
-| `src/version.py` | Version derived from the commit history; `VERSION` file (kept current by `.githooks/post-commit`) for copies without `.git` |
+| `src/tab_close_buttons.py` | The X + trash-can close buttons of a capture-backed tab: painted glyphs that follow the theme and the selected-tab colours |
+| `src/print_layout.py` / `print_preview_dialog.py` | Placement of a picture on a sheet in millimetres (Qt-free) and the preview dialog that edits it and prints it |
+| `src/file_association.py` | Image types Snappix opens, command-line file arguments, `xdg-mime` default viewer, Windows registry registration |
+| `src/version.py` || `src/version.py` | Version derived from the commit history; `VERSION` file (kept current by `.githooks/post-commit`) for copies without `.git` |
 | `src/ffmpeg_setup.py` | Per-user ffmpeg unpack for Windows accounts without administrator rights |
 | `src/tesseract_setup.py` | Per-user Tesseract install for Windows accounts without administrator rights |
 | `src/freehand.py` | Freehand point thinning while drawing and Chaikin smoothing for display |
@@ -274,12 +277,16 @@ A capture that opens as a tab is a file before the tab exists (`AppController._s
 | Event | Behavior |
 |-------|----------|
 | Capture opens a tab | File written and indexed, tab bound via `set_capture_file()`, path stored in `session.json` (`capture_file`) |
-| Tab X (`_close_editor_tab_with_capture`) | Annotations confirmed first (`confirm_close_if_needed`), then `confirm_delete_capture` asks yes/no (default no): yes deletes the file, no keeps it; either way the tab and its recovery data go and the file leaves the index |
-| Other close (`_close_current_editor_tab`) | File kept, entry dropped from the index so it is not restored |
+| Close buttons (`_install_tab_close_buttons`) | A capture-backed tab holds a `TabClosePair`: the X (`_close_tab_of(delete_capture=False)`) keeps the file, the trash can (`delete_capture=True`) deletes it. Annotations are confirmed first (`confirm_close_if_needed`) for both; either way the tab and its recovery data go and the file leaves the index. A tab without a capture file keeps the default single X |
+| Other close (`_close_current_editor_tab`, Ctrl+W) | File kept, entry dropped from the index so it is not restored |
 | Quit | Nothing deleted |
 | Start | Manifest tabs restored, then `_lost_capture_tabs()` finds indexed files without a tab: rebuilt from their recovery project when it survives, otherwise from the file |
 
 A video tab releases its player (`shutdown_playback`) before its file is deleted, because Windows cannot delete an open file.
+
+### Opening files from the system
+
+`main()` turns command-line arguments into `startup_files` (`file_association.files_from_arguments`: existing image files, `file://` addresses accepted). `AppController.open_files` opens images (`open_image_file`: original size, an already open file is brought forward, never bound to a capture file so it can never be deleted) and `.sfp` projects. A second launch sends `open\n<path>…` to the running instance over the `QLocalServer`; `show` stays the plain "raise the window" message. A start with files skips the capture panel. The generated launcher carries `MimeType=` and `%F`, and `update-desktop-database` runs only when its content changed.
 
 ## Editor Architecture
 

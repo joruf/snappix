@@ -66,30 +66,3 @@ def confirm_close_tab(parent: QWidget, message: str) -> bool:
     box.exec()
     return box.clickedButton() is close_button
 
-
-def confirm_delete_capture(parent: QWidget, file_name: str) -> bool:
-    """
-    Asks whether a closed tab's capture file should be deleted from the folder too.
-
-    Args:
-        parent: Owner widget for the dialog.
-        file_name: Name of the capture file backing the tab.
-
-    Returns:
-        bool: True to delete the file, False to keep it. Keeping is the default,
-        so a stray Enter never costs a picture.
-    """
-
-    box = QMessageBox(parent)
-    box.setWindowTitle("Close Tab")
-    box.setIcon(QMessageBox.Icon.Question)
-    box.setText(f"Delete {file_name} from the Snappix folder as well?")
-    box.setInformativeText("No keeps the file in the folder.")
-    yes_button = box.addButton("Yes", QMessageBox.ButtonRole.YesRole)
-    no_button = box.addButton("No", QMessageBox.ButtonRole.NoRole)
-    box.setDefaultButton(no_button)
-    box.setEscapeButton(no_button)
-    _force_button_order(box, [no_button, yes_button])
-
-    box.exec()
-    return box.clickedButton() is yes_button

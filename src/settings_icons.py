@@ -49,6 +49,7 @@ def build_settings_icon(icon_id: str, *, size: int = 18) -> QIcon:
         "save_folder": _paint_save_folder,
         "file_name": _paint_file_name,
         "workspace_folder": _paint_workspace_folder,
+        "default_viewer": _paint_default_viewer,
         "measure_hotkey": _paint_measure_hotkey,
         "line_color": _paint_line_color,
         "fill_color": _paint_fill_color,
@@ -313,6 +314,20 @@ def _paint_workspace_folder(painter: QPainter) -> None:
     painter.setPen(QPen(QColor("#0b1220"), 1.1))
     painter.drawLine(QPointF(13.0, 9.5), QPointF(13.0, 11.0))
     painter.drawLine(QPointF(13.0, 12.2), QPointF(13.0, 12.5))
+
+
+def _paint_default_viewer(painter: QPainter) -> None:
+    painter.setPen(_stroke(1.3))
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.drawRoundedRect(QRectF(2.5, 3.5, 13.0, 11.0), 1.5, 1.5)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(_ACCENT))
+    painter.drawEllipse(QRectF(10.0, 5.5, 3.0, 3.0))
+    painter.setPen(_accent(1.4))
+    painter.setBrush(QBrush(_ACCENT_FILL))
+    painter.drawPolygon(
+        [QPointF(3.5, 14.0), QPointF(7.0, 9.0), QPointF(9.5, 12.0), QPointF(11.0, 10.5), QPointF(14.5, 14.0)]
+    )
 
 
 def _paint_measure_hotkey(painter: QPainter) -> None:

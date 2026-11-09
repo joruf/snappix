@@ -75,6 +75,7 @@ class SettingsDialog(QDialog):
         config: AppConfig,
         parent: QWidget | None = None,
         measure_box_settings: MeasureBoxSettings | None = None,
+        default_viewer=None,
     ) -> None:
         """
         Initializes the settings dialog with current values.
@@ -83,9 +84,12 @@ class SettingsDialog(QDialog):
             config: Current application configuration.
             parent: Optional parent widget.
             measure_box_settings: Optional MeasureBox appearance settings.
+            default_viewer: Optional ``DefaultViewerService``; without one the
+                "default image viewer" row is left out.
         """
 
         super().__init__(parent)
+        self._default_viewer = default_viewer
         self.setWindowTitle("Snappix Settings")
         self.setModal(True)
         self.resize(640, 520)
@@ -414,9 +418,37 @@ class SettingsDialog(QDialog):
             workspace_directory_row,
         )
 
+        if self._default_viewer is not None and self._default_viewer.is_supported():
+            viewer_box = QVBoxLayout()
+            self.default_viewer_button = QPushButton("Use Snappix to open images")
+            self.default_viewer_button.setToolTip(
+                "Makes Snappix the program that opens PNG, JPEG, GIF, BMP, WebP and "
+                "TIFF files, for example when you double-click one."
+            )
+            self.default_viewer_button.clicked.connect(self._make_default_viewer)
+            self.default_viewer_status = QLabel(self._default_viewer.status())
+            self.default_viewer_status.setWordWrap(True)
+            viewer_box.addWidget(self.default_viewer_button)
+            viewer_box.addWidget(self.default_viewer_status)
+            form.addRow(
+                self._option_label("default_viewer", "Default image viewer:"),
+                viewer_box,
+            )
+
         layout.addLayout(form)
         layout.addStretch(1)
         return page
+
+    def _make_default_viewer(self) -> None:
+        """
+        Asks the system to open images with Snappix and shows what came of it.
+
+        Returns:
+            None
+        """
+
+        result = self._default_viewer.make_default()
+        self.default_viewer_status.setText(result.message)
 
     def _build_measure_box_tab(
         self,

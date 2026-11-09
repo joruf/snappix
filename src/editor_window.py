@@ -38,7 +38,6 @@ from PySide6.QtGui import (
     QPdfWriter,
     QPixmap,
 )
-from PySide6.QtPrintSupport import QPrintDialog, QPrinter
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -6982,22 +6981,16 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
 
     def print_image(self) -> None:
         """
-        Opens a print dialog and prints composited image.
+        Opens the print preview with the composited image on a sheet of paper.
 
         Returns:
             None
         """
 
-        printer = QPrinter()
-        dialog = QPrintDialog(printer, self)
-        if not dialog.exec():
-            return
-        painter = QPainter(printer)
+        from src.print_preview_dialog import PrintPreviewDialog
+
         pixmap = self._export_output_pixmap(for_jpeg=False)
-        rect = painter.viewport()
-        scaled = pixmap.scaled(rect.size(), Qt.AspectRatioMode.KeepAspectRatio)
-        painter.drawPixmap(0, 0, scaled)
-        painter.end()
+        PrintPreviewDialog(pixmap, self).exec()
 
     def copy_current_image_to_clipboard(self) -> None:
         """

@@ -11,6 +11,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from collections.abc import Sequence
 from typing import TYPE_CHECKING
 
 
@@ -576,18 +577,26 @@ def _ensure_desktop_launcher() -> None:
     launcher_path = launcher_dir / "snappix.desktop"
     editor_launcher_path = launcher_dir / "snappix-editor.desktop"
     launcher_dir.mkdir(parents=True, exist_ok=True)
+    from src.file_association import mime_type_entry
+
+    # %F hands over the files a file manager opens it with, and MimeType makes
+    # Snappix show up under "Open with" for images.
     content = (
         "[Desktop Entry]\n"
         "Type=Application\n"
         f"Name={APP_NAME}\n"
         "Comment=Screenshot and annotation tool\n"
-        f"Exec={_autostart_exec_command()}\n"
+        f"Exec={_autostart_exec_command()} %F\n"
         "Icon=snappix\n"
         "Terminal=false\n"
         "Categories=Graphics;Utility;\n"
+        f"MimeType={mime_type_entry()}\n"
         "StartupWMClass=snappix\n"
     )
+    previous = launcher_path.read_text(encoding="utf-8") if launcher_path.is_file() else ""
     launcher_path.write_text(content, encoding="utf-8")
+    if previous != content:
+        _refresh_desktop_database(launcher_dir)
     editor_content = (
         "[Desktop Entry]\n"
         "Type=Application\n"
@@ -605,6 +614,47 @@ def _ensure_desktop_launcher() -> None:
 
     record_user_file(launcher_path)
     record_user_file(editor_launcher_path)
+
+
+def _refresh_desktop_database(directory: Path) -> None:
+    """
+    Lets the desktop notice a changed launcher, so "Open with" lists it.
+
+    Best effort: a desktop without the tool simply picks the launcher up later.
+
+    Args:
+        directory: Folder holding the launchers.
+
+    Returns:
+        None
+    """
+
+    try:
+        subprocess.run(
+            ["update-desktop-database", str(directory)],
+            capture_output=True,
+            timeout=15,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def _parse_instance_message(data: bytes) -> list[str]:
+    """
+    Reads what another launch sent to the running instance.
+
+    Args:
+        data: Message bytes: ``show``, or ``open`` followed by one path per line.
+
+    Returns:
+        list[str]: Files to open; empty for a plain request to show the window.
+    """
+
+    lines = data.decode("utf-8", errors="replace").splitlines()
+    if not lines or lines[0].strip() != "open":
+        return []
+    return [line for line in lines[1:] if line.strip()]
 
 
 def _instance_server_name() -> str:
@@ -627,9 +677,12 @@ def _instance_server_name() -> str:
     return f"snappix-instance-{user}"
 
 
-def _signal_running_instance() -> bool:
+def _signal_running_instance(files: Sequence[str] = ()) -> bool:
     """
-    Asks an already running Snappix to show its window.
+    Asks an already running Snappix to show its window, or to open files.
+
+    Args:
+        files: Image files the second launch was asked to open.
 
     Returns:
         bool: True when the request was delivered.
@@ -651,7 +704,8 @@ def _signal_running_instance() -> bool:
         socket.connectToServer(_instance_server_name())
         if not socket.waitForConnected(1500):
             return False
-        socket.write(b"show")
+        message = "\n".join(["open", *files]) if files else "show"
+        socket.write(message.encode("utf-8"))
         socket.flush()
         socket.waitForBytesWritten(1500)
         socket.disconnectFromServer()
@@ -687,11 +741,25 @@ def _start_instance_server(controller) -> object | None:
         return None
 
     def _on_connection() -> None:
-        """Brings the window forward when another launch asks for it."""
+        """Brings the window forward, or opens files, when another launch asks."""
         connection = server.nextPendingConnection()
-        if connection is not None:
+        if connection is None:
+            controller._show_from_tray()
+            return
+
+        def _handle() -> None:
+            files = _parse_instance_message(bytes(connection.readAll().data()))
             connection.disconnectFromServer()
-        controller._show_from_tray()
+            if files:
+                controller.open_files(files)
+            else:
+                controller._show_from_tray()
+
+        # The bytes may still be on their way when the connection is announced.
+        if connection.bytesAvailable() > 0:
+            _handle()
+        else:
+            connection.readyRead.connect(_handle)
 
     server.newConnection.connect(_on_connection)
     return server
@@ -747,6 +815,7 @@ class AppController:
         app: QApplication,
         startup_project_path: str = "",
         autostart_launch: bool = False,
+        startup_files: Sequence[str] = (),
     ) -> None:
         """
         Initializes controller state.
@@ -757,6 +826,8 @@ class AppController:
             autostart_launch: True when launched from the OS boot/login
                 autostart entry -- the Capture panel and Editor stay closed
                 and only the system tray icon is shown.
+            startup_files: Image files to open, when Snappix was started as
+                the program an image opens with.
         """
 
         from PySide6.QtCore import Qt, Signal
@@ -838,6 +909,7 @@ class AppController:
         self._QMessageBox = QMessageBox
         self.app = app
         self._startup_project_path = startup_project_path.strip()
+        self._startup_files = list(startup_files)
         self._autostart_launch = autostart_launch
         self._is_quitting = False
         self._tray_available = QSystemTrayIcon.isSystemTrayAvailable()
@@ -933,7 +1005,7 @@ class AppController:
         self.editor_tabs.setTabBar(TabBarWithTrailingButton(reposition_new_tab_corner_button))
         reposition_new_tab_corner_button()
         self.editor_tabs.setTabsClosable(True)
-        self.editor_tabs.tabCloseRequested.connect(self._close_editor_tab_with_capture)
+        self.editor_tabs.tabCloseRequested.connect(self._close_editor_tab_by_index)
         self.editor_empty_state = QWidget(self.editor_stack)
         empty_layout = QVBoxLayout(self.editor_empty_state)
         empty_layout.setContentsMargins(40, 40, 40, 40)
@@ -1474,6 +1546,7 @@ class AppController:
         editor.setWindowFlags(Qt.WindowType.Widget)
         editor.setParent(self.editor_tabs)
         tab_index = self.editor_tabs.addTab(editor, title)
+        self._install_tab_close_buttons(editor)
         self.editor_tabs.setCurrentIndex(tab_index)
         self._sync_editor_host_view()
         editor.show()
@@ -1568,6 +1641,7 @@ class AppController:
             self.config,
             self.capture_panel,
             self._measure_box_session.settings,
+            default_viewer=self._default_viewer_service(),
         )
         if dialog.exec() != dialog.DialogCode.Accepted:
             return
@@ -2146,11 +2220,16 @@ class AppController:
         self._apply_capture_taskbar_identity()
         if self._autostart_launch:
             return
-        self.capture_panel.show()
+        # Opened as an image viewer, the picture is what should appear, not the
+        # capture panel.
+        if not self._startup_files:
+            self.capture_panel.show()
         if self._startup_project_path:
             self._open_project_in_editor(self._startup_project_path)
             return
         self._maybe_restore_recovery_snapshot()
+        if self._startup_files:
+            self.open_files(self._startup_files)
 
     def _create_editor_tab(
         self,
@@ -2244,6 +2323,7 @@ class AppController:
         editor.setWindowFlags(Qt.WindowType.Widget)
         editor.setParent(self.editor_tabs)
         tab_index = self.editor_tabs.addTab(editor, title)
+        self._install_tab_close_buttons(editor)
         self.editor_tabs.setCurrentIndex(tab_index)
         self._sync_editor_host_view()
         editor.show()
@@ -2624,6 +2704,79 @@ class AppController:
         tab_title = Path(project_path).name
         editor = self._create_editor_tab(screenshot, tab_title)
         editor.load_project_model(model, project_path)
+
+    def _default_viewer_service(self):
+        """
+        Builds the object the settings dialog uses to make Snappix the image viewer.
+
+        Returns:
+            DefaultViewerService: Service bound to how this copy is started.
+        """
+
+        from src.file_association import DefaultViewerService
+        from src.paths import executable, is_linux, is_windows
+
+        platform = "linux" if is_linux() else "windows" if is_windows() else "other"
+        # Windows takes file-type icons from an .exe or .ico, never from an .svg.
+        icon = f"{executable()},0" if _is_frozen() else ""
+        return DefaultViewerService(_autostart_exec_command(), platform=platform, icon=icon)
+
+    def open_files(self, paths: Sequence[str]) -> None:
+        """
+        Opens files handed over by the system: images, and Snappix projects.
+
+        Args:
+            paths: File paths, from a file manager or a second launch.
+
+        Returns:
+            None
+        """
+
+        opened = False
+        for path in paths:
+            suffix = Path(path).suffix.lower()
+            if suffix == APP_FILE_EXTENSION:
+                self._open_project_in_editor(path)
+                opened = True
+            elif self.open_image_file(path):
+                opened = True
+        if opened:
+            self._show_editor_host()
+
+    def open_image_file(self, file_path: str) -> bool:
+        """
+        Opens one image file in an editor tab at its original size.
+
+        A file that is already open is brought forward instead of opened twice,
+        which is what a viewer is expected to do.
+
+        Args:
+            file_path: Image file path.
+
+        Returns:
+            bool: True when a tab shows the image afterwards.
+        """
+
+        from src.media_import import load_image_pixmap
+
+        resolved = str(Path(file_path).resolve())
+        for index in range(self.editor_tabs.count()):
+            tab = self.editor_tabs.widget(index)
+            if str(getattr(tab, "_opened_from", "")) == resolved:
+                self.editor_tabs.setCurrentIndex(index)
+                return True
+
+        pixmap = load_image_pixmap(file_path)
+        if pixmap is None:
+            self._QMessageBox.warning(
+                self.editor_host,
+                "Open Image",
+                f"Could not open {Path(file_path).name}.",
+            )
+            return False
+        editor = self._create_editor_tab(pixmap, Path(file_path).name)
+        editor._opened_from = resolved
+        return True
 
     def import_image_as_new_tab(self, parent=None, file_path: str = "") -> None:
         """
@@ -3569,46 +3722,86 @@ class AppController:
         )
         self.editor_host.resize(width, height)
         fit_top_level_window_to_available(self.editor_host)
-    def _close_editor_tab_with_capture(self, index: int) -> None:
+    def _install_tab_close_buttons(self, editor) -> None:
         """
-        Closes a tab through its X button and asks what happens to its capture file.
+        Gives a capture-backed tab its pair of close buttons.
 
-        A capture is a file the moment it is taken, so the X asks whether the
-        image is to be deleted from the folder as well (yes or no). Tabs
-        without a capture file close as they always did.
+        A tab with a capture file can be closed two ways -- keeping the image in
+        the project folder, or deleting it -- so it gets an X and a trash can
+        side by side in place of the single default X. Tabs without a capture
+        file keep the default button: there is no file to decide about.
 
         Args:
-            index: Target tab index.
+            editor: Editor tab widget, already added to the tab widget.
 
         Returns:
             None
         """
 
-        tab_widget = self.editor_tabs.widget(index)
-        if tab_widget is None:
+        if not str(getattr(editor, "_capture_file", "") or ""):
             return
-        capture_file = str(getattr(tab_widget, "_capture_file", "") or "")
-        if not capture_file:
-            self._close_editor_tab_by_index(index)
-            return
-        try:
-            # Annotations that the file does not hold are confirmed first, as for any tab.
-            if not tab_widget.confirm_close_if_needed():
-                return
-        except RuntimeError:
-            return
-        from src.close_tab_dialog import confirm_delete_capture
+        from PySide6.QtWidgets import QStyle, QTabBar
 
-        delete = confirm_delete_capture(tab_widget, Path(capture_file).name)
-        self._close_editor_tab_by_index(index, delete_capture=delete, confirmed=True)
+        from src.tab_close_buttons import TabClosePair
 
-    def _close_editor_tab_by_index(
-        self,
-        index: int,
-        *,
-        delete_capture: bool = False,
-        confirmed: bool = False,
-    ) -> None:
+        tab_bar = self.editor_tabs.tabBar()
+        index = self.editor_tabs.indexOf(editor)
+        if index < 0:
+            return
+        position = QTabBar.ButtonPosition(
+            tab_bar.style().styleHint(QStyle.StyleHint.SH_TabBar_CloseButtonPosition)
+        )
+        pair = TabClosePair(tab_bar)
+        pair.keep_requested.connect(lambda: self._close_tab_of(editor, delete_capture=False))
+        pair.delete_requested.connect(lambda: self._close_tab_of(editor, delete_capture=True))
+        tab_bar.setTabButton(index, position, pair)
+        pair.set_selected(self.editor_tabs.currentIndex() == index)
+        self._track_close_button_selection(position)
+
+    def _track_close_button_selection(self, position) -> None:
+        """
+        Keeps the close buttons' colours right for the selected tab.
+
+        Connected once; later tabs reuse the connection.
+
+        Args:
+            position: Tab-bar side the buttons sit on.
+
+        Returns:
+            None
+        """
+
+        if getattr(self, "_close_buttons_tracked", False):
+            return
+        self._close_buttons_tracked = True
+        from src.tab_close_buttons import TabClosePair
+
+        def refresh(current: int) -> None:
+            tab_bar = self.editor_tabs.tabBar()
+            for index in range(tab_bar.count()):
+                pair = tab_bar.tabButton(index, position)
+                if isinstance(pair, TabClosePair):
+                    pair.set_selected(index == current)
+
+        self.editor_tabs.currentChanged.connect(refresh)
+
+    def _close_tab_of(self, editor, *, delete_capture: bool) -> None:
+        """
+        Closes the tab showing an editor, keeping or deleting its capture file.
+
+        Args:
+            editor: Editor tab widget.
+            delete_capture: True to delete the image from the project folder too.
+
+        Returns:
+            None
+        """
+
+        index = self.editor_tabs.indexOf(editor)
+        if index >= 0:
+            self._close_editor_tab_by_index(index, delete_capture=delete_capture)
+
+    def _close_editor_tab_by_index(self, index: int, *, delete_capture: bool = False) -> None:
         """
         Closes one editor tab and disposes its resources.
 
@@ -3616,8 +3809,6 @@ class AppController:
             index: Target tab index.
             delete_capture: True to delete the tab's capture file as well.
                 Otherwise the file stays but is no longer brought back as a tab.
-            confirmed: True when the caller has already asked, so the
-                annotation prompt is skipped.
 
         Returns:
             None
@@ -3629,8 +3820,7 @@ class AppController:
         if not self._is_quitting:
             try:
                 if (
-                    not confirmed
-                    and hasattr(tab_widget, "confirm_close_if_needed")
+                    hasattr(tab_widget, "confirm_close_if_needed")
                     and not tab_widget.confirm_close_if_needed()
                 ):
                     return
@@ -3931,10 +4121,19 @@ def main() -> int:
             return _launch_gui(startup_project_path=project_path)
 
         return run_cli(sys.argv[1:], launch_gui_with_project)
-    return _launch_gui(autostart_launch=autostart_launch)
+    from src.file_association import files_from_arguments
+
+    return _launch_gui(
+        autostart_launch=autostart_launch,
+        startup_files=files_from_arguments(sys.argv[1:]),
+    )
 
 
-def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) -> int:
+def _launch_gui(
+    startup_project_path: str = "",
+    autostart_launch: bool = False,
+    startup_files: Sequence[str] = (),
+) -> int:
     """
     Starts the Qt GUI application.
 
@@ -3943,6 +4142,7 @@ def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) 
         autostart_launch: True when launched via ``--autostart`` from the OS
             boot/login autostart entry -- the Capture panel and Editor stay
             closed and only the system tray icon is shown.
+        startup_files: Image files to open, when launched as a viewer.
 
     Returns:
         int: Process exit code.
@@ -3952,7 +4152,7 @@ def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) 
         # Exiting quietly here is what made a second click look like a failure
         # to start: the message lands in a terminal nobody is watching, and the
         # window that is already open may sit on another screen or in the tray.
-        if _signal_running_instance():
+        if _signal_running_instance(startup_files):
             print("Snappix is already running; brought it to the front.")
         else:
             print("Snappix is already running.")
@@ -3993,6 +4193,7 @@ def _launch_gui(startup_project_path: str = "", autostart_launch: bool = False) 
         app,
         startup_project_path=startup_project_path,
         autostart_launch=autostart_launch,
+        startup_files=startup_files,
     )
     controller._translation_filter = translation_filter
     # Kept on the controller so it lives as long as the application does.

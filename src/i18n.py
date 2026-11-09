@@ -191,6 +191,8 @@ GERMAN: dict[str, str] = {
     "File name:": "Dateiname:",
     "Save folder:": "Speicherordner:",
     "Workspace folder:": "Arbeitsordner:",
+    "Default image viewer:": "Standard-Bildbetrachter:",
+    "Use Snappix to open images": "Bilder mit Snappix öffnen",
     "Selection handle size:": "Größe der Anfasser:",
     "Selection handle position:": "Position der Anfasser:",
     "Auto-crop canvas when content shrinks": "Leinwand automatisch beschneiden",

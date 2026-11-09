@@ -41,6 +41,7 @@ _SETTINGS_ICON_IDS = (
     "save_folder",
     "file_name",
     "workspace_folder",
+    "default_viewer",
     "measure_hotkey",
     "line_color",
     "fill_color",

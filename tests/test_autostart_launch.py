@@ -37,6 +37,7 @@ def _make_controller(*, autostart_launch: bool):
     controller = object.__new__(AppController)
     controller._autostart_launch = autostart_launch
     controller._startup_project_path = ""
+    controller._startup_files = []
     controller._apply_capture_taskbar_identity = MagicMock()
     controller.capture_panel = MagicMock()
     controller._open_project_in_editor = MagicMock()

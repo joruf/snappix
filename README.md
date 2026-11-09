@@ -290,7 +290,8 @@ above still come from tags pushed by hand.
 - **Image Size...** (Edit menu): resize the whole document; geometry, stroke widths, and font sizes scale with it
 - **Pin to Screen** (View menu): keep the image floating above all windows as a reference — drag to move, wheel to zoom, `Esc` closes
 - **Drag Out** (Export tab) and Copy now also publish the image as a **PNG file**, so it can be dropped or pasted into a file manager, a mail, or an upload field
-- Export PNG / JPEG / PDF / SVG, batch export profiles, print
+- Export PNG / JPEG / PDF / SVG, batch export profiles
+- **Print preview** (File → Print, Ctrl+P): a sheet of paper (A3, A4, A5, Letter, Legal; portrait or landscape) with the picture on it. Drag the picture to move it, pull a corner to resize it (the proportions stay), or type width, height and position in millimetres; *Fit to page*, *Fill page*, *Original size* and *Center* are one click. *Print* sends exactly what the preview shows to a printer, or to a PDF file (*Save as PDF…*)
 - **Presentation frame** for exports (`Presentation` in the Export tab): padding, rounded corners, drop
   shadow, solid/gradient/transparent backdrop, and optional 16:9 / 4:3 / 3:2 / 1:1 letterboxing.
   `Presentation...` opens a live preview of the actual screenshot being exported.
@@ -304,12 +305,13 @@ above still come from tags pushed by hand.
 - Closing the last tab closes the whole editor window
 - While a screenshot is taken the editor is minimized, so it cannot cover the area being captured; it comes back when the screenshot is done. Screenshots open at their original size
 - **Every screenshot and recording is a file at once.** A capture that opens as a tab is written to the capture save folder (default `~/Downloads/snappix/`) before the tab appears, so a crash or a lost tab never costs the picture
-- The **X on a tab** asks whether the image should be deleted from the folder as well (Yes / No, default No). A tab with annotations first asks the usual "close anyway?". Closing a tab any other way, such as the close shortcut, keeps the file without asking
+- A tab with a capture file has **two close buttons side by side**: an **X** that closes the tab and keeps the image in the project folder, and a red **trash can** that closes the tab and deletes the image from the folder. They differ in shape and colour, and each says what it does in its tooltip. Tabs without a capture file (imported or new) keep the single default X. A tab with annotations first asks the usual "close anyway?". The close shortcut (Ctrl+W) keeps the file
 - On start, the capture folder is searched for files Snappix made that no restored tab shows, and each gets a tab again, with its annotations when the recovery data survived. Files Snappix did not create are never opened and never deleted: the folder keeps a hidden index (`.snappix-captures.json`) of its own captures
 
 ### Desktop integration
 
 - Single-instance lock, system tray, autostart (XDG)
+- **Image viewer**: Snappix opens PNG, JPEG, GIF, BMP, WebP and TIFF files, with the editor at the picture's original size. It is listed under "Open with" in file managers, and **Settings → General → Default image viewer** makes it the program an image opens with (Linux: `xdg-mime`; Windows: Snappix registers itself and opens *Default apps*, where Windows asks you to pick it — a program cannot set that choice itself). `snappix photo.png` does the same from a terminal, and a file opened while Snappix is running goes to the running window. Opened files are never changed or deleted unless you save over them
 - Themes: Dark, Light, Slate, Sepia
 - Settings: hotkeys, post-capture action, save folder, **workspace folder**, editor shortcuts, auto-crop
 
