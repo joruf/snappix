@@ -12,7 +12,7 @@ import unittest
 
 try:
     from PySide6.QtCore import QCoreApplication, QEvent, QPoint, QPointF, Qt
-    from PySide6.QtGui import QColor, QPixmap, QWheelEvent
+    from PySide6.QtGui import QColor, QInputDevice, QPixmap, QPointingDevice, QWheelEvent
     from PySide6.QtTest import QTest
 
     from src.editor_window import EditorWindow
@@ -67,7 +67,16 @@ class ZoomCase(unittest.TestCase):
         widget.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
 
-    def _wheel(self, canvas, delta: int, modifiers=Qt.KeyboardModifier.NoModifier, *, pixels=0):
+    def _wheel(
+        self,
+        canvas,
+        delta: int,
+        modifiers=Qt.KeyboardModifier.NoModifier,
+        *,
+        pixels=0,
+        touchpad=False,
+        phase=None,
+    ):
         """
         Delivers one wheel event to a canvas.
 
@@ -75,9 +84,22 @@ class ZoomCase(unittest.TestCase):
             canvas: Canvas to send to.
             delta: Vertical angle delta; 120 is one notch up.
             modifiers: Held keyboard modifiers.
-            pixels: Vertical pixel delta; non-zero for a touchpad.
+            pixels: Vertical pixel delta. A mouse with a smooth wheel sends one too.
+            touchpad: True to send the event from a touchpad device.
+            phase: Scroll phase; none by default, as a mouse wheel sends.
         """
 
+        device = QPointingDevice.primaryPointingDevice()
+        if touchpad:
+            device = QPointingDevice(
+                "test-touchpad",
+                4711,
+                QInputDevice.DeviceType.TouchPad,
+                QPointingDevice.PointerType.Finger,
+                QInputDevice.Capability.Scroll | QInputDevice.Capability.Position,
+                1,
+                0,
+            )
         event = QWheelEvent(
             QPointF(200.0, 150.0),
             QPointF(200.0, 150.0),
@@ -85,8 +107,10 @@ class ZoomCase(unittest.TestCase):
             QPoint(0, delta),
             Qt.MouseButton.NoButton,
             modifiers,
-            Qt.ScrollPhase.ScrollUpdate if pixels else Qt.ScrollPhase.NoScrollPhase,
+            phase or Qt.ScrollPhase.NoScrollPhase,
             False,
+            Qt.MouseEventSource.MouseEventNotSynthesized,
+            device,
         )
         self._app.sendEvent(canvas.viewport(), event)
 
@@ -139,23 +163,66 @@ class TestWheelZoom(ZoomCase):
 
     def test_a_touchpad_pinch_reported_as_ctrl_and_wheel_zooms(self) -> None:
         """
-        Ensures Ctrl keeps its meaning even when the event carries pixel deltas.
+        Ensures Ctrl keeps its meaning on a touchpad, pixel deltas and all.
         """
 
         before = self.canvas._zoom_factor
-        self._wheel(self.canvas, 120, Qt.KeyboardModifier.ControlModifier, pixels=30)
+        self._wheel(
+            self.canvas, 120, Qt.KeyboardModifier.ControlModifier, pixels=30, touchpad=True
+        )
         self.assertGreater(self.canvas._zoom_factor, before)
+
+    def test_a_mouse_wheel_that_also_reports_pixels_still_zooms(self) -> None:
+        """
+        Ensures a smooth-scrolling mouse is not mistaken for a touchpad.
+
+        Such mice send a pixel delta with every notch. Reading that as a touchpad
+        made the wheel scroll instead of zoom on real hardware.
+        """
+
+        before = self.canvas._zoom_factor
+        self._wheel(self.canvas, 120, pixels=15)
+        self.assertGreater(self.canvas._zoom_factor, before)
+        middle = self.canvas._zoom_factor
+        self._wheel(self.canvas, -120, pixels=-15)
+        self.assertLess(self.canvas._zoom_factor, middle)
 
     def test_touchpad_scrolling_scrolls_instead_of_zooming(self) -> None:
         """
-        Ensures two-finger scrolling still moves the picture.
+        Ensures two-finger scrolling on a touchpad still moves the picture.
         """
 
         before = self.canvas._zoom_factor
         scroll_before = self.canvas.verticalScrollBar().value()
-        self._wheel(self.canvas, -120, pixels=-40)
+        self._wheel(self.canvas, -120, pixels=-40, touchpad=True)
         self.assertEqual(self.canvas._zoom_factor, before)
         self.assertNotEqual(self.canvas.verticalScrollBar().value(), scroll_before)
+
+    def test_an_event_with_a_scroll_phase_scrolls(self) -> None:
+        """
+        Ensures devices that report phases, like trackpads on some systems, scroll.
+        """
+
+        before = self.canvas._zoom_factor
+        scroll_before = self.canvas.verticalScrollBar().value()
+        self._wheel(self.canvas, -120, pixels=-40, phase=Qt.ScrollPhase.ScrollUpdate)
+        self.assertEqual(self.canvas._zoom_factor, before)
+        self.assertNotEqual(self.canvas.verticalScrollBar().value(), scroll_before)
+
+    def test_a_fine_wheel_adds_up_to_the_same_zoom(self) -> None:
+        """
+        Ensures eight steps of 15 zoom as far as one notch of 120.
+        """
+
+        notch = self.canvas._zoom_factor
+        self._wheel(self.canvas, 120)
+        one_notch = self.canvas._zoom_factor / notch
+
+        self.canvas.set_zoom_factor(notch)
+        for _ in range(8):
+            self._wheel(self.canvas, 15)
+
+        self.assertAlmostEqual(self.canvas._zoom_factor / notch, one_notch, places=4)
 
     def test_alt_wheel_scrolls_with_a_mouse(self) -> None:
         """

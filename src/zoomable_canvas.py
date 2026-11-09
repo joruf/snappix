@@ -92,9 +92,13 @@ class ZoomableCanvasMixin:
         Zooms in response to a mouse wheel; the canvases call this first.
 
         A plain wheel step zooms, and so does one with Shift or Ctrl held, which
-        is also how many touchpads report a pinch. Two-finger touchpad scrolling
-        keeps scrolling, and Alt+wheel scrolls with a mouse, so the picture can
-        still be moved around.
+        is also how many touchpads report a pinch. Scrolling on a touchpad, and
+        Alt+wheel with a mouse, still scroll, so the picture can be moved around.
+
+        A touchpad is recognised by the device that sent the event, and by a
+        scroll phase. The pixel delta is no sign of one: a mouse with a
+        smooth-scrolling wheel reports pixel deltas as well, and treating those
+        as a touchpad left the wheel scrolling instead of zooming.
 
         Args:
             event: Wheel event.
@@ -104,6 +108,7 @@ class ZoomableCanvasMixin:
         """
 
         from PySide6.QtCore import Qt
+        from PySide6.QtGui import QInputDevice
 
         modifiers = event.modifiers()
         zoom_modifiers = Qt.KeyboardModifier.ShiftModifier | Qt.KeyboardModifier.ControlModifier
@@ -111,20 +116,20 @@ class ZoomableCanvasMixin:
             pass
         elif modifiers & Qt.KeyboardModifier.AltModifier:
             return False
-        elif (
-            not event.pixelDelta().isNull()
-            or event.phase() != Qt.ScrollPhase.NoScrollPhase
-        ):
-            # A touchpad's two-finger scroll, not a wheel notch.
-            return False
+        else:
+            device = event.device()
+            from_touchpad = (
+                device is not None and device.type() == QInputDevice.DeviceType.TouchPad
+            )
+            if from_touchpad or event.phase() != Qt.ScrollPhase.NoScrollPhase:
+                return False
 
         delta = event.angleDelta().y()
         if delta == 0:
             delta = event.angleDelta().x()
-        if delta > 0:
-            self.zoom_in()
-        elif delta < 0:
-            self.zoom_out()
+        if delta != 0:
+            # A notch is 120; finer wheels send smaller steps that add up to the same.
+            self._apply_zoom(self.ZOOM_STEP ** (delta / 120.0))
         event.accept()
         return True
 

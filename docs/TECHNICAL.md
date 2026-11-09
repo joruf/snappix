@@ -254,7 +254,7 @@ same listener.
 
 ### Zooming
 
-`ZoomableCanvasMixin.zoom_for_wheel` serves both canvases. A plain mouse-wheel notch zooms, as does a wheel with Shift or Ctrl held (many touchpads report a pinch as Ctrl + wheel). Two-finger touchpad scrolling (events with a pixel delta or a scroll phase) and Alt + wheel still scroll the view. The default key bindings are `+`/`=`/`Ctrl++`/`Ctrl+=` for zoom in and `-`/`Ctrl+-` for zoom out; they are single-key shortcuts like the tool letters, which is safe because text annotations are edited in a dialog, not inline.
+`ZoomableCanvasMixin.zoom_for_wheel` serves both canvases. A plain mouse-wheel notch zooms, as does a wheel with Shift or Ctrl held (many touchpads report a pinch as Ctrl + wheel). Touchpad scrolling (recognised by the sending device being a touchpad, or by a scroll phase) and Alt + wheel still scroll the view. A pixel delta is deliberately not used to spot a touchpad: mice with a smooth-scrolling wheel report one too, and the wheel then scrolled instead of zooming. Fine wheel steps add up: the zoom factor is `ZOOM_STEP ** (delta / 120)`. The default key bindings are `+`/`=`/`Ctrl++`/`Ctrl+=` for zoom in and `-`/`Ctrl+-` for zoom out; they are single-key shortcuts like the tool letters, which is safe because text annotations are edited in a dialog, not inline.
 
 ### Editor window during a capture
 
