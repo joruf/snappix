@@ -2762,7 +2762,7 @@ class AppController:
         resolved = str(Path(file_path).resolve())
         for index in range(self.editor_tabs.count()):
             tab = self.editor_tabs.widget(index)
-            if str(getattr(tab, "_opened_from", "")) == resolved:
+            if str(getattr(tab, "_opened_from", "") or "") == resolved:
                 self.editor_tabs.setCurrentIndex(index)
                 return True
 
@@ -2775,8 +2775,27 @@ class AppController:
             )
             return False
         editor = self._create_editor_tab(pixmap, Path(file_path).name)
-        editor._opened_from = resolved
+        editor.set_opened_from(resolved)
+        editor.image_file_changed.connect(lambda path: self._on_tab_image_changed(editor, path))
+        # The arrow keys that browse the folder go to whatever has the focus.
+        editor.canvas.setFocus()
         return True
+
+    def _on_tab_image_changed(self, editor, path: str) -> None:
+        """
+        Follows a tab that moved on to another image of its folder.
+
+        Args:
+            editor: The editor tab.
+            path: The image it shows now.
+
+        Returns:
+            None
+        """
+
+        index = self.editor_tabs.indexOf(editor)
+        if index >= 0:
+            self.editor_tabs.setTabText(index, Path(path).name)
 
     def import_image_as_new_tab(self, parent=None, file_path: str = "") -> None:
         """

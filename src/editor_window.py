@@ -502,6 +502,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
     """
 
     close_requested = Signal()
+    image_file_changed = Signal(str)
     theme_changed = Signal(str)
     batch_export_profiles_changed = Signal(object, str)
     batch_export_last_directory_changed = Signal(str)
@@ -626,6 +627,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self.canvas.set_screenshot(screenshot)
         self.canvas.content_changed.connect(self._on_canvas_changed)
         self.canvas.zoom_changed.connect(self._on_zoom_changed)
+        self.canvas.navigate_requested.connect(self.navigate_folder_image)
         self.canvas.selection_style_changed.connect(self._on_selection_style_changed)
         self.canvas.selection_style_changed.connect(
             lambda _payload: self._refresh_element_panel()
@@ -667,6 +669,7 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         self._autosave_flushing = False
         self._recovery_dirty = False
         self._capture_file = ""
+        self._opened_from = ""
         self._autosave_timer = self.startTimer(30_000)
 
     def _build_element_panel(self, parent: QWidget) -> QWidget:
@@ -5841,6 +5844,97 @@ class EditorWindow(EditorHistoryMixin, ShortcutRegistryMixin, QMainWindow):
         """
 
         return self._capture_file
+
+    def set_opened_from(self, path: str) -> None:
+        """
+        Marks the tab as showing an image file, so Left/Right can browse its folder.
+
+        Args:
+            path: Image file path, or empty for a tab that is not a viewer tab.
+
+        Returns:
+            None
+        """
+
+        self._opened_from = path.strip()
+
+    def opened_from(self) -> str:
+        """
+        Returns the image file this tab is showing, if it was opened from one.
+
+        Returns:
+            str: Image file path, empty when the tab was not opened from a file.
+        """
+
+        return self._opened_from
+
+    def navigate_folder_image(self, step: int) -> bool:
+        """
+        Shows the next or previous image of the folder in this tab.
+
+        Only a tab opened from an image file does this, and only while it holds
+        nothing the next image would throw away: drawn annotations or edits stop
+        it, with a hint, rather than being lost to a stray arrow key. An image
+        that cannot be read is skipped.
+
+        Args:
+            step: ``1`` for the next image, ``-1`` for the previous one.
+
+        Returns:
+            bool: True when another image is showing afterwards.
+        """
+
+        if not self._opened_from:
+            return False
+        if self.has_drawn_annotations() or self._history_index > 0:
+            self.statusBar().showMessage(
+                "Close or save your changes before switching to another image.", 4000
+            )
+            return False
+
+        from src.image_folder import neighbours
+        from src.media_import import load_image_pixmap
+
+        candidates = neighbours(self._opened_from, step)
+        if not candidates:
+            self.statusBar().showMessage("There is no other image in this folder.", 3000)
+            return False
+        for candidate in candidates:
+            pixmap = load_image_pixmap(candidate)
+            if pixmap is None:
+                continue
+            self._show_folder_image(pixmap, str(candidate))
+            return True
+        self.statusBar().showMessage("No other image in this folder could be opened.", 4000)
+        return False
+
+    def _show_folder_image(self, pixmap: QPixmap, path: str) -> None:
+        """
+        Replaces the document with another image file.
+
+        Args:
+            pixmap: The new image.
+            path: Its file path.
+
+        Returns:
+            None
+        """
+
+        self._record_history = False
+        self.canvas.set_screenshot(pixmap)
+        self.canvas.load_annotations([])
+        self._record_history = True
+        self._history.clear()
+        self._history_labels.clear()
+        self._history_index = -1
+        self._set_next_history_label("Open image")
+        self._push_history_state()
+        self._refresh_layer_panel()
+        self._refresh_element_panel()
+        self._opened_from = path
+        self.mark_recovery_dirty()
+        self.statusBar().showMessage(Path(path).name, 3000)
+        self.image_file_changed.emit(path)
 
     def set_recovery_path(self, path: str) -> None:
         """

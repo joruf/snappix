@@ -244,6 +244,7 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
     crop_applied = Signal()
     status_message = Signal(str)
     tool_lock_escape_requested = Signal()
+    navigate_requested = Signal(int)
 
     def __init__(self) -> None:
         """
@@ -4138,6 +4139,16 @@ class EditorCanvas(ZoomableCanvasMixin, ResizeOverlayMixin, QGraphicsView):
             elif event.key() == Qt.Key.Key_Down:
                 dy = step
             if self.nudge_selected_items(dx, dy):
+                return
+            # With nothing selected to move, Left and Right page through the
+            # images of the folder; the editor decides whether this tab has one.
+            if (
+                event.modifiers() == Qt.KeyboardModifier.NoModifier
+                and event.key() in {Qt.Key.Key_Left, Qt.Key.Key_Right}
+                and not self._selected_annotation_items()
+            ):
+                self.navigate_requested.emit(-1 if event.key() == Qt.Key.Key_Left else 1)
+                event.accept()
                 return
         if event.key() in {Qt.Key.Key_Return, Qt.Key.Key_Enter} and self._tool in POLY_DRAW_TOOLS:
             if len(self._poly_draw_points) >= (3 if self._tool == Tool.POLYGON else 2):

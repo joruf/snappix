@@ -292,6 +292,7 @@ def build_shortcuts_reference_text(overrides: dict[str, str] | None = None) -> s
             "  Mouse Wheel (or +/- keys): Zoom on canvas",
             "  Alt+Mouse Wheel / touchpad scroll: Scroll canvas",
             "  Arrow keys: Nudge selection by 1 px",
+            "  Left / Right (nothing selected): Previous / next image in the folder",
             "  Shift+Arrow keys: Nudge selection by 10 px",
             "  Enter: Apply crop selection",
             "  Esc: Cancel crop, clear pixel selection, or capture overlays",

@@ -311,7 +311,7 @@ above still come from tags pushed by hand.
 ### Desktop integration
 
 - Single-instance lock, system tray, autostart (XDG)
-- **Image viewer**: Snappix opens PNG, JPEG, GIF, BMP, WebP and TIFF files, with the editor at the picture's original size. It is listed under "Open with" in file managers, and **Settings → General → Default image viewer** makes it the program an image opens with (Linux: `xdg-mime`; Windows: Snappix registers itself and opens *Default apps*, where Windows asks you to pick it — a program cannot set that choice itself). `snappix photo.png` does the same from a terminal, and a file opened while Snappix is running goes to the running window. Opened files are never changed or deleted unless you save over them
+- **Image viewer**: Snappix opens PNG, JPEG, GIF, BMP, WebP and TIFF files, with the editor at the picture's original size. It is listed under "Open with" in file managers, and **Settings → General → Default image viewer** makes it the program an image opens with (Linux: `xdg-mime`; Windows: Snappix registers itself and opens *Default apps*, where Windows asks you to pick it — a program cannot set that choice itself). `snappix photo.png` does the same from a terminal, and a file opened while Snappix is running goes to the running window. With an image opened from a file, **Left / Right** shows the previous / next image of its folder in the same tab (names in file-manager order, wrapping around, unreadable files skipped). The arrows keep nudging a selected annotation, and a tab with annotations or edits is not replaced — it says so instead. Opened files are never changed or deleted unless you save over them
 - Themes: Dark, Light, Slate, Sepia
 - Settings: hotkeys, post-capture action, save folder, **workspace folder**, editor shortcuts, auto-crop
 
@@ -481,6 +481,7 @@ python3 run.py open --project ./example.sfp
 | `+` / `-` (also `Ctrl++` / `Ctrl+-`) / `Ctrl+0` | Zoom in / out / reset |
 | Mouse wheel | Zoom; `Alt`+wheel or touchpad scroll moves the view |
 | `Ctrl+Shift++` / `Ctrl+Shift+-` | Grow / shrink selection |
+| `Left` / `Right` | Previous / next image of the folder (image opened from a file, nothing selected) |
 | `Enter` | Apply crop |
 | `Esc` | Cancel crop / overlay |
 | `Del` | Delete selected objects (image + video editors) |
